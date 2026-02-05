@@ -1,0 +1,105 @@
+﻿#include "Window.h"
+
+#include <iostream>
+#include <SDL3/SDL.h>
+#include <SDL3/SDL_gpu.h>
+
+Window::Window()
+{
+    bInitialized = false;
+}
+
+Window::~Window()
+{
+    if (!bInitialized)
+    {
+        Shutdown();
+    }
+}
+
+int Window::Open(const char* title, int w, int h)
+{
+    if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS))
+    {
+        std::cerr << "SDL Init Failed: " << SDL_GetError() << std::endl;
+        return -1;
+    }
+
+    // 2. Create Window
+    window = SDL_CreateWindow(title, w, h, SDL_WINDOW_RESIZABLE);
+    if (!window)
+    {
+        std::cerr << "Window Create Failed: " << SDL_GetError() << std::endl;
+        SDL_Quit();
+        return -1;
+    }
+
+    // 3. Create GPU Device (Auto-selects Vulkan/Metal/D3D12)
+    // Use SDL_GPU_SHADERFORMAT_SPIRV for cross-platform shaders later
+    gpuDevice = SDL_CreateGPUDevice(SDL_GPU_SHADERFORMAT_SPIRV, true, nullptr);
+    if (!gpuDevice)
+    {
+        std::cerr << "GPU Device Failed: " << SDL_GetError() << std::endl;
+        SDL_DestroyWindow(window);
+        SDL_Quit();
+        return -1;
+    }
+
+    // 4. Claim the Window for the Device
+    if (!SDL_ClaimWindowForGPUDevice(gpuDevice, window))
+    {
+        std::cerr << "Claim Window Failed: " << SDL_GetError() << std::endl;
+        return -1;
+    }
+    
+    bInitialized = true;
+    return 0;
+}
+
+void Window::Render()
+{
+    // A. Acquire Command Buffer
+    SDL_GPUCommandBuffer* cmdBuf = SDL_AcquireGPUCommandBuffer(gpuDevice);
+
+    // B. Get the Swapchain Texture (The Window Surface)
+    SDL_GPUTexture* swapchainTex;
+    if (!SDL_AcquireGPUSwapchainTexture(cmdBuf, window, &swapchainTex, nullptr, nullptr))
+    {
+        // Failed to get texture (minimized?), just submit empty and continue
+        SDL_SubmitGPUCommandBuffer(cmdBuf);
+        return;
+    }
+
+    if (swapchainTex != nullptr)
+    {
+        // C. Setup Render Pass (Clear to Dark Gray)
+        SDL_GPUColorTargetInfo colorTargetInfo = {};
+        colorTargetInfo.texture = swapchainTex;
+        colorTargetInfo.clear_color = {0.1f, 0.1f, 0.1f, 1.0f};
+        colorTargetInfo.load_op = SDL_GPU_LOADOP_CLEAR;
+        colorTargetInfo.store_op = SDL_GPU_STOREOP_STORE;
+
+        SDL_GPURenderPass* renderPass = SDL_BeginGPURenderPass(cmdBuf, &colorTargetInfo, 1, nullptr);
+
+        // (Draw commands go here later)
+
+        SDL_EndGPURenderPass(renderPass);
+
+        // D. Submit and Present
+        SDL_SubmitGPUCommandBuffer(cmdBuf);
+    }
+}
+
+void Window::Shutdown()
+{
+    // 6. Cleanup
+    SDL_ReleaseWindowFromGPUDevice(gpuDevice, window);
+    SDL_DestroyGPUDevice(gpuDevice);
+    SDL_DestroyWindow(window);
+    bInitialized = false;
+}
+
+void Window::SetTitle(const char* title)
+{
+    SDL_SetWindowTitle(window, title);
+}

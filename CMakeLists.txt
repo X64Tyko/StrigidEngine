@@ -20,7 +20,7 @@ set(SDL3_PATH "${CMAKE_SOURCE_DIR}/libs/SDL3")
 # -----------------------------------------------------------------------------
 # Finds all files in src/ and include/ automatically.
 file(GLOB_RECURSE SOURCES "src/*.cpp")
-file(GLOB_RECURSE HEADERS "include/*.h" "include/*.hpp")
+file(GLOB_RECURSE HEADERS "include/*.h" "src/*.h")
 
 # CRITICAL CHECK:
 # If your main.cpp is in the ROOT folder, add it here manually.
@@ -40,7 +40,7 @@ add_executable(${PROJECT_NAME}
 # -----------------------------------------------------------------------------
 # A. Your Engine Headers (Public)
 target_include_directories(${PROJECT_NAME} PUBLIC 
-    "${CMAKE_CURRENT_SOURCE_DIR}/include"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/Runtime/Core/Public"
 )
 
 # B. SDL3 Headers (Private)
