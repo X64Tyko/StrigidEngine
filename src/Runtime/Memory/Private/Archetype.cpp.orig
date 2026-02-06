@@ -22,7 +22,6 @@ Archetype::~Archetype()
 
 void Archetype::BuildLayout(const std::vector<ComponentMeta>& Components)
 {
-    STRIGID_ZONE_C(STRIGID_COLOR_MEMORY);
     if (Components.empty())
     {
         // Empty archetype - set a reasonable default capacity
@@ -101,7 +100,6 @@ uint32_t Archetype::GetChunkCount(size_t ChunkIndex) const
 
 Archetype::EntitySlot Archetype::PushEntity()
 {
-    STRIGID_ZONE_C(STRIGID_COLOR_MEMORY);
     // Safety check for empty archetypes
     if (EntitiesPerChunk == 0)
     {
@@ -152,6 +150,5 @@ void* Archetype::GetComponentArrayRaw(Chunk* TargetChunk, ComponentTypeID TypeID
 
 Chunk* Archetype::AllocateChunk()
 {
-    STRIGID_ZONE_C(STRIGID_COLOR_MEMORY);
     return new Chunk();
 }

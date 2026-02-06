@@ -20,7 +20,6 @@ Window::~Window()
 
 int Window::Open(const char* title, int w, int h)
 {
-    STRIGID_ZONE_C(STRIGID_COLOR_RENDERING);
     if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS))
     {
         std::cerr << "SDL Init Failed: " << SDL_GetError() << std::endl;
@@ -60,7 +59,6 @@ int Window::Open(const char* title, int w, int h)
 
 void Window::Render()
 {
-    STRIGID_ZONE_C(STRIGID_COLOR_RENDERING);
     // A. Acquire Command Buffer
     SDL_GPUCommandBuffer* cmdBuf = SDL_AcquireGPUCommandBuffer(gpuDevice);
 
@@ -95,7 +93,6 @@ void Window::Render()
 
 void Window::Shutdown()
 {
-    STRIGID_ZONE_C(STRIGID_COLOR_RENDERING);
     // 6. Cleanup
     SDL_ReleaseWindowFromGPUDevice(gpuDevice, window);
     SDL_DestroyGPUDevice(gpuDevice);

@@ -1,25 +1,27 @@
 #include  "StrigidEngine.h"
-/*
-#include "Platform/Window.h"
-#include "Systems/JobSystem.h"
-#include "Audio/AudioEngine.h"
-#include "Tools/Profiler.h"
-*/
+#include "Profiler.h"
+#include "Logger.h"
 #include <string>
 #include <SDL3/SDL.h>
 
 #include "Window.h"
 
 
-StrigidEngine::StrigidEngine() {
+StrigidEngine::StrigidEngine()
+{
 }
 
 StrigidEngine::~StrigidEngine()
 {
 }
 
-bool StrigidEngine::Initialize([[maybe_unused]]const char* title, [[maybe_unused]]int width, [[maybe_unused]]int height) {
-    //ZONE_SCOPED("Engine_Init");
+bool StrigidEngine::Initialize([[maybe_unused]] const char* title, [[maybe_unused]] int width,
+                               [[maybe_unused]] int height)
+{
+    STRIGID_ZONE_N("Engine_Init");
+
+    Logger::Get().Init("StrigidEngine.log", LogLevel::Debug);
+    LOG_INFO("StrigidEngine initialization started");
 
     // 1. Core Systems (No dependencies)
     //m_JobSystem = std::make_unique<JobSystem>();
@@ -41,7 +43,8 @@ bool StrigidEngine::Initialize([[maybe_unused]]const char* title, [[maybe_unused
     return true;
 }
 
-void StrigidEngine::Run() {
+void StrigidEngine::Run()
+{
     m_IsRunning = true;
 
     const uint64_t perfFrequency = SDL_GetPerformanceFrequency();
@@ -60,9 +63,10 @@ void StrigidEngine::Run() {
     constexpr double kMaxDt = 0.25;
     constexpr double kMaxAccumulatedTime = 0.25;
     constexpr int kMaxPhysSubSteps = 8;
-    constexpr int kMaxNetSubSteps  = 8;
+    constexpr int kMaxNetSubSteps = 8;
 
-    while (m_IsRunning) {
+    while (m_IsRunning)
+    {
         // --- 0. Pump Events Early (Responsiveness) ---
         PumpEvents();
 
@@ -81,31 +85,39 @@ void StrigidEngine::Run() {
 
         // Prevent unbounded catch-up after stalls
         if (physAccumulator > kMaxAccumulatedTime) physAccumulator = kMaxAccumulatedTime;
-        if (netAccumulator > kMaxAccumulatedTime)  netAccumulator  = kMaxAccumulatedTime;
+        if (netAccumulator > kMaxAccumulatedTime) netAccumulator = kMaxAccumulatedTime;
 
         // --- 2. Network Loop (The "Tick") ---
         // Runs at 20Hz/30Hz typically.
-        if (netStep > 0.0) {
+        if (netStep > 0.0)
+        {
             int steps = 0;
-            while (netAccumulator >= netStep && steps < kMaxNetSubSteps) {
+            while (netAccumulator >= netStep && steps < kMaxNetSubSteps)
+            {
                 NetworkUpdate(netStep);
                 netAccumulator -= netStep;
                 ++steps;
             }
-        } else {
+        }
+        else
+        {
             netAccumulator = 0.0;
         }
 
         // --- 3. Physics Loop (The "Sim") ---
         // Runs at 60Hz/128Hz typically.
-        if (physStep > 0.0) {
+        if (physStep > 0.0)
+        {
             int steps = 0;
-            while (physAccumulator >= physStep && steps < kMaxPhysSubSteps) {
+            while (physAccumulator >= physStep && steps < kMaxPhysSubSteps)
+            {
                 FixedUpdate(physStep);
                 physAccumulator -= physStep;
                 ++steps;
             }
-        } else {
+        }
+        else
+        {
             physAccumulator = 0.0;
         }
 
@@ -115,7 +127,8 @@ void StrigidEngine::Run() {
 
         // Calculate Alpha for Physics Interpolation
         double alpha = 1.0;
-        if (physStep > 0.0) {
+        if (physStep > 0.0)
+        {
             alpha = physAccumulator / physStep;
             if (alpha < 0.0) alpha = 0.0;
             if (alpha > 1.0) alpha = 1.0;
@@ -124,11 +137,13 @@ void StrigidEngine::Run() {
         RenderFrame(alpha);
 
         // --- 5. Frame Limiter ---
-        if (targetFrameTime > 0.0) {
+        if (targetFrameTime > 0.0)
+        {
             WaitForTiming(frameStartCounter, perfFrequency);
         }
 
         // FPS calc
+        STRIGID_FRAME_MARK();
         CalculateFPS(dt);
     }
 
@@ -137,20 +152,25 @@ void StrigidEngine::Run() {
 
 void StrigidEngine::Shutdown()
 {
+    LOG_INFO("StrigidEngine shutting down");
+    Logger::Get().Shutdown();
 }
 
-void StrigidEngine::PumpEvents() {
-    //ZONE_SCOPED("Input_Poll");
+void StrigidEngine::PumpEvents()
+{
+    STRIGID_ZONE_N("Input_Poll");
     SDL_Event e;
-    while (SDL_PollEvent(&e)) {
+    while (SDL_PollEvent(&e))
+    {
         if (e.type == SDL_EVENT_QUIT) m_IsRunning = false;
         //m_Window->ProcessEvent(e);
         // Dispatch to ImGui here too
     }
 }
 
-void StrigidEngine::FrameUpdate([[maybe_unused]]double dt) {
-    //ZONE_SCOPED("ECS_Logic");
+void StrigidEngine::FrameUpdate([[maybe_unused]] double dt)
+{
+    STRIGID_ZONE_C(STRIGID_COLOR_LOGIC);
 
     // Phase 1: Calc (Parallel Read)
     // Runs user scripts, generates Command Buffers
@@ -161,26 +181,17 @@ void StrigidEngine::FrameUpdate([[maybe_unused]]double dt) {
     //m_World->ResolveCommandBuffers();
 }
 
-void StrigidEngine::TickPhysics([[maybe_unused]]double dt) {
-    //ZONE_SCOPED("Physics_Step");
-    // Sync Transforms -> Physics Bodies
-    //m_Physics->PreStep(dt);
-    
-    // Run Solver
-    //m_Physics->Step(dt);
-    
-    // Sync Physics Bodies -> Transforms
-    //m_Physics->PostStep();
-}
-
-void StrigidEngine::FixedUpdate([[maybe_unused]]double dt)
+void StrigidEngine::FixedUpdate([[maybe_unused]] double dt)
 {
+    STRIGID_ZONE_C(STRIGID_COLOR_PHYSICS);
 }
 
-void StrigidEngine::RenderFrame([[maybe_unused]]double alpha) {
+void StrigidEngine::RenderFrame([[maybe_unused]] double alpha)
+{
+    STRIGID_ZONE_C(STRIGID_COLOR_RENDERING);
     m_Window->Render();
     /*
-    ZONE_SCOPED("Render_Submit");
+    // Old Tracy call
     m_Window->BeginFrame();
     m_World->Render(m_Window.get());
     m_Window->Present();
@@ -195,15 +206,16 @@ void StrigidEngine::WaitForTiming(uint64_t frameStart, uint64_t perfFrequency)
     const uint64_t frameEnd = frameStart + targetTicks;
 
     uint64_t currentCounter = SDL_GetPerformanceCounter();
-    if (frameEnd > currentCounter) {
-
+    if (frameEnd > currentCounter)
+    {
         const double remainingSec =
             static_cast<double>(frameEnd - currentCounter) / static_cast<double>(perfFrequency);
 
         // Sleep most of the remaining time; leave a small margin (~2ms) for the busy-wait.
         constexpr double kSleepMarginSec = 0.002;
 
-        if (remainingSec > kSleepMarginSec) {
+        if (remainingSec > kSleepMarginSec)
+        {
             const double sleepSec = remainingSec - kSleepMarginSec;
             SDL_Delay(static_cast<uint32_t>(sleepSec * 1000.0));
         }
@@ -214,29 +226,38 @@ void StrigidEngine::WaitForTiming(uint64_t frameStart, uint64_t perfFrequency)
     }
 }
 
-void StrigidEngine::NetworkUpdate([[maybe_unused]]double fixedDt) {
+void StrigidEngine::NetworkUpdate([[maybe_unused]] double fixedDt)
+{
+    STRIGID_ZONE_C(STRIGID_COLOR_NETWORK);
     // 1. Process Incoming Packets (Bulk State)
     //    e.g., Update positions of other 50 players.
-    
+
     // 2. Reconcile Client-Side Prediction
     //    "Server said I was actually at X, correct my position."
-    
+
     // 3. Serialize Outgoing State (Snapshot)
     //    "Here is where I think I am."
 }
 
-void StrigidEngine::CalculateFPS(double dt) {
+void StrigidEngine::SendNetworkEvent([[maybe_unused]] const std::string& eventData)
+{
+    STRIGID_ZONE_C(STRIGID_COLOR_NETWORK);
+}
+
+void StrigidEngine::CalculateFPS(double dt)
+{
     m_FrameCount++;
     m_FpsTimer += dt;
 
     // Update title every 1 second
-    if (m_FpsTimer >= 1.0) {
+    if (m_FpsTimer >= 1.0)
+    {
         double fps = m_FrameCount / m_FpsTimer;
         double ms = (m_FpsTimer / m_FrameCount) * 1000.0;
 
-        std::string title = "StrigidEngine V0.1 | FPS: " + std::to_string((int)fps) + 
-                            " | Frame: " + std::to_string(ms) + "ms";
-        
+        std::string title = "StrigidEngine V0.1 | FPS: " + std::to_string((int)fps) +
+            " | Frame: " + std::to_string(ms) + "ms";
+
         m_Window->SetTitle(title.c_str());
 
         m_FrameCount = 0;

@@ -44,7 +44,6 @@ private:
     // The "Frame Pipeline" - Internal steps of the loop
     void PumpEvents();
     void FrameUpdate(double dt);
-    void TickPhysics(double dt);
     void FixedUpdate(double dt);
     void RenderFrame(double alpha);
     void WaitForTiming(uint64_t frameStart, uint64_t perfFrequency); // Cap FPS / VSync

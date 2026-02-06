@@ -1,15 +1,18 @@
 #include "../Public/Registry.h"
+#include "Profiler.h"
 #include <cassert>
 
 Registry::Registry()
     : NextEntityIndex(1) // Start at 1 (0 is reserved for Invalid)
 {
+    STRIGID_ZONE_N("Registry::Constructor");
     // Reserve space for entity index
     EntityIndex.reserve(1024);
 }
 
 Registry::~Registry()
 {
+    STRIGID_ZONE_N("Registry::Destructor");
     // Clean up all archetypes
     for (auto& Pair : Archetypes)
     {
@@ -20,6 +23,8 @@ Registry::~Registry()
 
 Archetype* Registry::GetOrCreateArchetype(const Signature& Sig)
 {
+    STRIGID_ZONE_C(STRIGID_COLOR_MEMORY);
+    
     // Check if archetype already exists
     auto It = Archetypes.find(Sig);
     if (It != Archetypes.end())
@@ -41,6 +46,8 @@ Archetype* Registry::GetOrCreateArchetype(const Signature& Sig)
 
 EntityID Registry::AllocateEntityID(uint16_t TypeID)
 {
+    STRIGID_ZONE_C(STRIGID_COLOR_MEMORY);
+    
     EntityID Id;
     Id.Value = 0;
 
@@ -74,6 +81,8 @@ EntityID Registry::AllocateEntityID(uint16_t TypeID)
 
 void Registry::FreeEntityID(EntityID Id)
 {
+    STRIGID_ZONE_C(STRIGID_COLOR_MEMORY);
+    
     uint32_t Index = Id.GetIndex();
     if (Index >= EntityIndex.size())
         return;
@@ -88,12 +97,15 @@ void Registry::FreeEntityID(EntityID Id)
 
 void Registry::Destroy(EntityID Id)
 {
+    STRIGID_ZONE_C(STRIGID_COLOR_MEMORY);
     // Defer destruction until end of frame
     PendingDestructions.push_back(Id);
 }
 
 void Registry::ProcessDeferredDestructions()
 {
+    STRIGID_ZONE_C(STRIGID_COLOR_MEMORY);
+    
     for (EntityID Id : PendingDestructions)
     {
         if (!Id.IsValid())
@@ -123,4 +135,6 @@ void Registry::ProcessDeferredDestructions()
     }
 
     PendingDestructions.clear();
+    
+    STRIGID_PLOT("PendingDestructions", (double)PendingDestructions.size());
 }
