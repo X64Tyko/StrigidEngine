@@ -41,6 +41,7 @@ add_executable(${PROJECT_NAME}
 # A. Your Engine Headers (Public)
 target_include_directories(${PROJECT_NAME} PUBLIC 
     "${CMAKE_CURRENT_SOURCE_DIR}/src/Runtime/Core/Public"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/Runtime/Memory/Public"
 )
 
 # B. SDL3 Headers (Private)

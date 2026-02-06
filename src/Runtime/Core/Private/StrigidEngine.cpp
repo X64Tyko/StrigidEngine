@@ -44,9 +44,9 @@ bool StrigidEngine::Initialize([[maybe_unused]]const char* title, [[maybe_unused
 void StrigidEngine::Run() {
     m_IsRunning = true;
 
-    uint64_t perfFrequency = SDL_GetPerformanceFrequency();
+    const uint64_t perfFrequency = SDL_GetPerformanceFrequency();
     uint64_t lastCounter = SDL_GetPerformanceCounter();
-    
+
     double physAccumulator = 0.0;
     double netAccumulator = 0.0;
 
@@ -55,57 +55,83 @@ void StrigidEngine::Run() {
     const double netStep = m_Config.GetNetworkStepTime();
     const double targetFrameTime = m_Config.GetTargetFrameTime();
 
+    // Safety caps to prevent long stalls / input starvation if we fall behind.
+    // (Tune these as you like.)
+    constexpr double kMaxDt = 0.25;
+    constexpr double kMaxAccumulatedTime = 0.25;
+    constexpr int kMaxPhysSubSteps = 8;
+    constexpr int kMaxNetSubSteps  = 8;
+
     while (m_IsRunning) {
+        // --- 0. Pump Events Early (Responsiveness) ---
+        PumpEvents();
+
         // --- 1. Measure Delta Time ---
-        uint64_t currentCounter = SDL_GetPerformanceCounter();
-        uint64_t counterElapsed = currentCounter - lastCounter;
-        lastCounter = currentCounter;
+        const uint64_t frameStartCounter = SDL_GetPerformanceCounter();
+        uint64_t counterElapsed = frameStartCounter - lastCounter;
+        lastCounter = frameStartCounter;
 
         double dt = (double)counterElapsed / (double)perfFrequency;
 
         // "Spiral of Death" Safety Cap (prevent freezing if debugging)
-        if (dt > 0.25) dt = 0.25;
+        if (dt > kMaxDt) dt = kMaxDt;
 
         physAccumulator += dt;
         netAccumulator += dt;
 
+        // Prevent unbounded catch-up after stalls
+        if (physAccumulator > kMaxAccumulatedTime) physAccumulator = kMaxAccumulatedTime;
+        if (netAccumulator > kMaxAccumulatedTime)  netAccumulator  = kMaxAccumulatedTime;
+
         // --- 2. Network Loop (The "Tick") ---
         // Runs at 20Hz/30Hz typically.
-        // Handling this BEFORE physics ensures the simulation uses the 
-        // freshest data available for this frame.
         if (netStep > 0.0) {
-            while (netAccumulator >= netStep) {
+            int steps = 0;
+            while (netAccumulator >= netStep && steps < kMaxNetSubSteps) {
                 NetworkUpdate(netStep);
                 netAccumulator -= netStep;
+                ++steps;
             }
+        } else {
+            netAccumulator = 0.0;
         }
 
         // --- 3. Physics Loop (The "Sim") ---
         // Runs at 60Hz/128Hz typically.
-        while (physAccumulator >= physStep) {
-            FixedUpdate(physStep);
-            physAccumulator -= physStep;
+        if (physStep > 0.0) {
+            int steps = 0;
+            while (physAccumulator >= physStep && steps < kMaxPhysSubSteps) {
+                FixedUpdate(physStep);
+                physAccumulator -= physStep;
+                ++steps;
+            }
+        } else {
+            physAccumulator = 0.0;
         }
 
         // --- 4. Frame Logic & Render ---
-        // Runs as fast as possible (or capped).
         PumpEvents();
         FrameUpdate(dt);
 
         // Calculate Alpha for Physics Interpolation
-        double alpha = physAccumulator / physStep;
+        double alpha = 1.0;
+        if (physStep > 0.0) {
+            alpha = physAccumulator / physStep;
+            if (alpha < 0.0) alpha = 0.0;
+            if (alpha > 1.0) alpha = 1.0;
+        }
+
         RenderFrame(alpha);
 
         // --- 5. Frame Limiter ---
-        // (Same logic as before...)
-        if (targetFrameTime > 0) {
-            WaitForTiming(currentCounter, perfFrequency);
+        if (targetFrameTime > 0.0) {
+            WaitForTiming(frameStartCounter, perfFrequency);
         }
-        
+
         // FPS calc
         CalculateFPS(dt);
     }
-    
+
     Shutdown();
 }
 
@@ -163,16 +189,25 @@ void StrigidEngine::RenderFrame([[maybe_unused]]double alpha) {
 
 void StrigidEngine::WaitForTiming(uint64_t frameStart, uint64_t perfFrequency)
 {
-    double frameDuration = (double)perfFrequency / m_Config.TargetFPS;
-    double frameEnd = frameStart + frameDuration;
-    
+    // Use target frame time (seconds) as the single source of truth.
+    const double targetFrameTimeSec = m_Config.GetTargetFrameTime();
+    const uint64_t targetTicks = static_cast<uint64_t>(targetFrameTimeSec * static_cast<double>(perfFrequency));
+    const uint64_t frameEnd = frameStart + targetTicks;
+
     uint64_t currentCounter = SDL_GetPerformanceCounter();
     if (frameEnd > currentCounter) {
-        
-        double remainingDuration = (frameEnd - currentCounter) / perfFrequency - 2;
-        if (remainingDuration > 0.0)
-            SDL_Delay(static_cast<uint32_t>(remainingDuration * 1000.0));
-        
+
+        const double remainingSec =
+            static_cast<double>(frameEnd - currentCounter) / static_cast<double>(perfFrequency);
+
+        // Sleep most of the remaining time; leave a small margin (~2ms) for the busy-wait.
+        constexpr double kSleepMarginSec = 0.002;
+
+        if (remainingSec > kSleepMarginSec) {
+            const double sleepSec = remainingSec - kSleepMarginSec;
+            SDL_Delay(static_cast<uint32_t>(sleepSec * 1000.0));
+        }
+
         while (SDL_GetPerformanceCounter() < frameEnd)
         {
         }

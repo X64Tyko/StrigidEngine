@@ -1,14 +1,16 @@
-﻿#pragma once
+#pragma once
 #include "Types.h"
 
-struct Archetype; // Forward declaration
+class Archetype; // Forward declaration (changed from struct to class)
 
-struct Chunk {
+struct Chunk
+{
     static constexpr size_t DATA_SIZE = CHUNK_SIZE;
     
-    alignas(16) uint8_t Data[DATA_SIZE];
+    alignas(64) uint8_t Data[DATA_SIZE]; // 64-byte alignment for cache line optimization
 
-    inline uint8_t* GetBuffer(uint32_t offset) {
-        return Data + offset;
+    inline uint8_t* GetBuffer(uint32_t Offset)
+    {
+        return Data + Offset;
     }
 };
