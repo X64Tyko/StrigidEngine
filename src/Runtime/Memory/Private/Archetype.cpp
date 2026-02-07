@@ -3,8 +3,9 @@
 #include <algorithm>
 #include <cassert>
 
-Archetype::Archetype(const Signature& Sig)
+Archetype::Archetype(const Signature& Sig, const char* DebugName)
     : ArchSignature(Sig)
+    , DebugName(DebugName)
     , EntitiesPerChunk(0)
     , TotalEntityCount(0)
 {
@@ -15,6 +16,8 @@ Archetype::~Archetype()
     // Clean up all allocated chunks
     for (Chunk* ChunkPtr : Chunks)
     {
+        // Tracy memory profiling: Track chunk deallocation with pool name
+        STRIGID_FREE_N(ChunkPtr, DebugName);
         delete ChunkPtr;
     }
     Chunks.clear();
@@ -151,5 +154,47 @@ void* Archetype::GetComponentArrayRaw(Chunk* TargetChunk, ComponentTypeID TypeID
 Chunk* Archetype::AllocateChunk()
 {
     STRIGID_ZONE_C(STRIGID_COLOR_MEMORY);
-    return new Chunk();
+    Chunk* NewChunk = new Chunk();
+
+    // Tracy memory profiling: Track chunk allocation with pool name
+    // This lets you see separate pools for Transform, Velocity, etc.
+    STRIGID_ALLOC_N(NewChunk, sizeof(Chunk), DebugName);
+
+    // Debug: Track virtual memory fragmentation
+    // This helps answer: "Why is 'spanned' so much larger than 'used'?"
+    static void* lastChunk = nullptr;
+    static void* firstChunk = nullptr;
+    static uint32_t chunkCount = 0;
+
+    if (firstChunk == nullptr)
+    {
+        firstChunk = NewChunk;
+    }
+
+    if (lastChunk != nullptr)
+    {
+        ptrdiff_t gap = (char*)NewChunk - (char*)lastChunk;
+        STRIGID_PLOT("Chunk Gap (KB)", gap / 1024.0);
+
+        // Log suspicious gaps (> 100KB means something's between chunks)
+        if (gap > 100 * 1024)
+        {
+            char buffer[256];
+            snprintf(buffer, sizeof(buffer), "Large gap detected: %lld KB between chunk %u and %u",
+                     gap / 1024, chunkCount - 1, chunkCount);
+            STRIGID_ZONE_TEXT(buffer, strlen(buffer));
+        }
+    }
+
+    chunkCount++;
+
+    // Track total span
+    ptrdiff_t totalSpan = (char*)NewChunk - (char*)firstChunk;
+    STRIGID_PLOT("Total Span (MB)", totalSpan / (1024.0 * 1024.0));
+    STRIGID_PLOT("Chunk Count", (int64_t)chunkCount);
+    STRIGID_PLOT("Efficiency %", (chunkCount * sizeof(Chunk) * 100.0) / (totalSpan > 0 ? totalSpan : 1));
+
+    lastChunk = NewChunk;
+
+    return NewChunk;
 }

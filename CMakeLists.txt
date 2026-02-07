@@ -13,7 +13,11 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 # -----------------------------------------------------------------------------
 # 2. BUILD OPTIONS
 # -----------------------------------------------------------------------------
+# Usage: cmake -DENABLE_TRACY=OFF -DGENERATE_ASSEMBLY=ON ..
 option(ENABLE_TRACY "Enable Tracy profiler" ON)
+option(GENERATE_ASSEMBLY "Generate assembly listings (.cod files)" OFF)
+option(VECTORIZATION_REPORTS "Enable compiler vectorization reports" OFF)
+option(ENABLE_AVX2 "Enable AVX2 instruction set" ON)
 
 # -----------------------------------------------------------------------------
 # 3. DEPENDENCIES (Define Paths Early)
@@ -100,12 +104,52 @@ if(ENABLE_TRACY)
 endif()
 
 # -----------------------------------------------------------------------------
-# 8. COMPILER WARNINGS
+# 8. COMPILER WARNINGS & OPTIMIZATION FLAGS
 # -----------------------------------------------------------------------------
 if(MSVC)
     target_compile_options(${PROJECT_NAME} PRIVATE /W4 /WX)
+
+    # Assembly listing generation
+    if(GENERATE_ASSEMBLY)
+        target_compile_options(${PROJECT_NAME} PRIVATE /FAcs)
+        message(STATUS "Assembly listings enabled (build/*.cod files)")
+    endif()
+
+    # Vectorization reports
+    if(VECTORIZATION_REPORTS)
+        target_compile_options(${PROJECT_NAME} PRIVATE /Qvec-report:2)
+        message(STATUS "Vectorization reports enabled")
+    endif()
+
+    # AVX2 instruction set
+    if(ENABLE_AVX2)
+        target_compile_options(${PROJECT_NAME} PRIVATE /arch:AVX2)
+        message(STATUS "AVX2 instructions enabled")
+    endif()
 else()
     target_compile_options(${PROJECT_NAME} PRIVATE -Wall -Wextra -Wpedantic -Werror)
+
+    # Assembly listing generation (GCC/Clang)
+    if(GENERATE_ASSEMBLY)
+        target_compile_options(${PROJECT_NAME} PRIVATE -save-temps=obj -fverbose-asm)
+        message(STATUS "Assembly listings enabled (build/*.s files)")
+    endif()
+
+    # Vectorization reports (GCC/Clang)
+    if(VECTORIZATION_REPORTS)
+        if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+            target_compile_options(${PROJECT_NAME} PRIVATE -Rpass=loop-vectorize -Rpass-missed=loop-vectorize)
+        else()
+            target_compile_options(${PROJECT_NAME} PRIVATE -fopt-info-vec-optimized -fopt-info-vec-missed)
+        endif()
+        message(STATUS "Vectorization reports enabled")
+    endif()
+
+    # AVX2 instruction set
+    if(ENABLE_AVX2)
+        target_compile_options(${PROJECT_NAME} PRIVATE -march=native)
+        message(STATUS "Native architecture instructions enabled")
+    endif()
 endif()
 
 # -----------------------------------------------------------------------------

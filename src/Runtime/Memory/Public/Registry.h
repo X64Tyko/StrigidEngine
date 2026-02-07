@@ -46,6 +46,10 @@ public:
     // Invoke all lifecycle functions of a specific type
     void InvokeAll(LifecycleType type, double dt = 0.0);
 
+    // Memory diagnostics
+    uint32_t GetTotalChunkCount() const;
+    uint32_t GetTotalEntityCount() const;
+
     // Singleton access
     static Registry& Get()
     {

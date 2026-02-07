@@ -202,9 +202,12 @@ void StrigidEngine::RenderFrame([[maybe_unused]] double alpha)
     // Query archetypes with Transform and ColorData
     std::vector<Archetype*> archetypes = RegistryPtr->Query<Transform, ColorData>();
 
-    instances.clear();
-    
+    // Reserve space for all instances (avoid reallocation)
+    size_t totalEntities = RegistryPtr->GetTotalEntityCount();
+    instances.resize(totalEntities);
+
     // Build instance data from ECS
+    size_t instanceIdx = 0;
     for (Archetype* arch : archetypes)
     {
         // Iterate through all chunks in this archetype
@@ -217,24 +220,18 @@ void StrigidEngine::RenderFrame([[maybe_unused]] double alpha)
             Transform* transforms = arch->GetComponentArray<Transform>(chunk, GetComponentTypeID<Transform>());
             ColorData* colors = arch->GetComponentArray<ColorData>(chunk, GetComponentTypeID<ColorData>());
 
-            // Copy data to instance buffer
+            // Copy data to instance buffer using memcpy for vectorization
+            // Transform = 48 bytes (12 floats), ColorData = 16 bytes (4 floats)
+            // InstanceData = 64 bytes (16 floats with padding)
             for (uint32_t i = 0; i < entityCount; ++i)
             {
-                InstanceData inst;
-                inst.PositionX = transforms[i].PositionX;
-                inst.PositionY = transforms[i].PositionY;
-                inst.PositionZ = transforms[i].PositionZ;
-                inst.RotationX = transforms[i].RotationX;
-                inst.RotationY = transforms[i].RotationY;
-                inst.RotationZ = transforms[i].RotationZ;
-                inst.ScaleX = transforms[i].ScaleX;
-                inst.ScaleY = transforms[i].ScaleY;
-                inst.ScaleZ = transforms[i].ScaleZ;
-                inst.ColorR = colors[i].R;
-                inst.ColorG = colors[i].G;
-                inst.ColorB = colors[i].B;
-                inst.ColorA = colors[i].A;
-                instances.push_back(inst);
+                InstanceData& inst = instances[instanceIdx++];
+
+                // Copy Transform (48 bytes = Position + Rotation + Scale)
+                std::memcpy(&inst.PositionX, &transforms[i].PositionX, 48);
+
+                // Copy ColorData (16 bytes = RGBA)
+                std::memcpy(&inst.ColorR, &colors[i].R, 16);
             }
         }
     }

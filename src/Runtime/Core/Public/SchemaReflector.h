@@ -4,6 +4,7 @@
 #include "Types.h"
 #include "Schema.h"
 #include "SchemaValidation.h"
+#include "Profiler.h"
 #include <bitset>
 #include <iostream>
 #include <tuple>

@@ -10,7 +10,7 @@
 #endif
 
 // 16KB Chunks fits perfectly in L1/L2 cache lines
-constexpr uint32_t CHUNK_SIZE = 16 * 1024;
+constexpr uint32_t CHUNK_SIZE = 64 * 1024;
 
 // Component type ID - numeric identifier for each component type (0-255)
 using ComponentTypeID = uint32_t;

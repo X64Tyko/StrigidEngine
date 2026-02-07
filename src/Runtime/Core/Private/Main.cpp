@@ -1,12 +1,7 @@
 #include "StrigidEngine.h"
 #include "Registry.h"
 #include <iostream>
-
-// Simple test struct (will be replaced with real components in Week 4)
-struct TestEntity
-{
-    int Value;
-};
+#include "TestEntity.h"
 
 void TestRegistry()
 {

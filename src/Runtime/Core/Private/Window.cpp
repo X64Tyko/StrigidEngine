@@ -72,6 +72,11 @@ void Window::Render()
     STRIGID_ZONE_C(STRIGID_COLOR_RENDERING);
     // A. Acquire Command Buffer
     SDL_GPUCommandBuffer* cmdBuf = SDL_AcquireGPUCommandBuffer(GpuDevice);
+    if (!cmdBuf)
+    {
+        // No command buffer available, skip this frame
+        return;
+    }
 
     // B. Get the Swapchain Texture (The Window Surface)
     SDL_GPUTexture* swapchainTex;
@@ -106,6 +111,11 @@ void Window::Shutdown()
 {
     STRIGID_ZONE_C(STRIGID_COLOR_RENDERING);
     // 6. Cleanup
+    if (TransferBuffer)
+    {
+        SDL_ReleaseGPUTransferBuffer(GpuDevice, TransferBuffer);
+        TransferBuffer = nullptr;
+    }
     SDL_ReleaseWindowFromGPUDevice(GpuDevice, EngineWindow);
     SDL_DestroyGPUDevice(GpuDevice);
     SDL_DestroyWindow(EngineWindow);
@@ -143,11 +153,18 @@ void Window::CreateCubeMesh()
     transferInfo.size = sizeof(CubeMesh::Vertices);
     
     SDL_GPUTransferBuffer* transferBuffer = SDL_CreateGPUTransferBuffer(GpuDevice, &transferInfo);
-    void* mapped = SDL_MapGPUTransferBuffer(GpuDevice, transferBuffer, false);
+    void* mapped = SDL_MapGPUTransferBuffer(GpuDevice, transferBuffer, true); // true = cycle (wait if needed)
     std::memcpy(mapped, CubeMesh::Vertices, sizeof(CubeMesh::Vertices));
     SDL_UnmapGPUTransferBuffer(GpuDevice, transferBuffer);
-    
+
     SDL_GPUCommandBuffer* uploadCmd = SDL_AcquireGPUCommandBuffer(GpuDevice);
+    // In initialization, we must get a command buffer - if this fails, something is seriously wrong
+    if (!uploadCmd)
+    {
+        SDL_ReleaseGPUTransferBuffer(GpuDevice, transferBuffer);
+        std::cerr << "Failed to acquire command buffer during initialization: " << SDL_GetError() << std::endl;
+        return;
+    }
     SDL_GPUCopyPass* copyPass = SDL_BeginGPUCopyPass(uploadCmd);
     
     SDL_GPUTransferBufferLocation src = {};
@@ -175,11 +192,18 @@ void Window::CreateCubeMesh()
     // Upload index data
     transferInfo.size = sizeof(CubeMesh::Indices);
     transferBuffer = SDL_CreateGPUTransferBuffer(GpuDevice, &transferInfo);
-    mapped = SDL_MapGPUTransferBuffer(GpuDevice, transferBuffer, false);
+    mapped = SDL_MapGPUTransferBuffer(GpuDevice, transferBuffer, true); // true = cycle (wait if needed)
     std::memcpy(mapped, CubeMesh::Indices, sizeof(CubeMesh::Indices));
     SDL_UnmapGPUTransferBuffer(GpuDevice, transferBuffer);
-    
+
     uploadCmd = SDL_AcquireGPUCommandBuffer(GpuDevice);
+    // In initialization, we must get a command buffer - if this fails, something is seriously wrong
+    if (!uploadCmd)
+    {
+        SDL_ReleaseGPUTransferBuffer(GpuDevice, transferBuffer);
+        std::cerr << "Failed to acquire command buffer during initialization: " << SDL_GetError() << std::endl;
+        return;
+    }
     copyPass = SDL_BeginGPUCopyPass(uploadCmd);
     
     src.transfer_buffer = transferBuffer;
@@ -275,19 +299,19 @@ void Window::CreateRenderPipeline()
     // Location 2: instance rotation (vec3)
     vertexAttributes[2].location = 2;
     vertexAttributes[2].format = SDL_GPU_VERTEXELEMENTFORMAT_FLOAT3;
-    vertexAttributes[2].offset = 12;
+    vertexAttributes[2].offset = 16;  // Changed from 12 due to padding
     vertexAttributes[2].buffer_slot = 1;
-    
+
     // Location 3: instance scale (vec3)
     vertexAttributes[3].location = 3;
     vertexAttributes[3].format = SDL_GPU_VERTEXELEMENTFORMAT_FLOAT3;
-    vertexAttributes[3].offset = 24;
+    vertexAttributes[3].offset = 32;  // Changed from 24 due to padding
     vertexAttributes[3].buffer_slot = 1;
-    
+
     // Location 4: instance color (vec4)
     vertexAttributes[4].location = 4;
     vertexAttributes[4].format = SDL_GPU_VERTEXELEMENTFORMAT_FLOAT4;
-    vertexAttributes[4].offset = 36;
+    vertexAttributes[4].offset = 48;  // Changed from 36 due to padding
     vertexAttributes[4].buffer_slot = 1;
 
     // Define vertex buffers
@@ -352,96 +376,119 @@ void Window::DrawInstances(const InstanceData* Instances, size_t Count)
         CreateInstanceBuffer(Count * 2);
     }
     
-    // Upload instance data to GPU
-    SDL_GPUTransferBufferCreateInfo transferInfo = {};
-    transferInfo.usage = SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD;
-    transferInfo.size = sizeof(InstanceData) * static_cast<uint32_t>(Count);
-    
-    SDL_GPUTransferBuffer* transferBuffer = SDL_CreateGPUTransferBuffer(GpuDevice, &transferInfo);
-    void* mapped = SDL_MapGPUTransferBuffer(GpuDevice, transferBuffer, false);
-    std::memcpy(mapped, Instances, sizeof(InstanceData) * Count);
-    SDL_UnmapGPUTransferBuffer(GpuDevice, transferBuffer);
-    
+    // Acquire command buffer and swapchain texture FIRST (fail fast if unavailable)
     SDL_GPUCommandBuffer* cmdBuf = SDL_AcquireGPUCommandBuffer(GpuDevice);
+    if (!cmdBuf)
+    {
+        // No command buffer available, skip this frame
+        return;
+    }
+
+    SDL_GPUTexture* swapchainTex;
+    if (!SDL_AcquireGPUSwapchainTexture(cmdBuf, EngineWindow, &swapchainTex, nullptr, nullptr) || !swapchainTex)
+    {
+        // No swapchain texture available, skip this frame
+        SDL_SubmitGPUCommandBuffer(cmdBuf);
+        return;
+    }
+
+    // Upload instance data to GPU using cached transfer buffer
+    size_t requiredSize = sizeof(InstanceData) * Count;
+
+    // Resize transfer buffer if needed (with 2x growth strategy)
+    if (requiredSize > TransferBufferCapacity)
+    {
+        if (TransferBuffer)
+        {
+            SDL_ReleaseGPUTransferBuffer(GpuDevice, TransferBuffer);
+        }
+
+        TransferBufferCapacity = requiredSize * 2;  // Over-allocate to avoid frequent resizes
+
+        SDL_GPUTransferBufferCreateInfo transferInfo = {};
+        transferInfo.usage = SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD;
+        transferInfo.size = static_cast<uint32_t>(TransferBufferCapacity);
+
+        TransferBuffer = SDL_CreateGPUTransferBuffer(GpuDevice, &transferInfo);
+    }
+
+    // Reuse existing transfer buffer (fast path)
+    void* mapped = SDL_MapGPUTransferBuffer(GpuDevice, TransferBuffer, false);
+    if (!mapped)
+    {
+        // GPU is still using the buffer, skip this frame
+        SDL_SubmitGPUCommandBuffer(cmdBuf);
+        return;
+    }
+    std::memcpy(mapped, Instances, requiredSize);
+    SDL_UnmapGPUTransferBuffer(GpuDevice, TransferBuffer);
+
     SDL_GPUCopyPass* copyPass = SDL_BeginGPUCopyPass(cmdBuf);
-    
+
     SDL_GPUTransferBufferLocation src = {};
-    src.transfer_buffer = transferBuffer;
+    src.transfer_buffer = TransferBuffer;  // Use cached transfer buffer
     src.offset = 0;
-    
+
     SDL_GPUBufferRegion dst = {};
     dst.buffer = InstanceBuffer;
     dst.offset = 0;
-    dst.size = sizeof(InstanceData) * static_cast<uint32_t>(Count);
-    
+    dst.size = static_cast<uint32_t>(requiredSize);
+
     SDL_UploadToGPUBuffer(copyPass, &src, &dst, false);
     SDL_EndGPUCopyPass(copyPass);
     
-    // Get swapchain texture
-    SDL_GPUTexture* swapchainTex;
-    if (!SDL_AcquireGPUSwapchainTexture(cmdBuf, EngineWindow, &swapchainTex, nullptr, nullptr))
-    {
-        SDL_SubmitGPUCommandBuffer(cmdBuf);
-        SDL_ReleaseGPUTransferBuffer(GpuDevice, transferBuffer);
-        return;
-    }
+    // Create simple perspective camera matrix
+    float AspectRatio = static_cast<float>(Width) / static_cast<float>(Height);
+    float Fov = 60.0f * 3.14159f / 180.0f; // 60 degrees in radians
+    float ZNear = 0.1f;
+    float ZFar = 1000.0f;
     
-    if (swapchainTex)
-    {
-        
-        // Create simple perspective camera matrix
-        float AspectRatio = static_cast<float>(Width) / static_cast<float>(Height);
-        float Fov = 60.0f * 3.14159f / 180.0f; // 60 degrees in radians
-        float ZNear = 0.1f;
-        float ZFar = 1000.0f;
-        
-        // Perspective projection matrix (column-major for GLSL)
-        float F = 1.0f / std::tan(Fov / 2.0f);
-        float ViewProjMatrix[16] = {
-            // Column 0
-            F / AspectRatio, 0.0f, 0.0f, 0.0f,
-            // Column 1
-            0.0f, F, 0.0f, 0.0f,  // Note: No Y-flip, SDL3 handles NDC conversion
-            // Column 2
-            0.0f, 0.0f, ZFar / (ZFar - ZNear), -(ZFar * ZNear) / (ZFar - ZNear),
-            // Column 3
-            0.0f, 0.0f, 1.0f, 0.0f
-        };
-        
-        // Push uniform data to shader BEFORE beginning render pass (mat4 = 64 bytes)
-        SDL_PushGPUVertexUniformData(cmdBuf, 0, ViewProjMatrix, sizeof(ViewProjMatrix));
-        
-        SDL_GPUColorTargetInfo colorTarget = {};
-        colorTarget.texture = swapchainTex;
-        colorTarget.clear_color = {0.1f, 0.1f, 0.1f, 1.0f};
-        colorTarget.load_op = SDL_GPU_LOADOP_CLEAR;
-        colorTarget.store_op = SDL_GPU_STOREOP_STORE;
-        
-        
-        SDL_GPURenderPass* renderPass = SDL_BeginGPURenderPass(cmdBuf, &colorTarget, 1, nullptr);
-        SDL_BindGPUGraphicsPipeline(renderPass, Pipeline);
-        
-        
-        SDL_GPUBufferBinding vertexBinding = {};
-        vertexBinding.buffer = VertexBuffer;
-        vertexBinding.offset = 0;
-        SDL_BindGPUVertexBuffers(renderPass, 0, &vertexBinding, 1);
-        
-        SDL_GPUBufferBinding instanceBinding = {};
-        instanceBinding.buffer = InstanceBuffer;
-        instanceBinding.offset = 0;
-        SDL_BindGPUVertexBuffers(renderPass, 1, &instanceBinding, 1);
-        
-        SDL_GPUBufferBinding indexBinding = {};
-        indexBinding.buffer = IndexBuffer;
-        indexBinding.offset = 0;
-        SDL_BindGPUIndexBuffer(renderPass, &indexBinding, SDL_GPU_INDEXELEMENTSIZE_16BIT);
-        
-        SDL_DrawGPUIndexedPrimitives(renderPass, CubeMesh::IndexCount, static_cast<uint32_t>(Count), 0, 0, 0);
-        
-        SDL_EndGPURenderPass(renderPass);
-    }
+    // Perspective projection matrix (column-major for GLSL)
+    float F = 1.0f / std::tan(Fov / 2.0f);
+    float ViewProjMatrix[16] = {
+        // Column 0
+        F / AspectRatio, 0.0f, 0.0f, 0.0f,
+        // Column 1
+        0.0f, F, 0.0f, 0.0f,  // Note: No Y-flip, SDL3 handles NDC conversion
+        // Column 2
+        0.0f, 0.0f, ZFar / (ZFar - ZNear), -(ZFar * ZNear) / (ZFar - ZNear),
+        // Column 3
+        0.0f, 0.0f, 1.0f, 0.0f
+    };
     
+    // Push uniform data to shader BEFORE beginning render pass (mat4 = 64 bytes)
+    SDL_PushGPUVertexUniformData(cmdBuf, 0, ViewProjMatrix, sizeof(ViewProjMatrix));
+    
+    SDL_GPUColorTargetInfo colorTarget = {};
+    colorTarget.texture = swapchainTex;
+    colorTarget.clear_color = {0.1f, 0.1f, 0.1f, 1.0f};
+    colorTarget.load_op = SDL_GPU_LOADOP_CLEAR;
+    colorTarget.store_op = SDL_GPU_STOREOP_STORE;
+    
+    
+    SDL_GPURenderPass* renderPass = SDL_BeginGPURenderPass(cmdBuf, &colorTarget, 1, nullptr);
+    SDL_BindGPUGraphicsPipeline(renderPass, Pipeline);
+    
+    
+    SDL_GPUBufferBinding vertexBinding = {};
+    vertexBinding.buffer = VertexBuffer;
+    vertexBinding.offset = 0;
+    SDL_BindGPUVertexBuffers(renderPass, 0, &vertexBinding, 1);
+    
+    SDL_GPUBufferBinding instanceBinding = {};
+    instanceBinding.buffer = InstanceBuffer;
+    instanceBinding.offset = 0;
+    SDL_BindGPUVertexBuffers(renderPass, 1, &instanceBinding, 1);
+    
+    SDL_GPUBufferBinding indexBinding = {};
+    indexBinding.buffer = IndexBuffer;
+    indexBinding.offset = 0;
+    SDL_BindGPUIndexBuffer(renderPass, &indexBinding, SDL_GPU_INDEXELEMENTSIZE_16BIT);
+    
+    SDL_DrawGPUIndexedPrimitives(renderPass, CubeMesh::IndexCount, static_cast<uint32_t>(Count), 0, 0, 0);
+    
+    SDL_EndGPURenderPass(renderPass);
+
     SDL_SubmitGPUCommandBuffer(cmdBuf);
-    SDL_ReleaseGPUTransferBuffer(GpuDevice, transferBuffer);
+    // Transfer buffer is now cached - no need to release every frame
 }

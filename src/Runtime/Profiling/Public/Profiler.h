@@ -68,6 +68,8 @@
     // Memory profiling
     #define STRIGID_ALLOC(ptr, size) TracyAlloc(ptr, size)
     #define STRIGID_FREE(ptr) TracyFree(ptr)
+    #define STRIGID_ALLOC_N(ptr, size, name) TracyAllocN(ptr, size, name)
+    #define STRIGID_FREE_N(ptr, name) TracyFreeN(ptr, name)
 
     // Plots (for custom metrics like FPS, entity count, etc.)
     #define STRIGID_PLOT(name, value) TracyPlot(name, value)
@@ -90,6 +92,8 @@
     #define STRIGID_ZONE_TEXT(text, size)
     #define STRIGID_ALLOC(ptr, size)
     #define STRIGID_FREE(ptr)
+    #define STRIGID_ALLOC_N(ptr, size, name)
+    #define STRIGID_FREE_N(ptr, name)
     #define STRIGID_PLOT(name, value)
 #endif
 

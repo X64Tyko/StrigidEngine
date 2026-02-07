@@ -216,3 +216,23 @@ void Registry::InvokeAll(LifecycleType type, double dt)
         }
     }
 }
+
+uint32_t Registry::GetTotalChunkCount() const
+{
+    uint32_t totalChunks = 0;
+    for (const auto& [sig, archetype] : Archetypes)
+    {
+        totalChunks += static_cast<uint32_t>(archetype->Chunks.size());
+    }
+    return totalChunks;
+}
+
+uint32_t Registry::GetTotalEntityCount() const
+{
+    uint32_t totalEntities = 0;
+    for (const auto& [sig, archetype] : Archetypes)
+    {
+        totalEntities += archetype->TotalEntityCount;
+    }
+    return totalEntities;
+}

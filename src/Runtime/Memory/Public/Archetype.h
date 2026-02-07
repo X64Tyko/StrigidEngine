@@ -13,11 +13,14 @@
 class Archetype
 {
 public:
-    Archetype(const Signature& Sig);
+    Archetype(const Signature& Sig, const char* DebugName = "Archetype");
     ~Archetype();
 
     // Component signature
     Signature ArchSignature;
+
+    // Debug name for profiling
+    const char* DebugName;
 
     // Resident class types (multiple classes can share same archetype)
     std::unordered_set<uint16_t> ResidentClassIDs;
