@@ -2,12 +2,15 @@
 #include "Profiler.h"
 #include <cassert>
 
+#include "SchemaReflector.h"
+
 Registry::Registry()
     : NextEntityIndex(1) // Start at 1 (0 is reserved for Invalid)
 {
     STRIGID_ZONE_N("Registry::Constructor");
     // Reserve space for entity index
     EntityIndex.reserve(1024);
+    InitializeArchetypes();
 }
 
 Registry::~Registry()
@@ -137,4 +140,75 @@ void Registry::ProcessDeferredDestructions()
     PendingDestructions.clear();
     
     STRIGID_PLOT("PendingDestructions", (double)PendingDestructions.size());
+}
+
+void Registry::InitializeArchetypes()
+{
+    MetaRegistry& MR = MetaRegistry::Get();
+    // need to combine classes in the meta registry that have the same TypeID.
+
+    for (auto Arch : MR.MetaComponents)
+    {
+        Archetype* NewArch = new Archetype(std::get<ComponentSignature>(Arch.second));
+        NewArch->BuildLayout(std::get<std::vector<ComponentMeta>>(Arch.second));
+
+        // Copy lifecycle functions to the archetype
+        NewArch->LifecycleFunctions = std::get<std::vector<LifecycleFunction>>(Arch.second);
+
+        Archetypes[std::get<ComponentSignature>(Arch.second)] = NewArch;
+    }
+}
+
+void Registry::InvokeAll(LifecycleType type, double dt)
+{
+    STRIGID_ZONE_C(STRIGID_COLOR_LOGIC);
+
+    // Iterate through all archetypes
+    for (auto& [sig, archetype] : Archetypes)
+    {
+        // Check if this archetype has any lifecycle functions of the requested type
+        bool hasFunction = false;
+        for (const LifecycleFunction& func : archetype->LifecycleFunctions)
+        {
+            if (func.Type == type)
+            {
+                hasFunction = true;
+                break;
+            }
+        }
+
+        if (!hasFunction)
+            continue;
+
+        // Iterate through all chunks in this archetype
+        for (size_t chunkIdx = 0; chunkIdx < archetype->Chunks.size(); ++chunkIdx)
+        {
+            Chunk* chunk = archetype->Chunks[chunkIdx];
+            uint32_t entityCount = archetype->GetChunkCount(chunkIdx);
+
+            if (entityCount == 0)
+                continue;
+
+            // Build array of component array pointers for this chunk
+            std::vector<void*> componentArrays;
+            for (const auto& [compTypeID, compMeta] : archetype->ComponentLayout)
+            {
+                void* arrayPtr = archetype->GetComponentArrayRaw(chunk, compTypeID);
+                componentArrays.push_back(arrayPtr);
+            }
+
+            // Invoke all lifecycle functions of the requested type on each entity
+            for (const LifecycleFunction& func : archetype->LifecycleFunctions)
+            {
+                if (func.Type != type)
+                    continue;
+
+                // Call the invoker for each entity in the chunk
+                for (uint32_t i = 0; i < entityCount; ++i)
+                {
+                    func.Invoker(func.FunctionPtr, componentArrays.data(), i, dt);
+                }
+            }
+        }
+    }
 }

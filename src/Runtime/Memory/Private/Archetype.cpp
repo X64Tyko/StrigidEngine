@@ -4,7 +4,7 @@
 #include <cassert>
 
 Archetype::Archetype(const Signature& Sig)
-    : ComponentSignature(Sig)
+    : ArchSignature(Sig)
     , EntitiesPerChunk(0)
     , TotalEntityCount(0)
 {
@@ -35,12 +35,10 @@ void Archetype::BuildLayout(const std::vector<ComponentMeta>& Components)
 
     // Calculate total stride (sum of all component sizes)
     size_t TotalStride = 0;
-    size_t MaxAlignment = 1;
 
     for (const ComponentMeta& Meta : Components)
     {
         TotalStride += Meta.Size;
-        MaxAlignment = std::max(MaxAlignment, Meta.Alignment);
     }
 
     // Calculate how many entities fit in a chunk

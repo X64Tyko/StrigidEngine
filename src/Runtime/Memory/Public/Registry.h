@@ -7,6 +7,8 @@
 #include <unordered_map>
 #include <queue>
 
+#include "Schema.h"
+
 // Registry - Central entity management system
 // Handles entity creation, destruction, and component access
 class Registry
@@ -37,6 +39,12 @@ public:
     // Apply all pending destructions (called at end of frame)
     void ProcessDeferredDestructions();
 
+    template <typename... Components>
+    std::vector<Archetype*> Query();
+
+    // Invoke all lifecycle functions of a specific type
+    void InvokeAll(LifecycleType type, double dt = 0.0);
+
     // Singleton access
     static Registry& Get()
     {
@@ -45,6 +53,9 @@ public:
     }
 
 private:
+    // Initialize archetypes with data from MetaRegistry
+    void InitializeArchetypes();
+    
     // Global entity lookup table (indexed by EntityID.GetIndex())
     std::vector<EntityRecord> EntityIndex;
 
@@ -69,10 +80,6 @@ private:
     // Helper: Build signature from component list
     template<typename... Components>
     Signature BuildSignature();
-
-    // Helper: Get component type ID (will be defined via reflection later)
-    template<typename T>
-    static ComponentTypeID GetComponentTypeID();
 };
 
 // Template implementations must be in header
@@ -86,19 +93,14 @@ EntityID Registry::Create()
 
     if (!Initialized)
     {
-        // TODO: In Week 5 (Reflection), we'll scan T for Ref<Component> members
-        // For now, create empty archetype as placeholder
-        Signature Sig;
-        // Sig.Set(GetComponentTypeID<Transform>()); // Example
+        Signature Sig = std::get<ComponentSignature>(MetaRegistry::Get().MetaComponents[GetClassID<T>()]);
         
         CachedArchetype = GetOrCreateArchetype(Sig);
         Initialized = true;
     }
 
     // Allocate entity ID
-    // TODO: TypeID will come from reflection system (Week 5)
-    constexpr uint16_t TypeID = 0; // Placeholder
-    EntityID Id = AllocateEntityID(TypeID);
+    EntityID Id = AllocateEntityID(GetClassID<T>());
 
     // Allocate slot in archetype
     Archetype::EntitySlot Slot = CachedArchetype->PushEntity();
@@ -159,20 +161,27 @@ bool Registry::HasComponent(EntityID Id)
     return GetComponent<T>(Id) != nullptr;
 }
 
-template<typename T>
-ComponentTypeID Registry::GetComponentTypeID()
-{
-    // TODO: This will be implemented in Week 5 (Reflection)
-    // For now, use compile-time hash of type name
-    static ComponentTypeID CachedID = static_cast<ComponentTypeID>(typeid(T).hash_code() & 0xFF);
-    return CachedID;
-}
-
 template<typename... Components>
 Signature Registry::BuildSignature()
 {
     Signature Sig;
     // Fold expression to set all component bits
-    ((Sig.Set(GetComponentTypeID<Components>())), ...);
+    ((Sig.Set(GetComponentTypeID<Components>() -1)), ...);
     return Sig;
+}
+
+template<typename... Components>
+std::vector<Archetype*> Registry::Query()
+{
+    std::vector<Archetype*> Results;
+    Signature Sig = BuildSignature<Components...>();
+    for (auto Arch : Archetypes)
+    {
+        if (Arch.first.Contains(Sig))
+        {
+            Results.push_back(Arch.second);
+        }
+    }
+    
+    return Results;
 }

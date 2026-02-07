@@ -3,9 +3,19 @@
 #include "Logger.h"
 #include <string>
 #include <SDL3/SDL.h>
+#include <random>
+#include <vector>
 
 #include "Window.h"
 
+#include "Registry.h"
+#include "CubeEntity.h"
+
+// Define global component counter (declared in SchemaReflector.h)
+namespace Internal {
+    uint32_t g_GlobalComponentCounter(1);
+    ClassID g_GlobalClassCounter = 1;
+}
 
 StrigidEngine::StrigidEngine()
 {
@@ -28,8 +38,41 @@ bool StrigidEngine::Initialize([[maybe_unused]] const char* title, [[maybe_unuse
     //m_JobSystem->Init(std::thread::hardware_concurrency() - 1);
 
     // 2. Platform (Window/Video)
-    m_Window = std::make_unique<Window>();
-    if (m_Window->Open(title, width, height) < 0) return false;
+    EngineWindow = std::make_unique<Window>();
+    if (EngineWindow->Open(title, width, height) < 0) return false;
+
+    // 3. ECS Registry
+    RegistryPtr = std::make_unique<Registry>();
+    
+    // 4. Create 1000 test entities
+    std::random_device rd;
+    std::mt19937 gen(rd());
+    std::uniform_real_distribution<float> posX(-30.0f, 30.0f);
+    std::uniform_real_distribution<float> posY(-30.0f, 30.0f);
+    std::uniform_real_distribution<float> posZ(-500.0f, -200.0f);
+    std::uniform_real_distribution<float> vel(-2.0f, 2.0f);
+    std::uniform_real_distribution<float> color(0.2f, 1.0f);
+    
+    for (int i = 0; i < 100000; ++i)
+    {
+        CubeEntity cube;
+        EntityID id = RegistryPtr->Create<CubeEntity>();
+        cube.transform = RegistryPtr->GetComponent<Transform>(id);
+        cube.color = RegistryPtr->GetComponent<ColorData>(id);
+        cube.transform->PositionX = posX(gen);
+        cube.transform->PositionY = posY(gen);
+        cube.transform->PositionZ = posZ(gen);
+        cube.transform->RotationX = 0.0f;
+        cube.transform->RotationY = 0.0f;
+        cube.transform->RotationZ = 0.0f;
+        cube.transform->ScaleX = cube.transform->ScaleY = cube.transform->ScaleZ = 1.0f;
+        cube.color->R = color(gen);
+        cube.color->G = color(gen);
+        cube.color->B = color(gen);
+        cube.color->A = 1.0f;
+    }
+    
+    LOG_INFO("Created 1000 test entities");
 
     /*
     // 3. Audio (Depends on Platform mostly)
@@ -39,13 +82,13 @@ bool StrigidEngine::Initialize([[maybe_unused]] const char* title, [[maybe_unuse
     // 4. Gameplay World (Depends on everything)
     m_World = std::make_unique<World>();
     */
-    m_IsRunning = true;
+    bIsRunning = true;
     return true;
 }
 
 void StrigidEngine::Run()
 {
-    m_IsRunning = true;
+    bIsRunning = true;
 
     const uint64_t perfFrequency = SDL_GetPerformanceFrequency();
     uint64_t lastCounter = SDL_GetPerformanceCounter();
@@ -54,9 +97,9 @@ void StrigidEngine::Run()
     double netAccumulator = 0.0;
 
     // Cache config values to avoid struct lookups in hot loop
-    const double physStep = m_Config.GetFixedStepTime();
-    const double netStep = m_Config.GetNetworkStepTime();
-    const double targetFrameTime = m_Config.GetTargetFrameTime();
+    const double physStep = Config.GetFixedStepTime();
+    const double netStep = Config.GetNetworkStepTime();
+    const double targetFrameTime = Config.GetTargetFrameTime();
 
     // Safety caps to prevent long stalls / input starvation if we fall behind.
     // (Tune these as you like.)
@@ -65,7 +108,7 @@ void StrigidEngine::Run()
     constexpr int kMaxPhysSubSteps = 8;
     constexpr int kMaxNetSubSteps = 8;
 
-    while (m_IsRunning)
+    while (bIsRunning)
     {
         // --- 0. Pump Events Early (Responsiveness) ---
         PumpEvents();
@@ -150,6 +193,54 @@ void StrigidEngine::Run()
     Shutdown();
 }
 
+void StrigidEngine::RenderFrame([[maybe_unused]] double alpha)
+{
+    STRIGID_ZONE_C(STRIGID_COLOR_RENDERING);
+
+    // Query archetypes with Transform and ColorData
+    std::vector<Archetype*> archetypes = RegistryPtr->Query<Transform, ColorData>();
+
+    // Build instance data from ECS
+    std::vector<InstanceData> instances;
+
+    for (Archetype* arch : archetypes)
+    {
+        // Iterate through all chunks in this archetype
+        for (size_t chunkIdx = 0; chunkIdx < arch->Chunks.size(); ++chunkIdx)
+        {
+            Chunk* chunk = arch->Chunks[chunkIdx];
+            uint32_t entityCount = arch->GetChunkCount(chunkIdx);
+
+            // Get component arrays for this chunk
+            Transform* transforms = arch->GetComponentArray<Transform>(chunk, GetComponentTypeID<Transform>());
+            ColorData* colors = arch->GetComponentArray<ColorData>(chunk, GetComponentTypeID<ColorData>());
+
+            // Copy data to instance buffer
+            for (uint32_t i = 0; i < entityCount; ++i)
+            {
+                InstanceData inst;
+                inst.PositionX = transforms[i].PositionX;
+                inst.PositionY = transforms[i].PositionY;
+                inst.PositionZ = transforms[i].PositionZ;
+                inst.RotationX = transforms[i].RotationX;
+                inst.RotationY = transforms[i].RotationY;
+                inst.RotationZ = transforms[i].RotationZ;
+                inst.ScaleX = transforms[i].ScaleX;
+                inst.ScaleY = transforms[i].ScaleY;
+                inst.ScaleZ = transforms[i].ScaleZ;
+                inst.ColorR = colors[i].R;
+                inst.ColorG = colors[i].G;
+                inst.ColorB = colors[i].B;
+                inst.ColorA = colors[i].A;
+                instances.push_back(inst);
+            }
+        }
+    }
+
+    EngineWindow->DrawInstances(instances.data(), instances.size());
+}
+
+
 void StrigidEngine::Shutdown()
 {
     LOG_INFO("StrigidEngine shutting down");
@@ -162,9 +253,7 @@ void StrigidEngine::PumpEvents()
     SDL_Event e;
     while (SDL_PollEvent(&e))
     {
-        if (e.type == SDL_EVENT_QUIT) m_IsRunning = false;
-        //m_Window->ProcessEvent(e);
-        // Dispatch to ImGui here too
+        if (e.type == SDL_EVENT_QUIT) bIsRunning = false;
     }
 }
 
@@ -172,36 +261,22 @@ void StrigidEngine::FrameUpdate([[maybe_unused]] double dt)
 {
     STRIGID_ZONE_C(STRIGID_COLOR_LOGIC);
 
-    // Phase 1: Calc (Parallel Read)
-    // Runs user scripts, generates Command Buffers
-    //m_World->RunSystems(SystemPhase::Update, dt);
-
-    // Phase 2: Apply (Serial/Batch Write)
-    // Applies the "Deferred Writes" we discussed
-    //m_World->ResolveCommandBuffers();
+    // Invoke Update() lifecycle on all entities
+    RegistryPtr->InvokeAll(LifecycleType::Update, dt);
 }
 
 void StrigidEngine::FixedUpdate([[maybe_unused]] double dt)
 {
     STRIGID_ZONE_C(STRIGID_COLOR_PHYSICS);
-}
 
-void StrigidEngine::RenderFrame([[maybe_unused]] double alpha)
-{
-    STRIGID_ZONE_C(STRIGID_COLOR_RENDERING);
-    m_Window->Render();
-    /*
-    // Old Tracy call
-    m_Window->BeginFrame();
-    m_World->Render(m_Window.get());
-    m_Window->Present();
-    */
+    // Invoke FixedUpdate() lifecycle on all entities
+    RegistryPtr->InvokeAll(LifecycleType::FixedUpdate, dt);
 }
 
 void StrigidEngine::WaitForTiming(uint64_t frameStart, uint64_t perfFrequency)
 {
     // Use target frame time (seconds) as the single source of truth.
-    const double targetFrameTimeSec = m_Config.GetTargetFrameTime();
+    const double targetFrameTimeSec = Config.GetTargetFrameTime();
     const uint64_t targetTicks = static_cast<uint64_t>(targetFrameTimeSec * static_cast<double>(perfFrequency));
     const uint64_t frameEnd = frameStart + targetTicks;
 
@@ -246,21 +321,21 @@ void StrigidEngine::SendNetworkEvent([[maybe_unused]] const std::string& eventDa
 
 void StrigidEngine::CalculateFPS(double dt)
 {
-    m_FrameCount++;
-    m_FpsTimer += dt;
+    FrameCount++;
+    FpsTimer += dt;
 
     // Update title every 1 second
-    if (m_FpsTimer >= 1.0)
+    if (FpsTimer >= 1.0)
     {
-        double fps = m_FrameCount / m_FpsTimer;
-        double ms = (m_FpsTimer / m_FrameCount) * 1000.0;
+        double fps = FrameCount / FpsTimer;
+        double ms = (FpsTimer / FrameCount) * 1000.0;
 
         std::string title = "StrigidEngine V0.1 | FPS: " + std::to_string((int)fps) +
             " | Frame: " + std::to_string(ms) + "ms";
 
-        m_Window->SetTitle(title.c_str());
+        EngineWindow->SetTitle(title.c_str());
 
-        m_FrameCount = 0;
-        m_FpsTimer = 0.0;
+        FrameCount = 0;
+        FpsTimer = 0.0;
     }
 }

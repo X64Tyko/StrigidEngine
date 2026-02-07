@@ -6,14 +6,7 @@
 #include <unordered_map>
 #include <unordered_set>
 
-// Component metadata - describes how a component is laid out in memory
-struct ComponentMeta
-{
-    ComponentTypeID TypeID;
-    size_t Size;           // sizeof(Component)
-    size_t Alignment;      // alignof(Component)
-    size_t OffsetInChunk;  // Where this component's array starts in the chunk
-};
+#include "Schema.h"
 
 // Archetype - manages storage for entities with a specific component signature
 // Uses Structure-of-Arrays (SoA) layout within each chunk
@@ -24,7 +17,7 @@ public:
     ~Archetype();
 
     // Component signature
-    Signature ComponentSignature;
+    Signature ArchSignature;
 
     // Resident class types (multiple classes can share same archetype)
     std::unordered_set<uint16_t> ResidentClassIDs;
@@ -38,6 +31,9 @@ public:
 
     // Component layout information
     std::unordered_map<ComponentTypeID, ComponentMeta> ComponentLayout;
+
+    // Lifecycle functions for entities in this archetype
+    std::vector<LifecycleFunction> LifecycleFunctions;
 
     // Get the number of entities in a specific chunk (handles tail chunk)
     uint32_t GetChunkCount(size_t ChunkIndex) const;

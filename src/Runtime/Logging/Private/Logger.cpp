@@ -2,87 +2,87 @@
 #include <iostream>
 #include <filesystem>
 
-void Logger::Init(const std::string& logFilePath, LogLevel minLevel)
+void Logger::Init(const std::string& LogFilePath, LogLevel inMinLevel)
 {
-    std::lock_guard<std::mutex> lock(m_Mutex);
+    std::lock_guard<std::mutex> lock(Mutex);
     
-    if (m_Initialized)
+    if (bInitialized)
     {
         return;
     }
     
-    m_MinLevel = minLevel;
+    MinLevel = inMinLevel;
     
-    // Open log file in append mode
-    m_LogFile.open(logFilePath, std::ios::out | std::ios::app);
+    // Open log File in append mode
+    LogFile.open(LogFilePath, std::ios::out | std::ios::app);
     
-    if (!m_LogFile.is_open())
+    if (!LogFile.is_open())
     {
-        std::cerr << "Failed to open log file: " << logFilePath << std::endl;
+        std::cerr << "Failed to open log File: " << LogFilePath << std::endl;
         return;
     }
     
-    m_Initialized = true;
+    bInitialized = true;
     
     // Write session header
-    m_LogFile << "\n========================================\n";
-    m_LogFile << "StrigidEngine Log Session Started\n";
-    m_LogFile << "Timestamp: " << GetTimestamp() << "\n";
-    m_LogFile << "========================================\n\n";
-    m_LogFile.flush();
+    LogFile << "\n========================================\n";
+    LogFile << "StrigidEngine Log Session Started\n";
+    LogFile << "Timestamp: " << GetTimestamp() << "\n";
+    LogFile << "========================================\n\n";
+    LogFile.flush();
     
-    std::cout << "[Logger] Initialized - Writing to: " << logFilePath << std::endl;
+    std::cout << "[Logger] Initialized - Writing to: " << LogFilePath << std::endl;
 }
 
 void Logger::Shutdown()
 {
-    std::lock_guard<std::mutex> lock(m_Mutex);
+    std::lock_guard<std::mutex> lock(Mutex);
     
-    if (!m_Initialized)
+    if (!bInitialized)
     {
         return;
     }
     
-    if (m_LogFile.is_open())
+    if (LogFile.is_open())
     {
-        m_LogFile << "\n========================================\n";
-        m_LogFile << "StrigidEngine Log Session Ended\n";
-        m_LogFile << "Timestamp: " << GetTimestamp() << "\n";
-        m_LogFile << "========================================\n\n";
-        m_LogFile.flush();
-        m_LogFile.close();
+        LogFile << "\n========================================\n";
+        LogFile << "StrigidEngine Log Session Ended\n";
+        LogFile << "Timestamp: " << GetTimestamp() << "\n";
+        LogFile << "========================================\n\n";
+        LogFile.flush();
+        LogFile.close();
     }
     
-    m_Initialized = false;
+    bInitialized = false;
 }
 
-void Logger::Log(LogLevel level, const char* file, int line, const std::string& message)
+void Logger::Log(LogLevel Level, const char* File, int Line, const std::string& Message)
 {
-    // Filter by minimum level
-    if (level < m_MinLevel)
+    // Filter by minimum Level
+    if (Level < MinLevel)
     {
         return;
     }
     
-    std::lock_guard<std::mutex> lock(m_Mutex);
+    std::lock_guard<std::mutex> lock(Mutex);
     
-    // Extract filename from path
-    std::string filename = std::filesystem::path(file).filename().string();
+    // Extract Filename from path
+    std::string Filename = std::filesystem::path(File).filename().string();
     
     // Format: [Timestamp] [LEVEL] (File:Line) Message
     std::string logEntry = "[" + GetTimestamp() + "] " +
-                           "[" + LevelToString(level) + "] " +
-                           "(" + filename + ":" + std::to_string(line) + ") " +
-                           message;
+                           "[" + LevelToString(Level) + "] " +
+                           "(" + Filename + ":" + std::to_string(Line) + ") " +
+                           Message;
     
     // Console output with color
-    std::cout << LevelToColor(level) << logEntry << "\033[0m" << std::endl;
+    std::cout << LevelToColor(Level) << logEntry << "\033[0m" << std::endl;
     
     // File output (no color codes)
-    if (m_LogFile.is_open())
+    if (LogFile.is_open())
     {
-        m_LogFile << logEntry << std::endl;
-        m_LogFile.flush();
+        LogFile << logEntry << std::endl;
+        LogFile.flush();
     }
 }
 
@@ -106,9 +106,9 @@ std::string Logger::GetTimestamp()
     return oss.str();
 }
 
-std::string Logger::LevelToString(LogLevel level)
+std::string Logger::LevelToString(LogLevel Level)
 {
-    switch (level)
+    switch (Level)
     {
         case LogLevel::Trace:   return "TRACE";
         case LogLevel::Debug:   return "DEBUG";
@@ -120,9 +120,9 @@ std::string Logger::LevelToString(LogLevel level)
     }
 }
 
-std::string Logger::LevelToColor(LogLevel level)
+std::string Logger::LevelToColor(LogLevel Level)
 {
-    switch (level)
+    switch (Level)
     {
         case LogLevel::Trace:   return "\033[37m";  // White
         case LogLevel::Debug:   return "\033[36m";  // Cyan

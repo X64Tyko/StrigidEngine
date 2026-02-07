@@ -7,8 +7,8 @@
 // Uses bitset to track which components are present
 struct Signature
 {
-    static constexpr size_t MAX_COMPONENTS = 256;
-    std::bitset<MAX_COMPONENTS> Bits;
+    Signature(ComponentSignature Bits = 0) : Bits(Bits) {}
+    ComponentSignature Bits;
 
     // Set a component bit
     inline void Set(ComponentTypeID TypeID)
@@ -61,7 +61,7 @@ namespace std
         size_t operator()(const Signature& Sig) const noexcept
         {
             // Simple hash of bitset (can be improved if needed)
-            return hash<std::bitset<Signature::MAX_COMPONENTS>>()(Sig.Bits);
+            return hash<std::bitset<MAX_COMPONENTS>>()(Sig.Bits);
         }
     };
 }

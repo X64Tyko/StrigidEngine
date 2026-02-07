@@ -24,21 +24,21 @@ class Logger
 public:
     static Logger& Get()
     {
-        static Logger s_Instance;
-        return s_Instance;
+        static Logger Instance;
+        return Instance;
     }
 
     // Initialize logger with file output
-    void Init(const std::string& logFilePath = "StrigidEngine.log", LogLevel minLevel = LogLevel::Debug);
+    void Init(const std::string& LogFilePath = "StrigidEngine.log", LogLevel inMinLevel = LogLevel::Debug);
     
     // Shut down and flush file
     void Shutdown();
     
     // Set minimum log level filter
-    void SetMinLevel(LogLevel level) { m_MinLevel = level; }
+    void SetMinLevel(LogLevel Level) { MinLevel = Level; }
     
     // Core logging function
-    void Log(LogLevel level, const char* file, int line, const std::string& message);
+    void Log(LogLevel Level, const char* File, int Line, const std::string& Message);
     
 private:
     Logger() = default;
@@ -47,14 +47,14 @@ private:
     Logger& operator=(const Logger&) = delete;
     
     std::string GetTimestamp();
-    std::string LevelToString(LogLevel level);
-    std::string LevelToColor(LogLevel level);
+    std::string LevelToString(LogLevel Level);
+    std::string LevelToColor(LogLevel Level);
     
 private:
-    std::ofstream m_LogFile;
-    std::mutex m_Mutex;
-    LogLevel m_MinLevel = LogLevel::Debug;
-    bool m_Initialized = false;
+    std::ofstream LogFile;
+    std::mutex Mutex;
+    LogLevel MinLevel = LogLevel::Debug;
+    bool bInitialized = false;
 };
 
 // Convenience macros for logging
