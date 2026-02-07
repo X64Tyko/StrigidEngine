@@ -1,8 +1,9 @@
-﻿#pragma once
+#pragma once
 #include "Registry.h"
 #include "Ref.h"
 #include "Types.h"
 #include "Schema.h"
+#include "SchemaValidation.h"
 #include <bitset>
 #include <iostream>
 #include <tuple>
@@ -29,6 +30,10 @@ struct PrefabReflector {
 
     // --- 1. REGISTRATION (Static Init) ---
     static bool Register(const char* name) {
+        // Compile-time validation of entity type
+        VALIDATE_ENTITY_HAS_SCHEMA(Class);
+        VALIDATE_ENTITY_IS_STANDARD_LAYOUT(Class);
+
         MetaRegistry::Get().RegisterPrefab(name);
 
         constexpr auto schema = Class::DefineSchema();
@@ -51,6 +56,10 @@ struct PrefabReflector {
         if constexpr (std::is_member_object_pointer_v<decltype(memberPtr)>)
         {
             using CompType = typename StripRef<decltype(memberPtr)>::Type;
+
+            // Compile-time validation of component type
+            VALIDATE_COMPONENT_IS_POD(CompType);
+
             MetaRegistry::Get().RegisterPrefabComponent<Class, CompType>();
         }
         // Register lifecycle functions
@@ -86,39 +95,49 @@ struct PrefabReflector {
             return; // Unknown signature, skip
         }
 
-        // Create an invoker that reconstructs the entity and calls the method
-        auto invoker = [](void* funcPtr, void** componentArrays, uint32_t index, double dt)
+        // Create an invoker that uses a cached entity instance passed as parameter
+        auto invoker = [](void* funcPtr, void* cachedEntityPtr, void** componentArrays, uint32_t index, double dt)
         {
+            STRIGID_ZONE_FINE_N("Lifecycle_Invoker"); // Level 3: Per-entity profiling
+
             // Reconstruct the function pointer
             Ret(C::*func)(Args...);
             std::memcpy(&func, &funcPtr, sizeof(funcPtr));
 
-            // Create a temporary entity instance
-            C entity;
+            // Cast cached entity back to correct type
+            C* entity = static_cast<C*>(cachedEntityPtr);
 
-            // Wire up Ref<T> members from component arrays
-            // This uses the schema to bind components to the entity
-            constexpr auto schema = C::DefineSchema();
-            BindComponentsFromArrays(entity, componentArrays, index, schema.members,
-                                     std::make_index_sequence<std::tuple_size_v<decltype(schema.members)>>{});
-
-            // Call the member function
-            if constexpr (sizeof...(Args) == 0)
             {
-                (entity.*func)();
+                STRIGID_ZONE_FINE_N("Bind_Components"); // Level 3: Per-entity profiling
+                // Rebind Ref<T> members from component arrays (reuse cached entity)
+                constexpr auto schema = C::DefineSchema();
+                BindComponentsFromArrays(*entity, componentArrays, index, schema.members,
+                                         std::make_index_sequence<std::tuple_size_v<decltype(schema.members)>>{});
             }
-            else if constexpr (sizeof...(Args) == 1)
+
             {
-                (entity.*func)(dt);
+                STRIGID_ZONE_FINE_N("Entity_Update"); // Level 3: Per-entity profiling
+                // Call the member function
+                if constexpr (sizeof...(Args) == 0)
+                {
+                    ((*entity).*func)();
+                }
+                else if constexpr (sizeof...(Args) == 1)
+                {
+                    ((*entity).*func)(dt);
+                }
             }
         };
+
+        // Allocate cached entity on heap (persists for lifetime of program)
+        C* cachedEntity = new C{};
 
         // Store the function pointer as void*
         void* voidFuncPtr;
         static_assert(sizeof(funcPtr) <= sizeof(voidFuncPtr), "Function pointer too large");
         std::memcpy(&voidFuncPtr, &funcPtr, sizeof(funcPtr));
 
-        MetaRegistry::Get().RegisterLifecycleFunction<C>(type, voidFuncPtr, invoker);
+        MetaRegistry::Get().RegisterLifecycleFunction<C>(type, voidFuncPtr, cachedEntity, invoker);
     }
 
     // Helper to bind component arrays to entity Ref<T> members

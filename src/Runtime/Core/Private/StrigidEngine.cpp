@@ -72,6 +72,8 @@ bool StrigidEngine::Initialize([[maybe_unused]] const char* title, [[maybe_unuse
         cube.color->A = 1.0f;
     }
     
+    instances.reserve(100000);
+    
     LOG_INFO("Created 1000 test entities");
 
     /*
@@ -200,9 +202,9 @@ void StrigidEngine::RenderFrame([[maybe_unused]] double alpha)
     // Query archetypes with Transform and ColorData
     std::vector<Archetype*> archetypes = RegistryPtr->Query<Transform, ColorData>();
 
+    instances.clear();
+    
     // Build instance data from ECS
-    std::vector<InstanceData> instances;
-
     for (Archetype* arch : archetypes)
     {
         // Iterate through all chunks in this archetype

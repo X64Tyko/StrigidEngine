@@ -1,8 +1,10 @@
 ﻿#pragma once
 #include <memory>
 #include <string>
+#include <vector>
 
 #include "EngineConfig.h"
+#include "Window.h"
 //#include "Core/Types.h"
 
 // Forward Declarations (Keep compile times fast)
@@ -71,6 +73,8 @@ private:
     // Subsystems (Order matters for destruction!)
     std::unique_ptr<Registry>     RegistryPtr;
     std::unique_ptr<Window>       EngineWindow;
+    
+    std::vector<InstanceData> instances;
     /*
     std::unique_ptr<Window>       Window;
     std::unique_ptr<JobSystem>    JobSystem;

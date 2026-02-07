@@ -1,5 +1,6 @@
-﻿#pragma once
+#pragma once
 #include <tuple>
+#include <functional>
 #include <Logger.h>
 
 // Function pointer types for lifecycle callbacks
@@ -16,9 +17,10 @@ struct LifecycleFunction
 {
     LifecycleType Type;
     void* FunctionPtr;  // Type-erased function pointer
+    void* CachedEntity; // Cached entity instance (type-erased)
 
     // Invoke function on entity at given index in component arrays
-    void (*Invoker)(void* funcPtr, void** componentArrays, uint32_t index, double dt);
+    void (*Invoker)(void* funcPtr, void* cachedEntity, void** componentArrays, uint32_t index, double dt);
 };
 
 class MetaRegistry {
@@ -51,10 +53,10 @@ public:
     }
 
     template <typename C>
-    void RegisterLifecycleFunction(LifecycleType type, void* funcPtr, auto invoker)
+    void RegisterLifecycleFunction(LifecycleType type, void* funcPtr, void* cachedEntity, auto invoker)
     {
         ComponentDef& Meta = MetaComponents[GetClassID<C>()];
-        std::get<std::vector<LifecycleFunction>>(Meta).push_back({type, funcPtr, invoker});
+        std::get<std::vector<LifecycleFunction>>(Meta).push_back({type, funcPtr, cachedEntity, invoker});
         LOG_INFO_F("RegisterLifecycleFunction for class %s", typeid(C).name());
     }
 };

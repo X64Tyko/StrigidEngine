@@ -6,6 +6,7 @@
 #include <vector>
 #include <unordered_map>
 #include <queue>
+#include <cassert>
 
 #include "Schema.h"
 
@@ -93,8 +94,28 @@ EntityID Registry::Create()
 
     if (!Initialized)
     {
-        Signature Sig = std::get<ComponentSignature>(MetaRegistry::Get().MetaComponents[GetClassID<T>()]);
-        
+        ClassID classID = GetClassID<T>();
+        auto& metaComponents = MetaRegistry::Get().MetaComponents;
+
+        // Runtime guard: Check if entity type was registered with STRIGID_REGISTER_ENTITY
+        if (metaComponents.find(classID) == metaComponents.end())
+        {
+            // FATAL: Entity type not registered
+            const char* typeName = typeid(T).name();
+            LOG_ERROR_F("FATAL: Entity type '%s' not registered! Did you forget STRIGID_REGISTER_ENTITY(%s)?",
+                       typeName, typeName);
+
+            // In debug builds, assert. In release, fail gracefully
+            #ifdef _DEBUG
+                assert(false && "Entity type not registered - add STRIGID_REGISTER_ENTITY macro");
+            #endif
+
+            // Return invalid entity ID
+            return EntityID{};
+        }
+
+        Signature Sig = std::get<ComponentSignature>(metaComponents[classID]);
+
         CachedArchetype = GetOrCreateArchetype(Sig);
         Initialized = true;
     }

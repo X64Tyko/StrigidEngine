@@ -25,18 +25,28 @@ set(TRACY_PATH "${CMAKE_SOURCE_DIR}/libs/tracy")
 # 4. TRACY INTEGRATION
 # -----------------------------------------------------------------------------
 if(ENABLE_TRACY)
+    # Tracy profiling level
+    # 1 = Coarse (frame/system level, ~1-2% overhead)
+    # 2 = Medium (includes per-chunk/subsystem zones, ~5-10% overhead)
+    # 3 = Fine (includes per-entity zones, ~50%+ overhead)
+    set(TRACY_PROFILE_LEVEL "1" CACHE STRING "Tracy profiling detail level (1=Coarse, 2=Medium, 3=Fine)")
+    set_property(CACHE TRACY_PROFILE_LEVEL PROPERTY STRINGS "1" "2" "3")
+
     # Tracy requires these source files
     set(TRACY_SOURCES
         "${TRACY_PATH}/public/TracyClient.cpp"
     )
-    
+
     # Add Tracy include directory
     include_directories("${TRACY_PATH}/public")
-    
-    # Enable Tracy profiling
+
+    # Enable Tracy profiling and disable ROCm support
     add_compile_definitions(TRACY_ENABLE)
-    
-    message(STATUS "Tracy profiler enabled")
+    add_compile_definitions(TRACY_PROFILE_LEVEL=${TRACY_PROFILE_LEVEL})
+    add_compile_definitions(TRACY_NO_ROCTRACER=1)
+    add_compile_definitions(TRACY_NO_ROCPROF=1)
+
+    message(STATUS "Tracy profiler enabled (Level ${TRACY_PROFILE_LEVEL})")
 else()
     set(TRACY_SOURCES "")
     message(STATUS "Tracy profiler disabled")

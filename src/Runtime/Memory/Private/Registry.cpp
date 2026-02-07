@@ -191,10 +191,13 @@ void Registry::InvokeAll(LifecycleType type, double dt)
 
             // Build array of component array pointers for this chunk
             std::vector<void*> componentArrays;
-            for (const auto& [compTypeID, compMeta] : archetype->ComponentLayout)
             {
-                void* arrayPtr = archetype->GetComponentArrayRaw(chunk, compTypeID);
-                componentArrays.push_back(arrayPtr);
+                STRIGID_ZONE_MEDIUM_N("Build_Component_Arrays"); // Level 2: Per-chunk profiling
+                for (const auto& [compTypeID, compMeta] : archetype->ComponentLayout)
+                {
+                    void* arrayPtr = archetype->GetComponentArrayRaw(chunk, compTypeID);
+                    componentArrays.push_back(arrayPtr);
+                }
             }
 
             // Invoke all lifecycle functions of the requested type on each entity
@@ -203,10 +206,11 @@ void Registry::InvokeAll(LifecycleType type, double dt)
                 if (func.Type != type)
                     continue;
 
+                STRIGID_ZONE_MEDIUM_N("Invoke_Entity_Loop"); // Level 2: Per-chunk profiling
                 // Call the invoker for each entity in the chunk
                 for (uint32_t i = 0; i < entityCount; ++i)
                 {
-                    func.Invoker(func.FunctionPtr, componentArrays.data(), i, dt);
+                    func.Invoker(func.FunctionPtr, func.CachedEntity, componentArrays.data(), i, dt);
                 }
             }
         }
