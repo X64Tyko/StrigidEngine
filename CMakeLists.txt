@@ -79,6 +79,7 @@ add_executable(${PROJECT_NAME}
 target_include_directories(${PROJECT_NAME} PUBLIC
     "${CMAKE_CURRENT_SOURCE_DIR}/src/Runtime/Core/Public"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/Runtime/Memory/Public"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/Runtime/Rendering/Public"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/Runtime/Profiling/Public"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/Runtime/Logging/Public"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/Runtime/Components/Public"

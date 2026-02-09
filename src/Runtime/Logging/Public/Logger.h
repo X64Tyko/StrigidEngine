@@ -15,7 +15,9 @@ enum class LogLevel
     Info = 2,
     Warning = 3,
     Error = 4,
-    Fatal = 5
+    Fatal = 5,
+    
+    Always = 0xFF
 };
 
 // Singleton logger with thread-safe file writing
@@ -64,40 +66,47 @@ private:
 #define LOG_WARN(msg) Logger::Get().Log(LogLevel::Warning, __FILE__, __LINE__, msg)
 #define LOG_ERROR(msg) Logger::Get().Log(LogLevel::Error, __FILE__, __LINE__, msg)
 #define LOG_FATAL(msg) Logger::Get().Log(LogLevel::Fatal, __FILE__, __LINE__, msg)
+#define LOG_ALWAYS(msg) Logger::Get().Log(LogLevel::Always, __FILE__, __LINE__, msg)
 
 // Formatted logging macros with variadic arguments
 #define LOG_TRACE_F(fmt, ...) do { \
-    char buffer[512]; \
-    snprintf(buffer, sizeof(buffer), fmt, __VA_ARGS__); \
-    LOG_TRACE(buffer); \
+    char StrigLogBuff[512]; \
+    snprintf(StrigLogBuff, sizeof(StrigLogBuff), fmt, __VA_ARGS__); \
+    LOG_TRACE(StrigLogBuff); \
 } while(0)
 
 #define LOG_DEBUG_F(fmt, ...) do { \
-    char buffer[512]; \
-    snprintf(buffer, sizeof(buffer), fmt, __VA_ARGS__); \
-    LOG_DEBUG(buffer); \
+    char StrigLogBuff[512]; \
+    snprintf(StrigLogBuff, sizeof(StrigLogBuff), fmt, __VA_ARGS__); \
+    LOG_DEBUG(StrigLogBuff); \
 } while(0)
 
 #define LOG_INFO_F(fmt, ...) do { \
-    char buffer[512]; \
-    snprintf(buffer, sizeof(buffer), fmt, __VA_ARGS__); \
-    LOG_INFO(buffer); \
+    char StrigLogBuff[512]; \
+    snprintf(StrigLogBuff, sizeof(StrigLogBuff), fmt, __VA_ARGS__); \
+    LOG_INFO(StrigLogBuff); \
 } while(0)
 
 #define LOG_WARN_F(fmt, ...) do { \
-    char buffer[512]; \
-    snprintf(buffer, sizeof(buffer), fmt, __VA_ARGS__); \
-    LOG_WARN(buffer); \
+    char StrigLogBuff[512]; \
+    snprintf(StrigLogBuff, sizeof(StrigLogBuff), fmt, __VA_ARGS__); \
+    LOG_WARN(StrigLogBuff); \
 } while(0)
 
 #define LOG_ERROR_F(fmt, ...) do { \
-    char buffer[512]; \
-    snprintf(buffer, sizeof(buffer), fmt, __VA_ARGS__); \
-    LOG_ERROR(buffer); \
+    char StrigLogBuff[512]; \
+    snprintf(StrigLogBuff, sizeof(StrigLogBuff), fmt, __VA_ARGS__); \
+    LOG_ERROR(StrigLogBuff); \
 } while(0)
 
 #define LOG_FATAL_F(fmt, ...) do { \
-    char buffer[512]; \
-    snprintf(buffer, sizeof(buffer), fmt, __VA_ARGS__); \
-    LOG_FATAL(buffer); \
+    char StrigLogBuff[512]; \
+    snprintf(StrigLogBuff, sizeof(StrigLogBuff), fmt, __VA_ARGS__); \
+    LOG_FATAL(StrigLogBuff); \
+} while(0)
+
+#define LOG_ALWAYS_F(fmt, ...) do { \
+char StrigLogBuff[512]; \
+snprintf(StrigLogBuff, sizeof(StrigLogBuff), fmt, __VA_ARGS__); \
+LOG_ALWAYS(StrigLogBuff); \
 } while(0)

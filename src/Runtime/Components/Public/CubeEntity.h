@@ -15,10 +15,12 @@ struct CubeEntity
     Ref<ColorData> color;
 
     // Lifecycle hooks
-    void Update(double dt) {
-        transform->RotationX += (float)dt;
-        transform->RotationY += (float)dt * 0.7f;
-        transform->RotationZ += (float)dt * 0.5f;
+    void Update([[maybe_unused]] double dt) {
+        //transform->RotationX += (float)dt;
+        //transform->RotationY += (float)dt * 0.7f;
+        //transform->RotationZ += (float)dt * 0.5f;
+        color->R = color->R == 1.0f ? 0.0f : 1.0f;
+        color->B = color->B == 1.0f ? 0.0f : 1.0f;
     }
 
     // Reflection - register components and lifecycle functions

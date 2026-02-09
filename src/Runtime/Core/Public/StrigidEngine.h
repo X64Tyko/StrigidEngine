@@ -2,6 +2,10 @@
 #include <memory>
 #include <string>
 #include <vector>
+#include <thread>
+#include <atomic>
+#include <mutex>
+#include <condition_variable>
 
 #include "EngineConfig.h"
 #include "Window.h"
@@ -15,6 +19,7 @@ class PhysicsWorld;
 class World;
 class Profiler;
 class Registry;
+class RenderCommandBuffer;
 
 class StrigidEngine {
     
@@ -59,21 +64,44 @@ private:
     
 private:
     void CalculateFPS(double Dt);
-    
+
+    // Render thread management
+    void RenderThreadMain();
+    void RenderThreadLoop();
+    void CalculateRenderFPS();
+
 private:
     EngineConfig& GetConfig() { return Config; }
     EngineConfig Config;
     bool bIsRunning = false;
     double NetAccumulator = 0.0;
-    
+
     // FPS Counting
     double FpsTimer = 0.0;
     int FrameCount = 0;
     
+    int renderFrameCount = 0;
+    double renderFpsTimer = 0.0;
+    uint64_t lastFrameTime = 0;
+
+    // Render thread infrastructure
+    std::thread RenderThread;
+    bool bRenderThreadInitialized{false};
+    std::atomic<bool> bShouldExitRenderThread{false};
+    std::atomic<int> RenderInitResult{0};
+    std::mutex RenderInitMutex;
+    std::condition_variable RenderInitCondVar;
+
+    // Window parameters (passed to render thread)
+    const char* WindowTitle = nullptr;
+    int WindowWidth = 0;
+    int WindowHeight = 0;
+
     // Subsystems (Order matters for destruction!)
     std::unique_ptr<Registry>     RegistryPtr;
     std::unique_ptr<Window>       EngineWindow;
-    
+    std::unique_ptr<RenderCommandBuffer> CommandBuffer;
+
     std::vector<InstanceData> instances;
     /*
     std::unique_ptr<Window>       Window;

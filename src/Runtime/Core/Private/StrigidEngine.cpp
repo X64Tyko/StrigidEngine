@@ -5,8 +5,11 @@
 #include <SDL3/SDL.h>
 #include <random>
 #include <vector>
+#include <chrono>
+#include <thread>
 
 #include "Window.h"
+#include "RenderCommandBuffer.h"
 
 #include "Registry.h"
 #include "CubeEntity.h"
@@ -30,20 +33,39 @@ bool StrigidEngine::Initialize([[maybe_unused]] const char* title, [[maybe_unuse
 {
     STRIGID_ZONE_N("Engine_Init");
 
-    Logger::Get().Init("StrigidEngine.log", LogLevel::Debug);
+    Logger::Get().Init("StrigidEngine.log", LogLevel::Error);
     LOG_INFO("StrigidEngine initialization started");
 
     // 1. Core Systems (No dependencies)
     //m_JobSystem = std::make_unique<JobSystem>();
     //m_JobSystem->Init(std::thread::hardware_concurrency() - 1);
 
-    // 2. Platform (Window/Video)
-    EngineWindow = std::make_unique<Window>();
-    if (EngineWindow->Open(title, width, height) < 0) return false;
+    // 2. Create command buffer for main/render thread communication
+    CommandBuffer = std::make_unique<RenderCommandBuffer>();
+
+    // 3. Store window parameters and spawn render thread
+    WindowTitle = title;
+    WindowWidth = width;
+    WindowHeight = height;
+
+    RenderThread = std::thread(&StrigidEngine::RenderThreadMain, this);
+
+    // Wait for render thread to initialize
+    {
+        std::unique_lock lock(RenderInitMutex);
+        RenderInitCondVar.wait(lock, [this]() { return bRenderThreadInitialized; });
+    }
+    
+    int result = RenderInitResult.load(std::memory_order_acquire);
+    if (result != 0)
+    {
+        LOG_ERROR("Render thread initialization failed");
+        return false;
+    }
 
     // 3. ECS Registry
     RegistryPtr = std::make_unique<Registry>();
-    
+
     // 4. Create 1000 test entities
     std::random_device rd;
     std::mt19937 gen(rd());
@@ -52,7 +74,7 @@ bool StrigidEngine::Initialize([[maybe_unused]] const char* title, [[maybe_unuse
     std::uniform_real_distribution<float> posZ(-500.0f, -200.0f);
     std::uniform_real_distribution<float> vel(-2.0f, 2.0f);
     std::uniform_real_distribution<float> color(0.2f, 1.0f);
-    
+
     for (int i = 0; i < 100000; ++i)
     {
         CubeEntity cube;
@@ -66,14 +88,16 @@ bool StrigidEngine::Initialize([[maybe_unused]] const char* title, [[maybe_unuse
         cube.transform->RotationY = 0.0f;
         cube.transform->RotationZ = 0.0f;
         cube.transform->ScaleX = cube.transform->ScaleY = cube.transform->ScaleZ = 1.0f;
-        cube.color->R = color(gen);
+        /*cube.color->R = color(gen);
         cube.color->G = color(gen);
-        cube.color->B = color(gen);
+        cube.color->B = color(gen);*/
+        cube.color->B = 1.0f;
+        cube.color->R = cube.color->G = 0.0f;
         cube.color->A = 1.0f;
     }
-    
+
     instances.reserve(100000);
-    
+
     LOG_INFO("Created 1000 test entities");
 
     /*
@@ -197,9 +221,33 @@ void StrigidEngine::Run()
 
 void StrigidEngine::RenderFrame([[maybe_unused]] double alpha)
 {
+    // don't buffer a new frame if the previous one hasn't been consumed yet
+    while (!CommandBuffer->IsPreviousFrameInProgress())
+    {
+        std::this_thread::yield();
+        LOG_TRACE("[MainThread] Skipping frame - previous frame still in progress");
+        //return;
+    }
+
     STRIGID_ZONE_C(STRIGID_COLOR_RENDERING);
 
-    // Query archetypes with Transform and ColorData
+    LOG_DEBUG_F("[MainThread] === Starting new frame === head=%u, last=%u, tail=%u",
+        CommandBuffer->GetHead(), CommandBuffer->GetLastFrameHead(), CommandBuffer->GetTail());
+
+    // 1. Write FrameStart command
+    uint8_t* wrapPtr = nullptr;
+    uint32_t wrapafter = 0;
+    RenderCommand* frameStartCmd = CommandBuffer->AllocateCommand<RenderCommand>(
+        RenderCommandType::FrameStart,
+        sizeof(RenderCommand),  // Use full header format
+        wrapPtr,
+        wrapafter
+    );
+    frameStartCmd->SetTypeAndCount(RenderCommandType::FrameStart, 0, true);
+    CommandBuffer->CommitCommand(sizeof(RenderCommand));
+    LOG_DEBUG_F("[MainThread] FrameStart written at head=%u", CommandBuffer->GetHead());
+
+    // 2. Query archetypes with Transform and ColorData
     std::vector<Archetype*> archetypes = RegistryPtr->Query<Transform, ColorData>();
 
     // Reserve space for all instances (avoid reallocation)
@@ -236,13 +284,69 @@ void StrigidEngine::RenderFrame([[maybe_unused]] double alpha)
         }
     }
 
-    EngineWindow->DrawInstances(instances.data(), instances.size());
+    // 3. Write DrawInstanced command with instance data
+    if (instanceIdx > 0)
+    {
+        size_t commandSize = sizeof(DrawInstancedCommand) + sizeof(InstanceData) * instanceIdx;
+        uint32_t headBefore = CommandBuffer->GetHead();
+
+        DrawInstancedCommand* drawCmd = CommandBuffer->AllocateCommand<DrawInstancedCommand>(
+            RenderCommandType::DrawInstanced,
+            static_cast<uint32_t>(commandSize),
+            wrapPtr,
+            wrapafter
+        );
+
+        LOG_DEBUG_F("[MainThread] DrawInstanced: %zu instances, cmdSize=%zu, head=%u, wrap=%s",
+            instanceIdx, commandSize, headBefore, wrapPtr ? "YES" : "NO");
+
+        drawCmd->SetTypeAndCount(RenderCommandType::DrawInstanced, static_cast<uint32_t>(instanceIdx));
+
+        if (!wrapPtr)
+        {
+            // No wrap, simple copy
+            std::memcpy(drawCmd->instances, instances.data(), sizeof(InstanceData) * instanceIdx);
+        }
+        else
+        {
+            // Handle buffer wrap: split copy
+            size_t lastPartSize = commandSize - wrapafter;
+            LOG_WARN_F("[MainThread] WRAP COPY: wrapafter=%u, lastPartSize=%zu", wrapafter, lastPartSize);
+            std::memcpy(drawCmd->instances, instances.data(), wrapafter);
+            std::memcpy(wrapPtr, reinterpret_cast<uint8_t*>(instances.data()) + wrapafter, lastPartSize);
+        }
+
+        CommandBuffer->CommitCommand(commandSize);
+        drawCmd->SetCommandFinished();
+        LOG_TRACE_F("[MainThread] DrawInstanced finished, head now=%u", CommandBuffer->GetHead());
+    }
+
+    // 4. Write FrameEnd command
+    RenderCommand* frameEndCmd = CommandBuffer->AllocateCommand<RenderCommand>(
+        RenderCommandType::FrameEnd,
+        sizeof(RenderCommand),
+        wrapPtr,
+        wrapafter
+    );
+    frameEndCmd->SetTypeAndCount(RenderCommandType::FrameEnd, 0, true);
+    CommandBuffer->CommitCommand(sizeof(RenderCommand));
+    LOG_DEBUG_F("[MainThread] === Frame complete === head=%u", CommandBuffer->GetHead());
 }
 
 
 void StrigidEngine::Shutdown()
 {
     LOG_INFO("StrigidEngine shutting down");
+
+    // Signal render thread to exit
+    bShouldExitRenderThread.store(true, std::memory_order_release);
+
+    // Wait for render thread to finish
+    if (RenderThread.joinable())
+    {
+        RenderThread.join();
+    }
+
     Logger::Get().Shutdown();
 }
 
@@ -252,7 +356,10 @@ void StrigidEngine::PumpEvents()
     SDL_Event e;
     while (SDL_PollEvent(&e))
     {
-        if (e.type == SDL_EVENT_QUIT) bIsRunning = false;
+        if (e.type == SDL_EVENT_QUIT)
+        {
+            bIsRunning = false;
+        }
     }
 }
 
@@ -332,9 +439,107 @@ void StrigidEngine::CalculateFPS(double dt)
         std::string title = "StrigidEngine V0.1 | FPS: " + std::to_string((int)fps) +
             " | Frame: " + std::to_string(ms) + "ms";
 
-        EngineWindow->SetTitle(title.c_str());
+        LOG_ALWAYS_F("FPS: %d", (int)fps);
+        //EngineWindow->SetTitle(title.c_str());
 
         FrameCount = 0;
         FpsTimer = 0.0;
+    }
+}
+
+void StrigidEngine::RenderThreadMain()
+{
+    STRIGID_ZONE_C(STRIGID_COLOR_RENDERING);
+
+    // Create Window on render thread
+    EngineWindow = std::make_unique<Window>();
+    if (EngineWindow->Open(WindowTitle, WindowWidth, WindowHeight) < 0)
+    {
+        RenderInitResult.store(-1, std::memory_order_release);
+        {
+            std::lock_guard lock(RenderInitMutex);
+            bRenderThreadInitialized = true;
+        }
+        RenderInitCondVar.notify_one();
+        return;
+    }
+
+    // Signal successful initialization
+    RenderInitResult.store(0, std::memory_order_release);
+    {
+        std::lock_guard lock(RenderInitMutex);
+        bRenderThreadInitialized = true;
+    }
+    RenderInitCondVar.notify_one();
+
+    // Render thread loop
+    RenderThreadLoop();
+
+    // Cleanup window on render thread
+    EngineWindow->Shutdown();
+    EngineWindow.reset();
+}
+
+void StrigidEngine::RenderThreadLoop()
+{
+    uint8_t* wrapPtr = nullptr;
+    uint32_t wrapAfter = 0;
+    while (!bShouldExitRenderThread.load(std::memory_order_acquire))
+    {
+        STRIGID_ZONE_C(STRIGID_COLOR_RENDERING);
+        RenderCommand* cmd = CommandBuffer->GetCommand(wrapPtr, wrapAfter);
+        if (cmd == nullptr)
+        {
+            //std::this_thread::sleep_for(std::chrono::microseconds(10));
+            continue;
+        }
+        
+        switch (cmd->GetType())
+        {
+            case RenderCommandType::DrawInstanced:
+            {
+                DrawInstancedCommand* drawCmd = static_cast<DrawInstancedCommand*>(cmd);
+                EngineWindow->DrawInstances(drawCmd->instances, drawCmd->GetCount(), wrapPtr, wrapAfter);
+                break;
+            }
+            
+            case RenderCommandType::FrameEnd:
+            {
+                CalculateRenderFPS();
+                break;
+            }
+            
+        }
+    }
+}
+
+void StrigidEngine::CalculateRenderFPS()
+{
+    STRIGID_ZONE_N("RenderThread_UpdateFPS");
+    // FPS tracking for render thread
+    const uint64_t perfFrequency = SDL_GetPerformanceFrequency();
+
+    uint64_t currentFrameTime = SDL_GetPerformanceCounter();
+    double frameDt = static_cast<double>(currentFrameTime - lastFrameTime) / static_cast<double>(perfFrequency);
+    lastFrameTime = currentFrameTime;
+
+    renderFrameCount++;
+    renderFpsTimer += frameDt;
+
+    // Update title every 1 second
+    if (renderFpsTimer >= 1.0)
+    {
+        static uint32_t FrameNumber = renderFrameCount;
+        double renderFps = renderFrameCount / renderFpsTimer;
+        double renderMs = (renderFpsTimer / renderFrameCount) * 1000.0;
+
+        std::string title = "StrigidEngine V0.1 | Render FPS: " + std::to_string(static_cast<int>(renderFps)) +
+            " | Frame: " + std::to_string(FrameNumber) + " | Render: " + std::to_string(renderMs) + "ms";
+
+        EngineWindow->SetTitle(title.c_str());
+
+        FrameNumber += renderFrameCount;
+        renderFrameCount = 0;
+        renderFpsTimer = 0.0;
     }
 }
