@@ -73,7 +73,10 @@ int Window::Open(const char* title, int w, int h)
 
     // Initialize rendering pipeline
     CreateCubeMesh();
-    CreateInstanceBuffer(2000);
+    for (int i = 0; i < FramePacer::FRAMES_IN_FLIGHT; ++i)
+    {
+        CreateInstanceBuffer(2000, i);
+    }
     CreateRenderPipeline();
     FramePacer.Initialize(GpuDevice);
 
@@ -126,7 +129,7 @@ void Window::Shutdown()
         return;
 
     // Cleanup GPU resources
-    if (TransferBuffer)
+    for (SDL_GPUTransferBuffer*& TransferBuffer : TransferBuffers)
     {
         SDL_ReleaseGPUTransferBuffer(GpuDevice, TransferBuffer);
         TransferBuffer = nullptr;
@@ -250,18 +253,18 @@ void Window::CreateCubeMesh()
     SDL_ReleaseGPUTransferBuffer(GpuDevice, transferBuffer);
 }
 
-void Window::CreateInstanceBuffer(size_t Capacity)
+void Window::CreateInstanceBuffer(size_t Capacity, int BufferIndex)
 {
     STRIGID_ZONE_C(STRIGID_COLOR_RENDERING);
     
-    InstanceBufferCapacity = Capacity;
+    InstanceBufferCapacities[BufferIndex] = Capacity;
     
     SDL_GPUBufferCreateInfo bufferInfo = {};
     bufferInfo.usage = SDL_GPU_BUFFERUSAGE_VERTEX;
     bufferInfo.size = sizeof(InstanceData) * static_cast<uint32_t>(Capacity);
     
-    InstanceBuffer = SDL_CreateGPUBuffer(GpuDevice, &bufferInfo);
-    if (!InstanceBuffer)
+    InstanceBuffers[BufferIndex] = SDL_CreateGPUBuffer(GpuDevice, &bufferInfo);
+    if (!InstanceBuffers[BufferIndex])
     {
         std::cerr << "Failed to create instance buffer: " << SDL_GetError() << std::endl;
     }
@@ -396,22 +399,29 @@ void Window::DrawInstances(const InstanceData* Instances, size_t Count, const ui
     if (Count == 0 || !Pipeline)
         return;
     
+    // Frame pacing
+    FramePacer.BeginFrame();
+
+    int frame_index = FramePacer.GetFrameIndex();
+    auto InstanceBuffer = InstanceBuffers[frame_index];
     // Resize instance buffer if needed
-    if (Count > InstanceBufferCapacity)
+    if (Count > InstanceBufferCapacities[frame_index] || !InstanceBuffer)
     {
         STRIGID_ZONE_C(STRIGID_COLOR_RENDERING);
         if (InstanceBuffer)
         {
             SDL_ReleaseGPUBuffer(GpuDevice, InstanceBuffer);
         }
-        CreateInstanceBuffer(Count * 2);
+        CreateInstanceBuffer(Count * 2, frame_index);
+        InstanceBuffer = InstanceBuffers[frame_index];  // Update local variable
     }
 
     // Upload instance data to GPU using cached transfer buffer
     size_t requiredSize = sizeof(InstanceData) * Count;
-    
+
+    auto TransferBuffer = TransferBuffers[frame_index];
     // Resize transfer buffer if needed (with 2x growth strategy)
-    if (requiredSize > TransferBufferCapacity)
+    if (requiredSize > TransferBufferCapacities[frame_index] || !TransferBuffer)
     {
         STRIGID_ZONE_C(STRIGID_COLOR_RENDERING);
         if (TransferBuffer)
@@ -419,17 +429,15 @@ void Window::DrawInstances(const InstanceData* Instances, size_t Count, const ui
             SDL_ReleaseGPUTransferBuffer(GpuDevice, TransferBuffer);
         }
 
-        TransferBufferCapacity = requiredSize * 2;  // Over-allocate to avoid frequent resizes
+        TransferBufferCapacities[frame_index] = requiredSize * 2;  // Over-allocate to avoid frequent resizes
 
         SDL_GPUTransferBufferCreateInfo transferInfo = {};
         transferInfo.usage = SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD;
-        transferInfo.size = static_cast<uint32_t>(TransferBufferCapacity);
+        transferInfo.size = static_cast<uint32_t>(TransferBufferCapacities[frame_index]);
 
-        TransferBuffer = SDL_CreateGPUTransferBuffer(GpuDevice, &transferInfo);
+        TransferBuffers[frame_index] = SDL_CreateGPUTransferBuffer(GpuDevice, &transferInfo);
+        TransferBuffer = TransferBuffers[frame_index];  // Update local variable
     }
-    
-    // Frame pacing
-    FramePacer.BeginFrame();
     
     // Acquire command buffer and swapchain texture FIRST (fail fast if unavailable)
     SDL_GPUCommandBuffer* cmdBuf = SDL_AcquireGPUCommandBuffer(GpuDevice);
@@ -470,18 +478,18 @@ void Window::DrawInstances(const InstanceData* Instances, size_t Count, const ui
     dst.offset = 0;
     dst.size = static_cast<uint32_t>(requiredSize);
 
-    SDL_UploadToGPUBuffer(copyPass, &src, &dst, true);
+    SDL_UploadToGPUBuffer(copyPass, &src, &dst, false);
     SDL_EndGPUCopyPass(copyPass);
     
     // Create simple perspective camera matrix
-    float AspectRatio = static_cast<float>(Width) / static_cast<float>(Height);
-    float Fov = 60.0f * 3.14159f / 180.0f; // 60 degrees in radians
-    float ZNear = 0.1f;
-    float ZFar = 1000.0f;
+    static float AspectRatio = static_cast<float>(Width) / static_cast<float>(Height);
+    static float Fov = 60.0f * 3.14159f / 180.0f; // 60 degrees in radians
+    static float ZNear = 0.1f;
+    static float ZFar = 1000.0f;
     
     // Perspective projection matrix (column-major for GLSL)
-    float F = 1.0f / std::tan(Fov / 2.0f);
-    float ViewProjMatrix[16] = {
+    static float F = 1.0f / std::tan(Fov / 2.0f);
+    static float ViewProjMatrix[16] = {
         // Column 0
         F / AspectRatio, 0.0f, 0.0f, 0.0f,
         // Column 1
@@ -515,19 +523,13 @@ void Window::DrawInstances(const InstanceData* Instances, size_t Count, const ui
     SDL_BindGPUGraphicsPipeline(renderPass, Pipeline);
     
     
-    SDL_GPUBufferBinding vertexBinding = {};
-    vertexBinding.buffer = VertexBuffer;
-    vertexBinding.offset = 0;
+    SDL_GPUBufferBinding vertexBinding = {VertexBuffer, 0};
     SDL_BindGPUVertexBuffers(renderPass, 0, &vertexBinding, 1);
     
-    SDL_GPUBufferBinding instanceBinding = {};
-    instanceBinding.buffer = InstanceBuffer;
-    instanceBinding.offset = 0;
+    SDL_GPUBufferBinding instanceBinding = {InstanceBuffer, 0};
     SDL_BindGPUVertexBuffers(renderPass, 1, &instanceBinding, 1);
     
-    SDL_GPUBufferBinding indexBinding = {};
-    indexBinding.buffer = IndexBuffer;
-    indexBinding.offset = 0;
+    SDL_GPUBufferBinding indexBinding = {IndexBuffer, 0};
     SDL_BindGPUIndexBuffer(renderPass, &indexBinding, SDL_GPU_INDEXELEMENTSIZE_16BIT);
     
     SDL_DrawGPUIndexedPrimitives(renderPass, CubeMesh::IndexCount, static_cast<uint32_t>(Count), 0, 0, 0);

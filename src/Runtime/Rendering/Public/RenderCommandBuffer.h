@@ -47,10 +47,11 @@ int operator<<(RenderCommandType lhs, int rhs);
  */
 struct alignas(16) RenderCommand {
     union {
-        alignas(uint16_t) uint32_t Value;
+        alignas(uint16_t) uint64_t Value;
         struct {
             uint32_t Finished : 1;   // Command finished writing flag
             uint32_t Type     : 7;   // RenderCommandType
+            uint32_t FrameNum : 32;  // The frame number we're rendering
             uint32_t Count    : 24;  // Command-specific count (instances, bytes, etc)
         };
     } Header;
@@ -63,6 +64,10 @@ struct alignas(16) RenderCommand {
         return Header.Finished;
     }
 
+    uint32_t GetFrameNum() const {
+        return Header.FrameNum;
+    }
+
     uint32_t GetCount() const {
         return Header.Count;
     }
@@ -71,6 +76,13 @@ struct alignas(16) RenderCommand {
         Header.Type = static_cast<uint8_t>(type);
         Header.Count = count;
         Header.Finished = finished;
+        
+        static uint32_t FrameNumber = 0;
+        if (type == RenderCommandType::FrameStart)
+        {
+            FrameNumber++;
+        }
+        Header.FrameNum = FrameNumber;
     }
 
     void SetCommandFinished() {
@@ -97,14 +109,15 @@ struct DrawInstancedCommand : RenderCommand {
  *   [FrameStart:1byte][DrawInstanced:4+N*64bytes][FrameEnd:1byte]
  *
  * Frame Overwrite Strategy:
- *   If main thread catches up to previous frame (render hasn't consumed yet),
+ *   If the writer is MAX_BUFFER_FRAMES ahead of the reader it will
  *   rewind head to lastFrameHead and overwrite old commands.
  */
 class RenderCommandBuffer {
 public:
-    // Buffer size: 32 MB
     // Conservative sizing for ~3 frames of 100k entities (6.4MB each)
-    static constexpr size_t MAX_BUFFER_BYTES = 32 * 1024 * 1024;
+    static constexpr size_t MAX_COMMAND_SIZE = 1024 * 1024 * 16;
+    static constexpr size_t NUM_BUFFER_FRAMES = 3;
+    static constexpr size_t MAX_BUFFER_BYTES = 2 * NUM_BUFFER_FRAMES * MAX_COMMAND_SIZE;
      /**
      * Buffer Resizing:
      *   TODO: If single-frame command data exceeds 30% of buffer size,
@@ -192,17 +205,16 @@ T* RenderCommandBuffer::AllocateCommand(RenderCommandType type, uint32_t dataSiz
 
     // Frame boundary check: if starting new frame and render hasn't consumed previous frame, rewind
     if (type == RenderCommandType::FrameStart) {
-        //uint32_t last = lastFrameHead.load(std::memory_order_relaxed);
-        //uint32_t currentTail = tail.load(std::memory_order_acquire);
+        uint32_t last = lastFrameHead.load(std::memory_order_relaxed);
+        uint32_t currentTail = tail.load(std::memory_order_acquire);
         uint32_t currentHead = head.load(std::memory_order_relaxed);
 
-        /*
         if (!IsInRange(currentTail, last, currentHead)) {
             // Render thread hasn't consumed previous frame, overwrite it
             head.store(last, std::memory_order_release);
         }
         else
-        {*/
+        {
             if (currentHead + sizeof(RenderCommand) > MAX_BUFFER_BYTES)
             {
                 // command header won't fit, wrap.
@@ -212,7 +224,7 @@ T* RenderCommandBuffer::AllocateCommand(RenderCommandType type, uint32_t dataSiz
             
             // Render caught up, update lastFrameHead to current position
             lastFrameHead.store(currentHead, std::memory_order_relaxed);
-        //}
+        }
     }
 
     uint32_t current = head.load(std::memory_order_relaxed);

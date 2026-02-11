@@ -47,23 +47,24 @@ private:
     SDL_GPUGraphicsPipeline* Pipeline = nullptr;
     SDL_GPUBuffer* VertexBuffer = nullptr;
     SDL_GPUBuffer* IndexBuffer = nullptr;
-    SDL_GPUBuffer* InstanceBuffer = nullptr;
     SDL_GPUShader* VertexShader = nullptr;
     SDL_GPUShader* FragmentShader = nullptr;
     FramePacer FramePacer;
 
-    // Cached transfer buffer (reused every frame)
-    SDL_GPUTransferBuffer* TransferBuffer = nullptr;
-    size_t TransferBufferCapacity = 0;
+    // Per-frame buffers (tied to FramePacer::FRAMES_IN_FLIGHT)
+    SDL_GPUBuffer* InstanceBuffers[FramePacer::FRAMES_IN_FLIGHT] = {nullptr};
+    SDL_GPUTransferBuffer* TransferBuffers[FramePacer::FRAMES_IN_FLIGHT] = {nullptr};
+    size_t InstanceBufferCapacities[FramePacer::FRAMES_IN_FLIGHT] = {0};
+    size_t TransferBufferCapacities[FramePacer::FRAMES_IN_FLIGHT] = {0};
+    int CurrentFrameIndex = 0;
 
     int Width = 0;
     int Height = 0;
-    size_t InstanceBufferCapacity = 0;
 
     bool bInitialized = false;
 
     // Setup rendering pipeline
     void CreateRenderPipeline();
     void CreateCubeMesh();
-    void CreateInstanceBuffer(size_t Capacity);
+    void CreateInstanceBuffer(size_t Capacity, int BufferIndex);
 };

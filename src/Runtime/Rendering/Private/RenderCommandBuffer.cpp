@@ -1,6 +1,7 @@
 #include "RenderCommandBuffer.h"
 #include <cstdlib>
 #include <cstring>
+#include <valarray>
 
 #include "Logger.h"
 #include "Profiler.h"
@@ -45,7 +46,7 @@ void RenderCommandBuffer::WrapCommandBuffer(uint32_t current, uint32_t next, uin
     if (next > MAX_BUFFER_BYTES)
     {
         outWrapPtr = buffer;
-        outWrapAfter = MAX_BUFFER_BYTES - current;
+        outWrapAfter = static_cast<uint32_t>(MAX_BUFFER_BYTES - current);
         LOG_DEBUG_F("[CmdBuffer] WRAP: current=%u, next=%u, wrapAfter=%u", current, next, outWrapAfter);
     }
 }
@@ -118,7 +119,7 @@ RenderCommand* RenderCommandBuffer::GetCommand(uint8_t*& outWrapPtr, uint32_t& o
                     currentTail, cmdSize, outWrapAfter);
             }
                 
-            LOG_ALWAYS_F("Current Color: B-%f R-%f", drawCmd->instances[0].ColorB, drawCmd->instances[0].ColorR);
+            //LOG_ALWAYS_F("Current Color: B-%f R-%f", drawCmd->instances[0].ColorB, drawCmd->instances[0].ColorR);
 
             uint32_t newTail = (currentTail + static_cast<uint32_t>(cmdSize)) % MAX_BUFFER_BYTES;
             tail.store(newTail, std::memory_order_release);
@@ -137,7 +138,7 @@ RenderCommand* RenderCommandBuffer::GetCommand(uint8_t*& outWrapPtr, uint32_t& o
         }
 
         default:
-            LOG_FATAL_F("[RenderThread] Unknown RenderCommandType: %d (raw header value: 0x%08X) at tail=%u",
+            LOG_FATAL_F("[RenderThread] Unknown RenderCommandType: %d (raw header value: 0x%I64X) at tail=%u",
                 cmdType, cmdHeader->Header.Value, currentTail);
             break;
     }
@@ -157,18 +158,16 @@ bool RenderCommandBuffer::IsPreviousFrameInProgress() const
 void RenderCommandBuffer::CommitCommand(size_t dataSize)
 {
     uint32_t current = head.load(std::memory_order_relaxed);
-    uint32_t next = (current + dataSize) % MAX_BUFFER_BYTES;
+    uint32_t next = static_cast<uint32_t>((current + dataSize) % MAX_BUFFER_BYTES);
 
     head.store(next, std::memory_order_release);
 }
 
-bool RenderCommandBuffer::IsInRange(uint32_t value, uint32_t start, uint32_t end) const
+bool RenderCommandBuffer::IsInRange(uint32_t value, [[maybe_unused]] uint32_t start, uint32_t end) const
 {
-    if (start <= end) {
-        // No wrap case: [start ... value ... end]
-        return value >= start && value <= end;
-    } else {
-        // Wrap case: [value ... end] or [start ... value]
-        return value >= start || value <= end;
-    }
+    const RenderCommand* tailHeader = reinterpret_cast<const RenderCommand*>(&buffer[value]);
+    const RenderCommand* headHeader = reinterpret_cast<const RenderCommand*>(&buffer[end]);
+    
+    // TODO: if the FrameNumber wraps this breaks
+    return headHeader->GetFrameNum() - tailHeader->GetFrameNum() < NUM_BUFFER_FRAMES;
 }

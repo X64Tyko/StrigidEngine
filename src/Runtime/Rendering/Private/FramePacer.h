@@ -7,12 +7,16 @@ struct FrameContext {
 };
 
 class FramePacer {
+public:
     static constexpr int FRAMES_IN_FLIGHT = 3;
+    
+private:
     FrameContext frames[FRAMES_IN_FLIGHT];
     int frame_index = 0;
     SDL_GPUDevice* device = nullptr;
 
 public:
+    int GetFrameIndex() const { return frame_index; }
     void Initialize(SDL_GPUDevice* _device) {
         device = _device;
         // Pre-allocate fences? No, SDL3 acquires them on demand usually, 

@@ -89,7 +89,7 @@ struct PrefabReflector {
         {
             // Update(double) or FixedUpdate(double)
             // Default to Update for now - we can extend this later
-            type = LifecycleType::Update;
+            type = LifecycleType::FixedUpdate;
         }
         else
         {

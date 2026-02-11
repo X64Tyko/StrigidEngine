@@ -88,11 +88,11 @@ bool StrigidEngine::Initialize([[maybe_unused]] const char* title, [[maybe_unuse
         cube.transform->RotationY = 0.0f;
         cube.transform->RotationZ = 0.0f;
         cube.transform->ScaleX = cube.transform->ScaleY = cube.transform->ScaleZ = 1.0f;
-        /*cube.color->R = color(gen);
+        cube.color->R = color(gen);
         cube.color->G = color(gen);
-        cube.color->B = color(gen);*/
-        cube.color->B = 1.0f;
-        cube.color->R = cube.color->G = 0.0f;
+        cube.color->B = color(gen);
+        /*cube.color->B = 1.0f;
+        cube.color->R = cube.color->G = 0.0f;*/
         cube.color->A = 1.0f;
     }
 
@@ -221,6 +221,7 @@ void StrigidEngine::Run()
 
 void StrigidEngine::RenderFrame([[maybe_unused]] double alpha)
 {
+    /* This is the wrong logic, we need to overwrite the previous frame with the new one
     // don't buffer a new frame if the previous one hasn't been consumed yet
     while (!CommandBuffer->IsPreviousFrameInProgress())
     {
@@ -228,6 +229,7 @@ void StrigidEngine::RenderFrame([[maybe_unused]] double alpha)
         LOG_TRACE("[MainThread] Skipping frame - previous frame still in progress");
         //return;
     }
+    */
 
     STRIGID_ZONE_C(STRIGID_COLOR_RENDERING);
 
