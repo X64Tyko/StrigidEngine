@@ -2,7 +2,7 @@
 
 struct EngineConfig {
     // 1. Visuals (Variable) - e.g., 144Hz Monitor
-    int TargetFPS = 60; // 0 = Uncapped
+    int TargetFPS = 0; // 0 = Uncapped
 
     // 2. Physics/Simulation (Fixed High) - e.g., 60Hz or 128Hz
     int FixedUpdateHz = 60;

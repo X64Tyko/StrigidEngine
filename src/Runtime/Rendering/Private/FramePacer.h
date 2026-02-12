@@ -27,17 +27,24 @@ public:
 
     // Call this AT THE START of your Render Loop.
     // It enforces the "Speed Limit" before you do any work.
-    void BeginFrame() {
+    bool BeginFrame() {
         FrameContext& ctx = frames[frame_index];
 
         // 1. The Governor: If this slot is still busy on the GPU, WAIT.
         if (ctx.fence) {
-            SDL_WaitForGPUFences(device, true, &ctx.fence, 1);
-            SDL_ReleaseGPUFence(device, ctx.fence);
-            ctx.fence = nullptr;
+            if (SDL_QueryGPUFence(device, ctx.fence))
+            {
+                SDL_ReleaseGPUFence(device, ctx.fence);
+                ctx.fence = nullptr;
+            }
+            else
+            {
+                return false;
+            }
         }
 
         // 2. The Setup: We are now safe to use this slot.
+        return true;
     }
 
     // Call this AT THE END, right before Submit.

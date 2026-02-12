@@ -3,11 +3,13 @@
 #include "Transform.h"
 #include "Velocity.h"
 #include "ColorData.h"
+#include "EntityView.h"
 #include "Schema.h"
 #include "SchemaReflector.h"
 
 // Simple test struct (will be replaced with real components in Week 4)
-struct TestEntity
+STRIGID_REGISTER_ENTITY(TestEntity);
+class TestEntity : public EntityView<TestEntity>
 {
     Ref<Transform> Transform;
     Ref<Velocity> Velocity;
@@ -22,6 +24,9 @@ public:
             &TestEntity::Color
         );
     }
+    
+    void Update([[maybe_unused]] double dt)
+    {
+        
+    }
 };
-
-STRIGID_REGISTER_ENTITY(TestEntity);

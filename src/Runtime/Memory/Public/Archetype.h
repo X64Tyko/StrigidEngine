@@ -35,9 +35,6 @@ public:
     // Component layout information
     std::unordered_map<ComponentTypeID, ComponentMeta> ComponentLayout;
 
-    // Lifecycle functions for entities in this archetype
-    std::vector<LifecycleFunction> LifecycleFunctions;
-
     // Get the number of entities in a specific chunk (handles tail chunk)
     uint32_t GetChunkCount(size_t ChunkIndex) const;
 
@@ -63,6 +60,13 @@ public:
 
         const ComponentMeta& Meta = It->second;
         return reinterpret_cast<T*>(TargetChunk->GetBuffer(static_cast<uint32_t>(Meta.OffsetInChunk)));
+    }
+    
+    template<typename T>
+    T* GetComponent(Chunk* TargetChunk, ComponentTypeID TypeID, uint32_t Index)
+    {
+        // TODO: need to verify this Index is valid
+        return GetComponentArray<T>(TargetChunk, TypeID)[Index];
     }
 
     // Get raw pointer to component array

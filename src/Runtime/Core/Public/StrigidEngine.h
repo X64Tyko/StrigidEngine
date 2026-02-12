@@ -1,113 +1,86 @@
 ﻿#pragma once
 #include <memory>
-#include <string>
-#include <vector>
-#include <thread>
 #include <atomic>
-#include <mutex>
-#include <condition_variable>
+#include <SDL3/SDL_gpu.h>
 
 #include "EngineConfig.h"
-#include "Window.h"
-//#include "Core/Types.h"
+#include "RenderThread.h"
+#include "../../Rendering/Private/FramePacer.h"
 
-// Forward Declarations (Keep compile times fast)
+// Forward declarations
 class Window;
-class AudioEngine;
-class JobSystem;
-class PhysicsWorld;
-class World;
-class Profiler;
 class Registry;
-class RenderCommandBuffer;
+class LogicThread;
+class RenderThread;
+struct EngineConfig;
 
+/**
+ * StrigidEngine: The Sentinel (Main Thread)
+ *
+ * Responsibilities:
+ * - OS Event Pumping (SDL requires this on main thread)
+ * - Window ownership (SDL3 requirement)
+ * - GPU Command Buffer acquisition and submission (SDL3 requirement)
+ * - Frame Pacing
+ * - Thread Lifecycle Management
+ *
+ * Threading Model:
+ * - Main Thread: Events, Window, GPU acquire/submit, Frame Pacing
+ * - Logic Thread: Simulation, produces FramePackets
+ * - Render Thread: Consumes FramePackets, prepares render data, builds command buffers
+ *
+ * GPU Resource Flow:
+ * 1. RenderThread requests resources (bNeedsGPUResources)
+ * 2. Main continues polling events, waits for FramePacer fence
+ * 3. When fence clears AND RenderThread needs resources → Main acquires
+ * 4. Main provides resources via atomics, clears bNeedsGPUResources
+ * 5. RenderThread builds commands, signals bReadyToSubmit
+ * 6. Main retrieves CmdBuffer, submits via FramePacer
+ * 7. Main loops back to step 1
+ */
 class StrigidEngine {
-    
+public:
     StrigidEngine();
     ~StrigidEngine();
-    StrigidEngine(const StrigidEngine&) =delete;
-    StrigidEngine& operator=(const StrigidEngine&) =delete;
+    StrigidEngine(const StrigidEngine&) = delete;
+    StrigidEngine& operator=(const StrigidEngine&) = delete;
 
-public:
-    // 1. The Boot Sequence
-    // Returns false if hardware init fails (e.g., No GPU found)
-    bool Initialize(const char* Title, int Width, int Height);
-
-    // 2. The Main Loop
-    // Blocks until the game is closed.
+    bool Initialize(const char* title, int width, int height);
     void Run();
-
-    // 3. The Shutdown
-    // Explicit cleanup (saves configs, closes streams)
     void Shutdown();
 
-    // Accessors (Static or Singleton-like access if preferred)
-    static StrigidEngine& Get()
-    {
-        static StrigidEngine Instance;
-        return Instance;
+    // Singleton
+    static StrigidEngine& Get() {
+        static StrigidEngine instance;
+        return instance;
     }
 
 private:
-    // The "Frame Pipeline" - Internal steps of the loop
-    void PumpEvents();
-    void FrameUpdate(double Dt);
-    void FixedUpdate(double Dt);
-    void RenderFrame(double Alpha);
-    void WaitForTiming(uint64_t FrameStart, uint64_t PerfFrequency); // Cap FPS / VSync
-    void NetworkUpdate(double FixedDt);
+    // Sentinel Tasks (Main Thread)
+    void PumpEvents();                  // Handle OS events
+    void ServiceRenderThread();         // Check if RenderThread needs GPU resources or wants to submit
+    void AcquireAndProvideGPUResources(); // Acquire cmd + swapchain, provide to RenderThread
+    void SubmitRenderCommands();        // Take CmdBuffer from RenderThread and submit
+    void WaitForTiming(uint64_t frameStart, uint64_t perfFrequency);
 
-    // 4. Immediate Network Events
-    // Call this from FrameUpdate or Input to send critical "One-Offs" 
-    // (e.g., "Player Fired Gun") immediately without waiting for the Tick.
-    void SendNetworkEvent(const std::string& EventData);
-    
-private:
-    void CalculateFPS(double Dt);
+    // FPS tracking
+    void CalculateFPS(double dt);
 
-    // Render thread management
-    void RenderThreadMain();
-    void RenderThreadLoop();
-    void CalculateRenderFPS();
-
-private:
-    EngineConfig& GetConfig() { return Config; }
+    // --- Core Systems ---
+    SDL_Window* EngineWindow;   
+    SDL_GPUDevice* GpuDevice;    // MUST be on main thread for SDL
+    std::unique_ptr<Registry> RegistryPtr;
     EngineConfig Config;
-    bool bIsRunning = false;
-    double NetAccumulator = 0.0;
+    FramePacer Pacer;
 
-    // FPS Counting
+    // --- Thread Modules ---
+    std::unique_ptr<LogicThread> Logic;
+    std::unique_ptr<RenderThread> Render;
+
+    // --- Lifecycle ---
+    std::atomic<bool> bIsRunning{false};
+
+    // FPS tracking
     double FpsTimer = 0.0;
     int FrameCount = 0;
-    
-    int renderFrameCount = 0;
-    double renderFpsTimer = 0.0;
-    uint64_t lastFrameTime = 0;
-
-    // Render thread infrastructure
-    std::thread RenderThread;
-    bool bRenderThreadInitialized{false};
-    std::atomic<bool> bShouldExitRenderThread{false};
-    std::atomic<int> RenderInitResult{0};
-    std::mutex RenderInitMutex;
-    std::condition_variable RenderInitCondVar;
-
-    // Window parameters (passed to render thread)
-    const char* WindowTitle = nullptr;
-    int WindowWidth = 0;
-    int WindowHeight = 0;
-
-    // Subsystems (Order matters for destruction!)
-    std::unique_ptr<Registry>     RegistryPtr;
-    std::unique_ptr<Window>       EngineWindow;
-    std::unique_ptr<RenderCommandBuffer> CommandBuffer;
-
-    std::vector<InstanceData> instances;
-    /*
-    std::unique_ptr<Window>       Window;
-    std::unique_ptr<JobSystem>    JobSystem;
-    std::unique_ptr<PhysicsWorld> Physics;
-    std::unique_ptr<AudioEngine>  Audio;
-    std::unique_ptr<World>        World; // The ECS Registry lives here
-    */
 };

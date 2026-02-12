@@ -44,7 +44,9 @@ public:
     std::vector<Archetype*> Query();
 
     // Invoke all lifecycle functions of a specific type
-    void InvokeAll(LifecycleType type, double dt = 0.0);
+    void InvokeUpdate(double dt = 0.0);
+    void InvokePrePhys(double dt = 0.0);
+    void InvokePostPhys(double dt = 0.0);
 
     // Memory diagnostics
     uint32_t GetTotalChunkCount() const;
@@ -98,9 +100,10 @@ EntityID Registry::Create()
 
     if (!Initialized)
     {
-        ClassID classID = GetClassID<T>();
-        auto& metaComponents = MetaRegistry::Get().MetaComponents;
+        ClassID classID = T::StaticClass();
+        auto& metaComponents = MetaRegistry::Get().ClassToArchetype;
 
+#ifdef _DEBUG // || _WITH_EDITOR
         // Runtime guard: Check if entity type was registered with STRIGID_REGISTER_ENTITY
         if (metaComponents.find(classID) == metaComponents.end())
         {
@@ -117,6 +120,7 @@ EntityID Registry::Create()
             // Return invalid entity ID
             return EntityID{};
         }
+#endif
 
         Signature Sig = std::get<ComponentSignature>(metaComponents[classID]);
 
@@ -125,7 +129,7 @@ EntityID Registry::Create()
     }
 
     // Allocate entity ID
-    EntityID Id = AllocateEntityID(GetClassID<T>());
+    EntityID Id = AllocateEntityID(T::StaticClass());
 
     // Allocate slot in archetype
     Archetype::EntitySlot Slot = CachedArchetype->PushEntity();

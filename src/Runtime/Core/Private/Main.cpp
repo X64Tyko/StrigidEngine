@@ -1,6 +1,7 @@
-#include "StrigidEngine.h"
 #include "Registry.h"
 #include <iostream>
+
+#include "StrigidEngine.h"
 #include "TestEntity.h"
 
 void TestRegistry()

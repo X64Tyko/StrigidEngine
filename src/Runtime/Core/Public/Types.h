@@ -2,12 +2,42 @@
 #include <bitset>
 #include <cstdint>
 #include <functional>
+#include <cmath>
 
 // Disable MSVC warning for anonymous structs in unions (C++11 standard feature)
 #ifdef _MSC_VER
 #pragma warning(push)
 #pragma warning(disable: 4201) // nonstandard extension used: nameless struct/union
 #endif
+
+// Math types
+struct Vector3 {
+    float x, y, z;
+
+    Vector3() : x(0), y(0), z(0) {}
+    Vector3(float x, float y, float z) : x(x), y(y), z(z) {}
+
+    Vector3 operator+(const Vector3& other) const { return Vector3(x + other.x, y + other.y, z + other.z); }
+    Vector3 operator-(const Vector3& other) const { return Vector3(x - other.x, y - other.y, z - other.z); }
+    Vector3 operator*(float scalar) const { return Vector3(x * scalar, y * scalar, z * scalar); }
+
+    float Length() const { return std::sqrt(x * x + y * y + z * z); }
+    Vector3 Normalized() const {
+        float len = Length();
+        return len > 0 ? Vector3(x / len, y / len, z / len) : Vector3();
+    }
+};
+
+struct Matrix4 {
+    float m[16]; // Column-major order
+
+    Matrix4() {
+        for (int i = 0; i < 16; i++) m[i] = 0;
+        m[0] = m[5] = m[10] = m[15] = 1.0f; // Identity
+    }
+
+    static Matrix4 Identity() { return Matrix4(); }
+};
 
 // 16KB Chunks fits perfectly in L1/L2 cache lines
 constexpr uint32_t CHUNK_SIZE = 64 * 1024;
@@ -32,7 +62,6 @@ struct ComponentMeta
 // Global counter (hidden in cpp)
 namespace Internal {
     extern uint32_t g_GlobalComponentCounter;
-    extern ClassID g_GlobalClassCounter; // TODO: if the user changes the "Generation" bits for the Entity ID and has more than... 2B classes... nvm
 }
 
 template <typename T>
@@ -41,15 +70,6 @@ ComponentTypeID GetComponentTypeID() {
     // The first time you call GetTypeID<Transform>(), it grabs a number.
     // Every subsequent time, it skips this and just returns 'id'.
     static ComponentTypeID id = Internal::g_GlobalComponentCounter++;
-    return id;
-}
-
-template <typename T>
-ClassID GetClassID() {
-    // THIS LINE RUNS ONCE PER TYPE (T)
-    // The first time you call GetTypeID<Transform>(), it grabs a number.
-    // Every subsequent time, it skips this and just returns 'id'.
-    static ClassID id = Internal::g_GlobalClassCounter++;
     return id;
 }
 

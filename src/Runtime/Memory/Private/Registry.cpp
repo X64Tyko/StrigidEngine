@@ -2,6 +2,7 @@
 #include "Profiler.h"
 #include <cassert>
 
+#include "EntityView.h"
 #include "SchemaReflector.h"
 
 Registry::Registry()
@@ -147,39 +148,31 @@ void Registry::InitializeArchetypes()
     MetaRegistry& MR = MetaRegistry::Get();
     // need to combine classes in the meta registry that have the same TypeID.
 
-    for (auto Arch : MR.MetaComponents)
+    for (auto Arch : MR.ClassToArchetype)
     {
-        Archetype* NewArch = new Archetype(std::get<ComponentSignature>(Arch.second));
-        NewArch->BuildLayout(std::get<std::vector<ComponentMeta>>(Arch.second));
-
-        // Copy lifecycle functions to the archetype
-        NewArch->LifecycleFunctions = std::get<std::vector<LifecycleFunction>>(Arch.second);
-
-        Archetypes[std::get<ComponentSignature>(Arch.second)] = NewArch;
+        Archetype*& NewArch = Archetypes[std::get<ComponentSignature>(Arch.second)];
+        if (!NewArch)
+        {
+            NewArch = new Archetype(std::get<ComponentSignature>(Arch.second));
+            NewArch->BuildLayout(std::get<std::vector<ComponentMeta>>(Arch.second));
+        }
+        NewArch->ResidentClassIDs.insert(Arch.first);
     }
 }
 
-void Registry::InvokeAll(LifecycleType type, double dt)
+void Registry::InvokeUpdate(double dt)
 {
     STRIGID_ZONE_C(STRIGID_COLOR_LOGIC);
 
     // Iterate through all archetypes
     for (auto& [sig, archetype] : Archetypes)
     {
-        // Check if this archetype has any lifecycle functions of the requested type
-        bool hasFunction = false;
-        for (const LifecycleFunction& func : archetype->LifecycleFunctions)
-        {
-            if (func.Type == type)
-            {
-                hasFunction = true;
-                break;
-            }
-        }
-
-        if (!hasFunction)
+        MetaRegistry& MR = MetaRegistry::Get();
+        
+        auto meta = MR.EntityGetters[*archetype->ResidentClassIDs.begin()];
+        if (!meta.Update)
             continue;
-
+        
         // Iterate through all chunks in this archetype
         for (size_t chunkIdx = 0; chunkIdx < archetype->Chunks.size(); ++chunkIdx)
         {
@@ -188,30 +181,112 @@ void Registry::InvokeAll(LifecycleType type, double dt)
 
             if (entityCount == 0)
                 continue;
-
+            
             // Build array of component array pointers for this chunk
-            std::vector<void*> componentArrays;
+            void* componentArrays[MAX_COMPONENTS];
             {
                 STRIGID_ZONE_MEDIUM_N("Build_Component_Arrays"); // Level 2: Per-chunk profiling
                 for (const auto& [compTypeID, compMeta] : archetype->ComponentLayout)
                 {
                     void* arrayPtr = archetype->GetComponentArrayRaw(chunk, compTypeID);
-                    componentArrays.push_back(arrayPtr);
+                    componentArrays[compTypeID] = arrayPtr;
                 }
             }
 
-            // Invoke all lifecycle functions of the requested type on each entity
-            for (const LifecycleFunction& func : archetype->LifecycleFunctions)
+            alignas(16) char View[64];
+            STRIGID_ZONE_MEDIUM_N("Invoke_Entity_Loop");
+            for (uint32_t CompIndex = 0; CompIndex < entityCount; CompIndex++)
             {
-                if (func.Type != type)
-                    continue;
+                meta.Hydrate(componentArrays, CompIndex, View);
+                meta.Update(dt, View);
+            }
+        }
+    }
+}
 
-                STRIGID_ZONE_MEDIUM_N("Invoke_Entity_Loop"); // Level 2: Per-chunk profiling
-                // Call the invoker for each entity in the chunk
-                for (uint32_t i = 0; i < entityCount; ++i)
+void Registry::InvokePrePhys(double dt)
+{
+    STRIGID_ZONE_C(STRIGID_COLOR_LOGIC);
+
+    // Iterate through all archetypes
+    for (auto& [sig, archetype] : Archetypes)
+    {
+        MetaRegistry& MR = MetaRegistry::Get();
+        
+        auto meta = MR.EntityGetters[*archetype->ResidentClassIDs.begin()];
+        if (!meta.PrePhys)
+            continue;
+        
+        // Iterate through all chunks in this archetype
+        for (size_t chunkIdx = 0; chunkIdx < archetype->Chunks.size(); ++chunkIdx)
+        {
+            Chunk* chunk = archetype->Chunks[chunkIdx];
+            uint32_t entityCount = archetype->GetChunkCount(chunkIdx);
+
+            if (entityCount == 0)
+                continue;
+            
+            // Build array of component array pointers for this chunk
+            void* componentArrays[MAX_COMPONENTS];
+            {
+                STRIGID_ZONE_MEDIUM_N("Build_Component_Arrays"); // Level 2: Per-chunk profiling
+                for (const auto& [compTypeID, compMeta] : archetype->ComponentLayout)
                 {
-                    func.Invoker(func.FunctionPtr, func.CachedEntity, componentArrays.data(), i, dt);
+                    void* arrayPtr = archetype->GetComponentArrayRaw(chunk, compTypeID);
+                    componentArrays[compTypeID] = arrayPtr;
                 }
+            }
+
+            alignas(16) char View[64];
+            STRIGID_ZONE_MEDIUM_N("Invoke_Entity_Loop");
+            for (uint32_t CompIndex = 0; CompIndex < entityCount; CompIndex++)
+            {
+                meta.Hydrate(componentArrays, CompIndex, View);
+                meta.PrePhys(dt, View);
+            }
+        }
+    }
+}
+
+void Registry::InvokePostPhys(double dt)
+{
+    STRIGID_ZONE_C(STRIGID_COLOR_LOGIC);
+
+    // Iterate through all archetypes
+    for (auto& [sig, archetype] : Archetypes)
+    {
+        MetaRegistry& MR = MetaRegistry::Get();
+        
+        auto meta = MR.EntityGetters[*archetype->ResidentClassIDs.begin()];
+        if (!meta.PostPhys)
+            continue;
+        
+        // Iterate through all chunks in this archetype
+        for (size_t chunkIdx = 0; chunkIdx < archetype->Chunks.size(); ++chunkIdx)
+        {
+            Chunk* chunk = archetype->Chunks[chunkIdx];
+            uint32_t entityCount = archetype->GetChunkCount(chunkIdx);
+
+            if (entityCount == 0)
+                continue;
+            
+            // Build array of component array pointers for this chunk
+            void* componentArrays[MAX_COMPONENTS];
+            {
+                STRIGID_ZONE_MEDIUM_N("Build_Component_Arrays"); // Level 2: Per-chunk profiling
+                for (const auto& [compTypeID, compMeta] : archetype->ComponentLayout)
+                {
+                    void* arrayPtr = archetype->GetComponentArrayRaw(chunk, compTypeID);
+                    componentArrays[compTypeID] = arrayPtr;
+                }
+            }
+
+            alignas(16) char View[64];
+            STRIGID_ZONE_MEDIUM_N("Invoke_Entity_Loop");
+            for (uint32_t CompIndex = 0; CompIndex < entityCount; CompIndex++)
+            {
+                meta.Hydrate(componentArrays, CompIndex, View);
+                meta.PostPhys(dt, View);
             }
         }
     }

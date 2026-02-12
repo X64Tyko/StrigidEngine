@@ -1,18 +1,18 @@
-#include  "StrigidEngine.h"
+#include "StrigidEngine.h"
+
+#include <iostream>
+
+#include "LogicThread.h"
+#include "RenderThread.h"
+#include "Window.h"
+#include "Registry.h"
+#include "EngineConfig.h"
+#include "CubeEntity.h"
 #include "Profiler.h"
 #include "Logger.h"
-#include <string>
 #include <SDL3/SDL.h>
+#include <SDL3/SDL_gpu.h>
 #include <random>
-#include <vector>
-#include <chrono>
-#include <thread>
-
-#include "Window.h"
-#include "RenderCommandBuffer.h"
-
-#include "Registry.h"
-#include "CubeEntity.h"
 
 // Define global component counter (declared in SchemaReflector.h)
 namespace Internal {
@@ -28,54 +28,70 @@ StrigidEngine::~StrigidEngine()
 {
 }
 
-bool StrigidEngine::Initialize([[maybe_unused]] const char* title, [[maybe_unused]] int width,
-                               [[maybe_unused]] int height)
+bool StrigidEngine::Initialize(const char* title, int width, int height)
 {
     STRIGID_ZONE_N("Engine_Init");
 
     Logger::Get().Init("StrigidEngine.log", LogLevel::Error);
     LOG_INFO("StrigidEngine initialization started");
 
-    // 1. Core Systems (No dependencies)
-    //m_JobSystem = std::make_unique<JobSystem>();
-    //m_JobSystem->Init(std::thread::hardware_concurrency() - 1);
-
-    // 2. Create command buffer for main/render thread communication
-    CommandBuffer = std::make_unique<RenderCommandBuffer>();
-
-    // 3. Store window parameters and spawn render thread
-    WindowTitle = title;
-    WindowWidth = width;
-    WindowHeight = height;
-
-    RenderThread = std::thread(&StrigidEngine::RenderThreadMain, this);
-
-    // Wait for render thread to initialize
+    // Initialize SDL (should already be initialized by Engine)
+    if (!SDL_WasInit(SDL_INIT_VIDEO))
     {
-        std::unique_lock lock(RenderInitMutex);
-        RenderInitCondVar.wait(lock, [this]() { return bRenderThreadInitialized; });
+        if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS))
+        {
+            std::cerr << "SDL Init Failed: " << SDL_GetError() << std::endl;
+            return false;
+        }
     }
-    
-    int result = RenderInitResult.load(std::memory_order_acquire);
-    if (result != 0)
+
+    // Create Window
+    EngineWindow = SDL_CreateWindow(title, width, height, SDL_WINDOW_RESIZABLE);
+    if (!EngineWindow)
     {
-        LOG_ERROR("Render thread initialization failed");
+        std::cerr << "Window Create Failed: " << SDL_GetError() << std::endl;
         return false;
     }
 
-    // 3. ECS Registry
-    RegistryPtr = std::make_unique<Registry>();
+    // Create GPU Device
+    GpuDevice = SDL_CreateGPUDevice(SDL_GPU_SHADERFORMAT_SPIRV, true, nullptr);
+    if (!GpuDevice)
+    {
+        std::cerr << "GPU Device Failed: " << SDL_GetError() << std::endl;
+        SDL_DestroyWindow(EngineWindow);
+        return false;
+    }
 
-    // 4. Create 1000 test entities
+    // Claim the Window for the Device
+    if (!SDL_ClaimWindowForGPUDevice(GpuDevice, EngineWindow))
+    {
+        std::cerr << "Claim Window Failed: " << SDL_GetError() << std::endl;
+        SDL_DestroyGPUDevice(GpuDevice);
+        SDL_DestroyWindow(EngineWindow);
+        return false;
+    }
+    
+    if (!SDL_SetGPUSwapchainParameters(GpuDevice, EngineWindow, SDL_GPU_SWAPCHAINCOMPOSITION_SDR, SDL_GPU_PRESENTMODE_MAILBOX))
+    {
+        std::cerr << "Swapchain Parameters Failed: " << SDL_GetError() << std::endl;
+        SDL_DestroyGPUDevice(GpuDevice);
+        SDL_DestroyWindow(EngineWindow);
+        return false;
+    }
+
+    // Create Registry
+    RegistryPtr = std::make_unique<Registry>();
+    Pacer.Initialize(GpuDevice);
+
+    // Create 100k test entities (same as old code)
     std::random_device rd;
     std::mt19937 gen(rd());
     std::uniform_real_distribution<float> posX(-30.0f, 30.0f);
     std::uniform_real_distribution<float> posY(-30.0f, 30.0f);
     std::uniform_real_distribution<float> posZ(-500.0f, -200.0f);
-    std::uniform_real_distribution<float> vel(-2.0f, 2.0f);
     std::uniform_real_distribution<float> color(0.2f, 1.0f);
 
-    for (int i = 0; i < 100000; ++i)
+    for (int i = 0; i < 1000000; ++i)
     {
         CubeEntity cube;
         EntityID id = RegistryPtr->Create<CubeEntity>();
@@ -88,26 +104,29 @@ bool StrigidEngine::Initialize([[maybe_unused]] const char* title, [[maybe_unuse
         cube.transform->RotationY = 0.0f;
         cube.transform->RotationZ = 0.0f;
         cube.transform->ScaleX = cube.transform->ScaleY = cube.transform->ScaleZ = 1.0f;
+        cube.color->B = color(gen);
         cube.color->R = color(gen);
         cube.color->G = color(gen);
-        cube.color->B = color(gen);
-        /*cube.color->B = 1.0f;
-        cube.color->R = cube.color->G = 0.0f;*/
-        cube.color->A = 1.0f;
+        cube.color->A = color(gen);
     }
 
-    instances.reserve(100000);
+    LOG_ALWAYS("Created 100000 test entities");
 
-    LOG_INFO("Created 1000 test entities");
+    // Create threads
+    Logic = std::make_unique<LogicThread>();
+    Render = std::make_unique<RenderThread>();
 
-    /*
-    // 3. Audio (Depends on Platform mostly)
-    m_Audio = std::make_unique<AudioEngine>();
-    m_Audio->Init();
+    // Initialize threads
+    Logic->Initialize(RegistryPtr.get(), &Config, width, height);
 
-    // 4. Gameplay World (Depends on everything)
-    m_World = std::make_unique<World>();
-    */
+    // TODO: Get GPU device from Window
+    // For now, pass nullptr - this will need to be fixed
+    Render->Initialize(RegistryPtr.get(), Logic.get(), &Config, GpuDevice, EngineWindow);
+
+    // Start threads
+    Logic->Start();
+    Render->Start();
+
     bIsRunning = true;
     return true;
 }
@@ -119,312 +138,145 @@ void StrigidEngine::Run()
     const uint64_t perfFrequency = SDL_GetPerformanceFrequency();
     uint64_t lastCounter = SDL_GetPerformanceCounter();
 
-    double physAccumulator = 0.0;
-    double netAccumulator = 0.0;
+    //const double targetFrameTime = Config.GetTargetFrameTime();
 
-    // Cache config values to avoid struct lookups in hot loop
-    const double physStep = Config.GetFixedStepTime();
-    const double netStep = Config.GetNetworkStepTime();
-    const double targetFrameTime = Config.GetTargetFrameTime();
-
-    // Safety caps to prevent long stalls / input starvation if we fall behind.
-    // (Tune these as you like.)
-    constexpr double kMaxDt = 0.25;
-    constexpr double kMaxAccumulatedTime = 0.25;
-    constexpr int kMaxPhysSubSteps = 8;
-    constexpr int kMaxNetSubSteps = 8;
-
-    while (bIsRunning)
+    while (bIsRunning.load(std::memory_order_acquire))
     {
-        // --- 0. Pump Events Early (Responsiveness) ---
-        PumpEvents();
+        STRIGID_ZONE_N("Main_Frame");
 
-        // --- 1. Measure Delta Time ---
         const uint64_t frameStartCounter = SDL_GetPerformanceCounter();
         uint64_t counterElapsed = frameStartCounter - lastCounter;
         lastCounter = frameStartCounter;
 
-        double dt = (double)counterElapsed / (double)perfFrequency;
+        double dt = static_cast<double>(counterElapsed) / static_cast<double>(perfFrequency);
 
-        // "Spiral of Death" Safety Cap (prevent freezing if debugging)
-        if (dt > kMaxDt) dt = kMaxDt;
-
-        physAccumulator += dt;
-        netAccumulator += dt;
-
-        // Prevent unbounded catch-up after stalls
-        if (physAccumulator > kMaxAccumulatedTime) physAccumulator = kMaxAccumulatedTime;
-        if (netAccumulator > kMaxAccumulatedTime) netAccumulator = kMaxAccumulatedTime;
-
-        // --- 2. Network Loop (The "Tick") ---
-        // Runs at 20Hz/30Hz typically.
-        if (netStep > 0.0)
-        {
-            int steps = 0;
-            while (netAccumulator >= netStep && steps < kMaxNetSubSteps)
-            {
-                NetworkUpdate(netStep);
-                netAccumulator -= netStep;
-                ++steps;
-            }
-        }
-        else
-        {
-            netAccumulator = 0.0;
-        }
-
-        // --- 3. Physics Loop (The "Sim") ---
-        // Runs at 60Hz/128Hz typically.
-        if (physStep > 0.0)
-        {
-            int steps = 0;
-            while (physAccumulator >= physStep && steps < kMaxPhysSubSteps)
-            {
-                FixedUpdate(physStep);
-                physAccumulator -= physStep;
-                ++steps;
-            }
-        }
-        else
-        {
-            physAccumulator = 0.0;
-        }
-
-        // --- 4. Frame Logic & Render ---
+        // Pump events early
         PumpEvents();
-        FrameUpdate(dt);
 
-        // Calculate Alpha for Physics Interpolation
-        double alpha = 1.0;
-        if (physStep > 0.0)
-        {
-            alpha = physAccumulator / physStep;
-            if (alpha < 0.0) alpha = 0.0;
-            if (alpha > 1.0) alpha = 1.0;
-        }
+        // Service render thread (check for GPU resource requests or submit commands)
+        ServiceRenderThread();
 
-        RenderFrame(alpha);
-
-        // --- 5. Frame Limiter ---
+        // Frame limiter - not here bro!
+        /*
         if (targetFrameTime > 0.0)
         {
             WaitForTiming(frameStartCounter, perfFrequency);
         }
+        */
 
-        // FPS calc
+        // FPS tracking
         STRIGID_FRAME_MARK();
         CalculateFPS(dt);
+        
+        std::this_thread::sleep_for(std::chrono::microseconds(1));
     }
 
     Shutdown();
 }
 
-void StrigidEngine::RenderFrame([[maybe_unused]] double alpha)
-{
-    /* This is the wrong logic, we need to overwrite the previous frame with the new one
-    // don't buffer a new frame if the previous one hasn't been consumed yet
-    while (!CommandBuffer->IsPreviousFrameInProgress())
-    {
-        std::this_thread::yield();
-        LOG_TRACE("[MainThread] Skipping frame - previous frame still in progress");
-        //return;
-    }
-    */
-
-    STRIGID_ZONE_C(STRIGID_COLOR_RENDERING);
-
-    LOG_DEBUG_F("[MainThread] === Starting new frame === head=%u, last=%u, tail=%u",
-        CommandBuffer->GetHead(), CommandBuffer->GetLastFrameHead(), CommandBuffer->GetTail());
-
-    // 1. Write FrameStart command
-    uint8_t* wrapPtr = nullptr;
-    uint32_t wrapafter = 0;
-    RenderCommand* frameStartCmd = CommandBuffer->AllocateCommand<RenderCommand>(
-        RenderCommandType::FrameStart,
-        sizeof(RenderCommand),  // Use full header format
-        wrapPtr,
-        wrapafter
-    );
-    frameStartCmd->SetTypeAndCount(RenderCommandType::FrameStart, 0, true);
-    CommandBuffer->CommitCommand(sizeof(RenderCommand));
-    LOG_DEBUG_F("[MainThread] FrameStart written at head=%u", CommandBuffer->GetHead());
-
-    // 2. Query archetypes with Transform and ColorData
-    std::vector<Archetype*> archetypes = RegistryPtr->Query<Transform, ColorData>();
-
-    // Reserve space for all instances (avoid reallocation)
-    size_t totalEntities = RegistryPtr->GetTotalEntityCount();
-    instances.resize(totalEntities);
-
-    // Build instance data from ECS
-    size_t instanceIdx = 0;
-    for (Archetype* arch : archetypes)
-    {
-        // Iterate through all chunks in this archetype
-        for (size_t chunkIdx = 0; chunkIdx < arch->Chunks.size(); ++chunkIdx)
-        {
-            Chunk* chunk = arch->Chunks[chunkIdx];
-            uint32_t entityCount = arch->GetChunkCount(chunkIdx);
-
-            // Get component arrays for this chunk
-            Transform* transforms = arch->GetComponentArray<Transform>(chunk, GetComponentTypeID<Transform>());
-            ColorData* colors = arch->GetComponentArray<ColorData>(chunk, GetComponentTypeID<ColorData>());
-
-            // Copy data to instance buffer using memcpy for vectorization
-            // Transform = 48 bytes (12 floats), ColorData = 16 bytes (4 floats)
-            // InstanceData = 64 bytes (16 floats with padding)
-            for (uint32_t i = 0; i < entityCount; ++i)
-            {
-                InstanceData& inst = instances[instanceIdx++];
-
-                // Copy Transform (48 bytes = Position + Rotation + Scale)
-                std::memcpy(&inst.PositionX, &transforms[i].PositionX, 48);
-
-                // Copy ColorData (16 bytes = RGBA)
-                std::memcpy(&inst.ColorR, &colors[i].R, 16);
-            }
-        }
-    }
-
-    // 3. Write DrawInstanced command with instance data
-    if (instanceIdx > 0)
-    {
-        size_t commandSize = sizeof(DrawInstancedCommand) + sizeof(InstanceData) * instanceIdx;
-        uint32_t headBefore = CommandBuffer->GetHead();
-
-        DrawInstancedCommand* drawCmd = CommandBuffer->AllocateCommand<DrawInstancedCommand>(
-            RenderCommandType::DrawInstanced,
-            static_cast<uint32_t>(commandSize),
-            wrapPtr,
-            wrapafter
-        );
-
-        LOG_DEBUG_F("[MainThread] DrawInstanced: %zu instances, cmdSize=%zu, head=%u, wrap=%s",
-            instanceIdx, commandSize, headBefore, wrapPtr ? "YES" : "NO");
-
-        drawCmd->SetTypeAndCount(RenderCommandType::DrawInstanced, static_cast<uint32_t>(instanceIdx));
-
-        if (!wrapPtr)
-        {
-            // No wrap, simple copy
-            std::memcpy(drawCmd->instances, instances.data(), sizeof(InstanceData) * instanceIdx);
-        }
-        else
-        {
-            // Handle buffer wrap: split copy
-            size_t lastPartSize = commandSize - wrapafter;
-            LOG_WARN_F("[MainThread] WRAP COPY: wrapafter=%u, lastPartSize=%zu", wrapafter, lastPartSize);
-            std::memcpy(drawCmd->instances, instances.data(), wrapafter);
-            std::memcpy(wrapPtr, reinterpret_cast<uint8_t*>(instances.data()) + wrapafter, lastPartSize);
-        }
-
-        CommandBuffer->CommitCommand(commandSize);
-        drawCmd->SetCommandFinished();
-        LOG_TRACE_F("[MainThread] DrawInstanced finished, head now=%u", CommandBuffer->GetHead());
-    }
-
-    // 4. Write FrameEnd command
-    RenderCommand* frameEndCmd = CommandBuffer->AllocateCommand<RenderCommand>(
-        RenderCommandType::FrameEnd,
-        sizeof(RenderCommand),
-        wrapPtr,
-        wrapafter
-    );
-    frameEndCmd->SetTypeAndCount(RenderCommandType::FrameEnd, 0, true);
-    CommandBuffer->CommitCommand(sizeof(RenderCommand));
-    LOG_DEBUG_F("[MainThread] === Frame complete === head=%u", CommandBuffer->GetHead());
-}
-
-
 void StrigidEngine::Shutdown()
 {
     LOG_INFO("StrigidEngine shutting down");
 
-    // Signal render thread to exit
-    bShouldExitRenderThread.store(true, std::memory_order_release);
+    // Stop threads
+    if (Logic) Logic->Stop();
+    if (Render) Render->Stop();
 
-    // Wait for render thread to finish
-    if (RenderThread.joinable())
+    // Join threads
+    if (Logic) Logic->Join();
+    if (Render) Render->Join();
+
+    // Cleanup window
+    if (EngineWindow)
     {
-        RenderThread.join();
+        SDL_DestroyWindow(EngineWindow);
+        EngineWindow = nullptr;
     }
 
+    SDL_Quit();
     Logger::Get().Shutdown();
 }
 
 void StrigidEngine::PumpEvents()
 {
     STRIGID_ZONE_N("Input_Poll");
+
     SDL_Event e;
     while (SDL_PollEvent(&e))
     {
         if (e.type == SDL_EVENT_QUIT)
         {
-            bIsRunning = false;
+            bIsRunning.store(false, std::memory_order_release);
         }
     }
 }
 
-void StrigidEngine::FrameUpdate([[maybe_unused]] double dt)
+void StrigidEngine::ServiceRenderThread()
 {
-    STRIGID_ZONE_C(STRIGID_COLOR_LOGIC);
+    STRIGID_ZONE_N("Service_RenderThread");
 
-    // Invoke Update() lifecycle on all entities
-    RegistryPtr->InvokeAll(LifecycleType::Update, dt);
-}
+    if (!Render)
+        return;
 
-void StrigidEngine::FixedUpdate([[maybe_unused]] double dt)
-{
-    STRIGID_ZONE_C(STRIGID_COLOR_PHYSICS);
-
-    // Invoke FixedUpdate() lifecycle on all entities
-    RegistryPtr->InvokeAll(LifecycleType::FixedUpdate, dt);
-}
-
-void StrigidEngine::WaitForTiming(uint64_t frameStart, uint64_t perfFrequency)
-{
-    // Use target frame time (seconds) as the single source of truth.
-    const double targetFrameTimeSec = Config.GetTargetFrameTime();
-    const uint64_t targetTicks = static_cast<uint64_t>(targetFrameTimeSec * static_cast<double>(perfFrequency));
-    const uint64_t frameEnd = frameStart + targetTicks;
-
-    uint64_t currentCounter = SDL_GetPerformanceCounter();
-    if (frameEnd > currentCounter)
+    // Check if RenderThread is ready to submit
+    if (Render->ReadyToSubmit())
     {
-        const double remainingSec =
-            static_cast<double>(frameEnd - currentCounter) / static_cast<double>(perfFrequency);
-
-        // Sleep most of the remaining time; leave a small margin (~2ms) for the busy-wait.
-        constexpr double kSleepMarginSec = 0.002;
-
-        if (remainingSec > kSleepMarginSec)
-        {
-            const double sleepSec = remainingSec - kSleepMarginSec;
-            SDL_Delay(static_cast<uint32_t>(sleepSec * 1000.0));
-        }
-
-        while (SDL_GetPerformanceCounter() < frameEnd)
-        {
-        }
+        SubmitRenderCommands();
+    }
+    
+    // Check if RenderThread needs GPU resources
+    if (Render->NeedsGPUResources())
+    {
+        AcquireAndProvideGPUResources();
     }
 }
 
-void StrigidEngine::NetworkUpdate([[maybe_unused]] double fixedDt)
+void StrigidEngine::AcquireAndProvideGPUResources()
 {
-    STRIGID_ZONE_C(STRIGID_COLOR_NETWORK);
-    // 1. Process Incoming Packets (Bulk State)
-    //    e.g., Update positions of other 50 players.
+    STRIGID_ZONE_N("Main_AcquireGPU");
 
-    // 2. Reconcile Client-Side Prediction
-    //    "Server said I was actually at X, correct my position."
+    // TODO: Get GPU device from Window
+    // TODO: Access FramePacer from Window - FramePacer.BeginFrame() to wait for fence
+    if (!Pacer.BeginFrame())
+        return;
 
-    // 3. Serialize Outgoing State (Snapshot)
-    //    "Here is where I think I am."
+    // TODO: Acquire command buffer and swapchain texture
+    SDL_GPUCommandBuffer* cmdBuf = SDL_AcquireGPUCommandBuffer(GpuDevice);
+    if (!cmdBuf)
+    {
+        // No command buffer available, skip this frame
+        return;
+    }
+    // TODO: Provide to RenderThread via Render->ProvideGPUResources(cmd, swapchain)
+    SDL_GPUTexture* swapchainTex;
+    if (!SDL_AcquireGPUSwapchainTexture(cmdBuf, EngineWindow, &swapchainTex, nullptr, nullptr) || !swapchainTex)
+    {
+        // Failed to acquire texture
+        SDL_CancelGPUCommandBuffer(cmdBuf);
+        return;
+    }
+    
+    Render->ProvideGPUResources(cmdBuf, swapchainTex);
+
+    LOG_TRACE("[Main] GPU resources acquisition - TODO: Implement");
 }
 
-void StrigidEngine::SendNetworkEvent([[maybe_unused]] const std::string& eventData)
+void StrigidEngine::SubmitRenderCommands()
 {
-    STRIGID_ZONE_C(STRIGID_COLOR_NETWORK);
+    STRIGID_ZONE_N("Main_SubmitGPU");
+
+    // Retrieve command buffer from RenderThread
+    SDL_GPUCommandBuffer* cmdBuf = Render->TakeCommandBuffer();
+    if (!cmdBuf)
+    {
+        LOG_ERROR("[Main] Failed to take command buffer from RenderThread");
+        return;
+    }
+
+    Pacer.EndFrame(cmdBuf);
+    Render->NotifyFrameSubmitted();
+
+    LOG_TRACE("[Main] Submitted command buffer to GPU - TODO: Implement");
 }
 
 void StrigidEngine::CalculateFPS(double dt)
@@ -432,116 +284,14 @@ void StrigidEngine::CalculateFPS(double dt)
     FrameCount++;
     FpsTimer += dt;
 
-    // Update title every 1 second
     if (FpsTimer >= 1.0)
     {
         double fps = FrameCount / FpsTimer;
         double ms = (FpsTimer / FrameCount) * 1000.0;
 
-        std::string title = "StrigidEngine V0.1 | FPS: " + std::to_string((int)fps) +
-            " | Frame: " + std::to_string(ms) + "ms";
-
-        LOG_ALWAYS_F("FPS: %d", (int)fps);
-        //EngineWindow->SetTitle(title.c_str());
+        LOG_ALWAYS_F("Main FPS: %d | Frame: %.2fms", static_cast<int>(fps), ms);
 
         FrameCount = 0;
         FpsTimer = 0.0;
-    }
-}
-
-void StrigidEngine::RenderThreadMain()
-{
-    STRIGID_ZONE_C(STRIGID_COLOR_RENDERING);
-
-    // Create Window on render thread
-    EngineWindow = std::make_unique<Window>();
-    if (EngineWindow->Open(WindowTitle, WindowWidth, WindowHeight) < 0)
-    {
-        RenderInitResult.store(-1, std::memory_order_release);
-        {
-            std::lock_guard lock(RenderInitMutex);
-            bRenderThreadInitialized = true;
-        }
-        RenderInitCondVar.notify_one();
-        return;
-    }
-
-    // Signal successful initialization
-    RenderInitResult.store(0, std::memory_order_release);
-    {
-        std::lock_guard lock(RenderInitMutex);
-        bRenderThreadInitialized = true;
-    }
-    RenderInitCondVar.notify_one();
-
-    // Render thread loop
-    RenderThreadLoop();
-
-    // Cleanup window on render thread
-    EngineWindow->Shutdown();
-    EngineWindow.reset();
-}
-
-void StrigidEngine::RenderThreadLoop()
-{
-    uint8_t* wrapPtr = nullptr;
-    uint32_t wrapAfter = 0;
-    while (!bShouldExitRenderThread.load(std::memory_order_acquire))
-    {
-        STRIGID_ZONE_C(STRIGID_COLOR_RENDERING);
-        RenderCommand* cmd = CommandBuffer->GetCommand(wrapPtr, wrapAfter);
-        if (cmd == nullptr)
-        {
-            //std::this_thread::sleep_for(std::chrono::microseconds(10));
-            continue;
-        }
-        
-        switch (cmd->GetType())
-        {
-            case RenderCommandType::DrawInstanced:
-            {
-                DrawInstancedCommand* drawCmd = static_cast<DrawInstancedCommand*>(cmd);
-                EngineWindow->DrawInstances(drawCmd->instances, drawCmd->GetCount(), wrapPtr, wrapAfter);
-                break;
-            }
-            
-            case RenderCommandType::FrameEnd:
-            {
-                CalculateRenderFPS();
-                break;
-            }
-            
-        }
-    }
-}
-
-void StrigidEngine::CalculateRenderFPS()
-{
-    STRIGID_ZONE_N("RenderThread_UpdateFPS");
-    // FPS tracking for render thread
-    const uint64_t perfFrequency = SDL_GetPerformanceFrequency();
-
-    uint64_t currentFrameTime = SDL_GetPerformanceCounter();
-    double frameDt = static_cast<double>(currentFrameTime - lastFrameTime) / static_cast<double>(perfFrequency);
-    lastFrameTime = currentFrameTime;
-
-    renderFrameCount++;
-    renderFpsTimer += frameDt;
-
-    // Update title every 1 second
-    if (renderFpsTimer >= 1.0)
-    {
-        static uint32_t FrameNumber = renderFrameCount;
-        double renderFps = renderFrameCount / renderFpsTimer;
-        double renderMs = (renderFpsTimer / renderFrameCount) * 1000.0;
-
-        std::string title = "StrigidEngine V0.1 | Render FPS: " + std::to_string(static_cast<int>(renderFps)) +
-            " | Frame: " + std::to_string(FrameNumber) + " | Render: " + std::to_string(renderMs) + "ms";
-
-        EngineWindow->SetTitle(title.c_str());
-
-        FrameNumber += renderFrameCount;
-        renderFrameCount = 0;
-        renderFpsTimer = 0.0;
     }
 }

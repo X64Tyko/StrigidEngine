@@ -3,24 +3,32 @@
 #include <functional>
 #include <Logger.h>
 
-// Function pointer types for lifecycle callbacks
-enum class LifecycleType
-{
-    OnCreate,
-    Update,
-    FixedUpdate,
-    OnDestroy
-};
 
-// Type-erased function wrapper for lifecycle callbacks
-struct LifecycleFunction
-{
-    LifecycleType Type;
-    void* FunctionPtr;  // Type-erased function pointer
-    void* CachedEntity; // Cached entity instance (type-erased)
+// Helper concept to detect if T has a specific method
+template<typename T> concept HasOnCreate = requires(T t) { t.OnCreate(); };
+template<typename T> concept HasOnDestroy = requires(T t) { t.OnDestroy(); };
+template<typename T> concept HasUpdate = requires(T t, double dt) { t.Update(dt); };
+template<typename T> concept HasPrePhysics = requires(T t, double dt) { t.PrePhysics(dt); };
+template<typename T> concept HasPostPhysics = requires(T t, double dt) { t.PostPhysics(dt); };
+template<typename T> concept HasOnActivate = requires(T t) { t.OnActivate(); };
+template<typename T> concept HasOnDeactivate = requires(T t) { t.OnDeactivate(); };
+template<typename T> concept HasOnCollide = requires(T t) { t.OnCollide(); };
+template<typename T> concept HasDefineSchema = requires(T t) { t.DefineSchema(); };
 
-    // Invoke function on entity at given index in component arrays
-    void (*Invoker)(void* funcPtr, void* cachedEntity, void** componentArrays, uint32_t index, double dt);
+class Registry;
+
+using ViewFactory = void(*)(Registry&, EntityID, void* outStorage);
+using UpdateFunc =  void(*)(double dt, void* storage);
+using HydrateFunc = void(*)(void**, uint32_t, void*);
+
+struct EntityMeta {
+    ViewFactory GetView = nullptr;
+    size_t ViewSize = 0;
+    
+    UpdateFunc PrePhys = nullptr;
+    UpdateFunc PostPhys = nullptr;
+    UpdateFunc Update = nullptr;
+    HydrateFunc Hydrate = nullptr;
 };
 
 class MetaRegistry {
@@ -30,34 +38,65 @@ public:
         return instance;
     }
 
-    typedef std::tuple<ComponentSignature, std::vector<ComponentMeta>, std::vector<LifecycleFunction>> ComponentDef;
-    std::unordered_map<ClassID, ComponentDef> MetaComponents;
+    typedef std::tuple<ComponentSignature, std::vector<ComponentMeta>> ComponentDef;
+    std::unordered_map<ClassID, ComponentDef> ClassToArchetype;
+    std::unordered_map<Signature, std::vector<ClassID>> ArchetypeToClass;
+    EntityMeta EntityGetters[4096];
 
-    void RegisterPrefab([[maybe_unused]] const char* name)
+    template <typename T>
+    void RegisterPrefab()
     {
-    }
-
-    void RegisterSystem(const char* name,[[maybe_unused]] void* systemPtr)
-    {
-        LOG_INFO_F("RegisterSystem %s", name);
+        const ClassID ID = T::StaticClass();
+        EntityGetters[ID].GetView = [](Registry& reg, EntityID id, void* outStorage) {
+            T* view = new (outStorage) T();
+            view->Reg = &reg;
+            view->ID = id;
+        };
+        EntityGetters[ID].ViewSize = sizeof(T);
+        
+        if constexpr (HasUpdate<T>)
+        {
+            EntityGetters[ID].Update = []([[maybe_unused]] double dt,[[maybe_unused]]  void* storage)
+            {
+                T* view = (T*)storage;
+                view->Update(dt);
+            };
+        }
+        
+        if constexpr (HasPrePhysics<T>)
+        {
+            EntityGetters[ID].PrePhys = []([[maybe_unused]] double dt,[[maybe_unused]]  void* storage)
+            {
+                T* view = (T*)storage;
+                view->PrePhysics(dt);
+            };
+        }
+        
+        if constexpr (HasPostPhysics<T>)
+        {
+            EntityGetters[ID].PostPhys = []([[maybe_unused]] double dt,[[maybe_unused]]  void* storage)
+            {
+                T* view = (T*)storage;
+                view->PostPhysics(dt);
+            };
+        }
+        
+        EntityGetters[ID].Hydrate = [](void** componentArrays, uint32_t index, void* storage)
+        {
+            T* view = (T*)storage;
+            view->Hydrate(componentArrays, index);
+        };
     }
 
     template <typename C, typename T>
     void RegisterPrefabComponent()
     {
-        ComponentDef& Meta = MetaComponents[GetClassID<C>()];
+        const ClassID ID = C::StaticClass();
+        ComponentDef& Meta = ClassToArchetype[ID];
         std::get<ComponentSignature>(Meta).set(GetComponentTypeID<T>() - 1);
         std::get<std::vector<ComponentMeta>>(Meta).push_back({GetComponentTypeID<T>(), sizeof(T), alignof(T), 0});
         LOG_INFO_F("RegisterPrefabComponent %s", typeid(T).name());
         LOG_INFO_F("Added %i to class %s ", GetComponentTypeID<T>(), typeid(C).name());
-    }
-
-    template <typename C>
-    void RegisterLifecycleFunction(LifecycleType type, void* funcPtr, void* cachedEntity, auto invoker)
-    {
-        ComponentDef& Meta = MetaComponents[GetClassID<C>()];
-        std::get<std::vector<LifecycleFunction>>(Meta).push_back({type, funcPtr, cachedEntity, invoker});
-        LOG_INFO_F("RegisterLifecycleFunction for class %s", typeid(C).name());
     }
 };
 
