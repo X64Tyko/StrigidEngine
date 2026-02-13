@@ -91,7 +91,7 @@ bool StrigidEngine::Initialize(const char* title, int width, int height)
     std::uniform_real_distribution<float> posZ(-500.0f, -200.0f);
     std::uniform_real_distribution<float> color(0.2f, 1.0f);
 
-    for (int i = 0; i < 1000000; ++i)
+    for (int i = 0; i < 500000; ++i)
     {
         CubeEntity cube;
         EntityID id = RegistryPtr->Create<CubeEntity>();
@@ -156,18 +156,11 @@ void StrigidEngine::Run()
         // Service render thread (check for GPU resource requests or submit commands)
         ServiceRenderThread();
 
-        // Frame limiter - not here bro!
-        /*
-        if (targetFrameTime > 0.0)
-        {
-            WaitForTiming(frameStartCounter, perfFrequency);
-        }
-        */
-
         // FPS tracking
         STRIGID_FRAME_MARK();
         CalculateFPS(dt);
         
+        // Limiting this for now, don't need to blow up a core spinning through here
         std::this_thread::sleep_for(std::chrono::microseconds(1));
     }
 

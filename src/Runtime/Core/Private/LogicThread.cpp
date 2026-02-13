@@ -14,8 +14,8 @@ void LogicThread::Initialize(Registry* registry, const EngineConfig* config, int
     WindowHeight = windowHeight;
 
     // Allocate 3 FramePackets for triple buffering
-    StagingPacket = new FramePacket{};
-    FramePacket* mailboxPacket = new FramePacket{};
+    StagingPacket = std::make_shared<FramePacket>();
+    std::shared_ptr<FramePacket> mailboxPacket = std::make_shared<FramePacket>();
     // Third packet will be allocated by RenderThread as its VisualPacket
 
     Mailbox.store(mailboxPacket, std::memory_order_release);
@@ -38,6 +38,7 @@ void LogicThread::Stop()
 
 void LogicThread::Join()
 {
+    auto threadID = Thread.get_id();
     if (Thread.joinable())
     {
         Thread.join();
@@ -45,11 +46,11 @@ void LogicThread::Join()
     }
 
     // Cleanup mailbox
-    delete StagingPacket;
-    delete Mailbox.load(std::memory_order_acquire);
+    StagingPacket = nullptr;
+    Mailbox.store(nullptr, std::memory_order_release);
 }
 
-FramePacket* LogicThread::ExchangeMailbox(FramePacket* visualPacket)
+std::shared_ptr<FramePacket> LogicThread::ExchangeMailbox(std::shared_ptr<FramePacket> visualPacket)
 {
     // RenderThread calls this to swap its visualPacket with Mailbox
     // Returns the mailbox packet (which has new data from LogicThread)
@@ -217,7 +218,7 @@ void LogicThread::PublishFramePacket()
 {
     // Atomic swap: Staging ↔ Mailbox
     // After this, RenderThread can see the new packet
-    FramePacket* old = Mailbox.exchange(StagingPacket, std::memory_order_acq_rel);
+    std::shared_ptr<FramePacket> old = Mailbox.exchange(StagingPacket, std::memory_order_acq_rel);
     StagingPacket = old; // Reuse the old mailbox packet for next frame
 }
 

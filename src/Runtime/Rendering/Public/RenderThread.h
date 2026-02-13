@@ -63,7 +63,7 @@ private:
     void ResizeInstanceBuffer(size_t NewSize);
 
     // Lifecycle Methods
-    void SnapshotSparseArrays(FramePacket* packet); // Copy Transform/Render data on new FrameNumber
+    void SnapshotSparseArrays(std::shared_ptr<FramePacket> packet); // Copy Transform/Render data on new FrameNumber
     void RequestGPUResources();          // Signal main thread early
     void WaitForGPUResources();          // Spin-wait for atomics to be filled
     float CalculateInterpolationAlpha(); // Calculate alpha from LogicThread's accumulator
@@ -88,7 +88,7 @@ private:
     uint32_t LastFrameNumber = 0;
     
     // Current frame packet (for accessing camera matrices)
-    FramePacket* CurrentFramePacket = nullptr;
+    std::shared_ptr<FramePacket> CurrentFramePacket = nullptr;
 
     // Cached pointers to sparse arrays (set once, avoid ECS queries)
     void* TransformArrayPtr = nullptr;

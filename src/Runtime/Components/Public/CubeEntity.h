@@ -1,7 +1,6 @@
 #pragma once
 
 #include "Transform.h"
-#include "Velocity.h"
 #include "ColorData.h"
 #include "EntityView.h"
 #include "Schema.h"
@@ -27,8 +26,10 @@ public:
     }
 
     // Reflection - register components and lifecycle functions
+    // I don't like this... but I'm spinning my wheels fighting the static initialize
+    // I'll come back.
     static constexpr auto DefineSchema() {
-        return Schema::Create(
+        return EntityView<T>::DefineSchema().Extend(
             &BaseCube::transform,
             &BaseCube::color
         );

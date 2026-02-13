@@ -44,6 +44,7 @@ void RenderThread::Stop()
 
 void RenderThread::Join()
 {
+    auto threadID = Thread.get_id();
     if (Thread.joinable())
     {
         Thread.join();
@@ -79,7 +80,7 @@ SDL_GPUCommandBuffer* RenderThread::TakeCommandBuffer()
 void RenderThread::ThreadMain()
 {
     // Allocate our own VisualPacket (third packet in triple buffer)
-    FramePacket* visualPacket = new FramePacket{};
+    std::shared_ptr<FramePacket> visualPacket = std::make_shared<FramePacket>();
 
     // TODO: Cache sparse array pointers (once they exist)
     // TransformArrayPtr = RegistryPtr->GetSparseArray<Transform>();
@@ -115,14 +116,14 @@ void RenderThread::ThreadMain()
         }
         
         // Don't start another frame if the previous one hasn't been submitted
-        while (!bFrameSubmitted.load(std::memory_order_acquire))
+        while (!bFrameSubmitted.load(std::memory_order_acquire) && bIsRunning.load(std::memory_order_acquire))
         {
             std::this_thread::yield();
         }
         bFrameSubmitted.store(false, std::memory_order_release);
     
         // Poll mailbox for new frame - exchange our visualPacket with LogicThread's mailbox
-        FramePacket* newPacket = LogicPtr->ExchangeMailbox(visualPacket);
+        std::shared_ptr<FramePacket> newPacket = LogicPtr->ExchangeMailbox(visualPacket);
         if (newPacket->FrameNumber > LastFrameNumber)
         {
             visualPacket = newPacket;
@@ -171,7 +172,7 @@ void RenderThread::ThreadMain()
         SignalReadyToSubmit();
     }
 
-    delete visualPacket;
+    visualPacket = nullptr;
 }
 
 void RenderThread::ResizeTransferBuffer(size_t NewSize)
@@ -228,7 +229,7 @@ void RenderThread::ResizeInstanceBuffer(size_t NewSize)
     LOG_INFO_F("[RenderThread] Instance buffer resized to %zu instances", InstanceBufferCapacity);
 }
 
-void RenderThread::SnapshotSparseArrays(FramePacket* packet)
+void RenderThread::SnapshotSparseArrays(std::shared_ptr<FramePacket> packet)
 {
     STRIGID_ZONE_N("Render_Snapshot");
 
@@ -294,7 +295,7 @@ void RenderThread::WaitForGPUResources()
     STRIGID_ZONE_N("Render_WaitGPU");
 
     // Spin-wait for main thread to provide resources
-    while (CmdBufferAtomic.load(std::memory_order_acquire) == nullptr)
+    while (CmdBufferAtomic.load(std::memory_order_acquire) == nullptr && bIsRunning.load(std::memory_order_acquire))
     {
         std::this_thread::yield();
     }
@@ -382,7 +383,7 @@ void RenderThread::WaitForCommandBuffer()
     STRIGID_ZONE_N("Render_CmdBuf");
 
     // Spin-wait for main thread to provide resources
-    while (CmdBufferAtomic.load(std::memory_order_acquire) == nullptr)
+    while (CmdBufferAtomic.load(std::memory_order_acquire) == nullptr && bIsRunning.load(std::memory_order_acquire))
     {
         std::this_thread::yield();
     }
@@ -449,7 +450,7 @@ void RenderThread::WaitForSwapchainTexture()
     STRIGID_ZONE_N("Render_Swapchain");
 
     // Spin-wait for main thread to provide resources
-    while (SwapchainTextureAtomic.load(std::memory_order_acquire) == nullptr)
+    while (SwapchainTextureAtomic.load(std::memory_order_acquire) == nullptr && bIsRunning.load(std::memory_order_acquire))
     {
         std::this_thread::yield();
     }

@@ -26,7 +26,7 @@ public:
     void Join();
 
     // Mailbox access for RenderThread
-    FramePacket* ExchangeMailbox(FramePacket* visualPacket); // CAS swap: give visualPacket, get mailbox packet
+    std::shared_ptr<FramePacket> ExchangeMailbox(std::shared_ptr<FramePacket> visualPacket); // CAS swap: give visualPacket, get mailbox packet
 
     // Allow RenderThread to peek at accumulator for interpolation alpha calculation
     double GetAccumulator() const { return Accumulator; }
@@ -55,8 +55,8 @@ private:
     // Logic writes → StagingPacket
     // CAS swap → Mailbox
     // Render reads → VisualPacket (Render owns this pointer)
-    FramePacket* StagingPacket = nullptr;
-    std::atomic<FramePacket*> Mailbox{nullptr};
+    std::shared_ptr<FramePacket> StagingPacket = nullptr;
+    std::atomic<std::shared_ptr<FramePacket>> Mailbox{nullptr};
 
     // Note: RenderThread will manage its own VisualPacket pointer
 

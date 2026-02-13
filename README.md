@@ -2,11 +2,13 @@
 
 ## Executive Summary
 
+**Purpose:** A personal R&D sandbox designed to strip away modern engine abstractions and validate that a strict data-oriented architecture can deliver sub-millisecond latency.
+
 **Objective:** A high-performance, data-oriented engine prioritizing mechanical elegance and input-to-photon latency.
 
 **Constraint:** Zero "allocation-per-frame" in hot paths. Scale to 100,000+ active entities at >250 FPS.
 
-**Philosophy:** White-box architecture - users can understand, debug, and modify the engine without black-box abstractions.
+**Philosophy:** White-box architecture - users can understand, debug, and modify the engine without black-box abstractions. "Build it to break it." I use this project to stress-test architectural theories (like lock-free triple-buffering) that are too risky to implement directly into a live commercial product.
 
 ---
 
@@ -373,7 +375,84 @@ std::vector<InterpEntry> InterpBuffer;  // Only visible entities
 
 ---
 
-## 4. Future Roadmap (Weeks 10-14)
+## 4. Networking Architecture: The Deterministic Bridge
+   Philosophy: Server authority with client-side autonomy. Reject the "destroy and recreate" pattern of standard engines in favor of "bind and reconcile."
+
+### I. The IO Model (Sentinel-Driven)
+Networking is treated as Input, not Logic.
+
+Socket Pump: The Sentinel (Main) Thread owns the GameNetworkingSockets (GNS) context. It pumps callbacks and buffers packets.
+
+Handoff: Packets are atomic-swapped into the Brain (Logic) Thread's mailbox at the start of the FixedUpdate window.
+
+Benefit: The Logic thread never burns CPU cycles waiting on socket syscalls or packet decryption. It only processes hot, pre-fetched data.
+    
+- This is going to need soe testing and work, if our net tick is 128 and our fixed update is 60 we're creating a lot of our own latency.
+
+### II. Identity & Ownership (The 8-Bit Lock)
+We embed ownership directly into the 64-bit EntityID to allow for O(1) authority checks without cache misses.
+
+```C++
+// Swappable design: Implement GetIndex(), IsValid(), operator== for custom implementations
+union EntityID
+{
+    uint64_t Value;
+
+    // Bitfield layout
+    struct
+    {
+        uint64_t Index      : 20; // 1 Million entities (array slot)
+        uint64_t Generation : 16; // 65k recycles (server-grade stability)
+        uint64_t TypeID     : 12; // 4k class types (function dispatch)
+        uint64_t OwnerID    : 8;  // 256 owners (network routing)
+        uint64_t MetaFlags  : 8;  // Reserved for future use
+    };           |
+
+Fast Auth Checks: bool IsMine(EntityID id) { return (id >> 56) == LocalClientID; }
+```
+Routing: Packets are inherently filterable by looking at the second byte of the EntityID.
+
+### III. The "Raw Memory" Protocol
+We reject high-level serialization layers (like FArchive) in favor of Memory Replication.
+
+Packet Structure: A trimmed version of the Render Thread's InstanceData.
+    
+- This is neat, but we'll also likely need to replicate data from the Shell data as well, How do we allow quick copy packet creation as well as user marked replicated data?
+
+Delta Compression: We memcpy the current simulation state against the last acknowledged state (XOR delta) directly from the Chunk memory.
+
+Customizability: Users can define NetSerialize hooks for specific components, but the default is a raw memory block copy.
+
+- Add this to the lifetime functionality in the EntityView?
+
+### IV. R&D Hypothesis: Prediction Buffers & Object Linking
+The Problem:
+Standard engines (like Unreal) handle prediction errors by destroying the client's predicted actor and spawning a new server-authoritative actor. This can break gameplay logic references and causes visual popping.
+
+The Strigid Solution: "Prediction Binding"
+
+Spawn Prediction: Client spawns a "Predicted Entity" immediately.
+
+Server Handshake: Server sends the authoritative spawn.
+
+Binding: Instead of destroying the local entity, Strigid binds the Server ID to the Local ID. The local entity adopts the Server's authority but keeps its local memory address active.
+
+- Leveraging rollback and resim systems for this could prove useful, so that the server can insert the predicted object exactly where it exists on the client.
+
+### Experimental: "Context-Aware Prediction Paging"
+To solve the memory cost of full-world rollback, we are testing a Prediction Buffer system:
+
+Phase 1 (Identify): During FixedUpdate, any component touched by a predicted input is flagged.
+
+Phase 2 (Cache): flagged components are copied to a linear "Prediction Page" before modification.
+
+Phase 3 (Rollback): On misprediction, we memcpy only the Prediction Page back into the Core, rather than restoring the entire world state.
+
+Mitigation: To prevent "butterfly effect" desync (where a resimulation touches an object that wasn't in the buffer), we speculatively cache objects within the bounding volume of the predicted entity.
+
+---
+
+## 5. Future Roadmap (Weeks 10-14)
 
 ### Phase 4: The Three-Phase Sandwich
 
@@ -483,7 +562,7 @@ struct BoneArray<64> {  // Fixed-size, inline storage
 
 ---
 
-## 5. Performance Targets
+## 6. Performance Targets
 
 | Metric                  | Target            | Current Status      |
 |-------------------------|-------------------|---------------------|
@@ -496,7 +575,7 @@ struct BoneArray<64> {  // Fixed-size, inline storage
 
 ---
 
-## 6. Architectural Rules
+## 7. Architectural Rules
 
 1. **Macro-First:** Use `STRIGID_REGISTER_CLASS(T)` before class definitions.
 2. **PoD Only:** No `std::vector` or `std::string` inside Components. Use fixed-size inline arrays or handles.
@@ -508,7 +587,7 @@ struct BoneArray<64> {  // Fixed-size, inline storage
 
 ---
 
-## 7. Data Structures Reference
+## 8. Data Structures Reference
 
 ### FramePacket
 ```cpp
@@ -597,7 +676,7 @@ struct DrawCall {
 
 ---
 
-## 8. Configuration
+## 9. Configuration
 
 ```cpp
 struct EngineConfig {
@@ -617,7 +696,7 @@ struct EngineConfig {
 
 ---
 
-## 9. Current Status (Week 7)
+## 10. Current Status (Week 7)
 
 **Completed:**
 - ✅ Strigid Trinity architecture fully operational

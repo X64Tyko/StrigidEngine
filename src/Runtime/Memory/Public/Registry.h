@@ -138,7 +138,7 @@ EntityID Registry::Create()
     uint32_t Index = Id.GetIndex();
     if (Index >= EntityIndex.size())
     {
-        EntityIndex.resize(Index + 1);
+        EntityIndex.resize(Index * 2);
     }
 
     EntityRecord& Record = EntityIndex[Index];
@@ -146,9 +146,6 @@ EntityID Registry::Create()
     Record.TargetChunk = Slot.TargetChunk;
     Record.Index = static_cast<uint16_t>(Slot.LocalIndex);
     Record.Generation = Id.GetGeneration();
-
-    // TODO: Placement new for T instance (Week 6)
-    // TODO: Auto-wire Ref<Component> members (Week 6)
 
     return Id;
 }
