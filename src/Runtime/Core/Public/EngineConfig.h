@@ -1,7 +1,7 @@
 ﻿#pragma once
 
 struct EngineConfig {
-    // 1. Visuals (Variable) - e.g., 144Hz Monitor
+    // 1. Variadic Update, let the Logic thread run uncapped or limit its updates
     int TargetFPS = 0; // 0 = Uncapped
 
     // 2. Physics/Simulation (Fixed High) - e.g., 60Hz or 128Hz
