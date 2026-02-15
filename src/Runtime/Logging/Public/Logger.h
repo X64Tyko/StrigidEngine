@@ -16,7 +16,7 @@ enum class LogLevel
     Warning = 3,
     Error = 4,
     Fatal = 5,
-    
+
     Always = 0xFF
 };
 
@@ -32,26 +32,26 @@ public:
 
     // Initialize logger with file output
     void Init(const std::string& LogFilePath = "StrigidEngine.log", LogLevel inMinLevel = LogLevel::Debug);
-    
+
     // Shut down and flush file
     void Shutdown();
-    
+
     // Set minimum log level filter
     void SetMinLevel(LogLevel Level) { MinLevel = Level; }
-    
+
     // Core logging function
     void Log(LogLevel Level, const char* File, int Line, const std::string& Message);
-    
+
 private:
     Logger() = default;
     ~Logger() { Shutdown(); }
     Logger(const Logger&) = delete;
     Logger& operator=(const Logger&) = delete;
-    
+
     std::string GetTimestamp();
     std::string LevelToString(LogLevel Level);
     std::string LevelToColor(LogLevel Level);
-    
+
 private:
     std::ofstream LogFile;
     std::mutex Mutex;

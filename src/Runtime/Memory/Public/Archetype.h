@@ -26,8 +26,8 @@ public:
     std::unordered_set<uint16_t> ResidentClassIDs;
 
     // Entity capacity and tracking
-    uint32_t EntitiesPerChunk = 0;  // How many entities fit in one chunk
-    uint32_t TotalEntityCount = 0;  // Total entities across all chunks
+    uint32_t EntitiesPerChunk = 0; // How many entities fit in one chunk
+    uint32_t TotalEntityCount = 0; // Total entities across all chunks
 
     // Chunk storage
     std::vector<Chunk*> Chunks;
@@ -45,13 +45,14 @@ public:
         uint32_t LocalIndex;
         uint32_t GlobalIndex; // Index across all chunks
     };
+
     EntitySlot PushEntity();
 
     // Remove an entity (swap-and-pop, deferred via active mask)
     void RemoveEntity(size_t ChunkIndex, uint32_t LocalIndex);
 
     // Get typed array pointer for a component in a specific chunk
-    template<typename T>
+    template <typename T>
     T* GetComponentArray(Chunk* TargetChunk, ComponentTypeID TypeID)
     {
         auto It = ComponentLayout.find(TypeID);
@@ -61,8 +62,8 @@ public:
         const ComponentMeta& Meta = It->second;
         return reinterpret_cast<T*>(TargetChunk->GetBuffer(static_cast<uint32_t>(Meta.OffsetInChunk)));
     }
-    
-    template<typename T>
+
+    template <typename T>
     T* GetComponent(Chunk* TargetChunk, ComponentTypeID TypeID, uint32_t Index)
     {
         // TODO: need to verify this Index is valid
@@ -76,7 +77,7 @@ public:
     void BuildLayout(const std::vector<ComponentMeta>& Components);
 
     // Edge graph for archetype transitions (future optimization)
-    std::unordered_map<ComponentTypeID, Archetype*> AddEdges;    // Add component X -> go to archetype Y
+    std::unordered_map<ComponentTypeID, Archetype*> AddEdges; // Add component X -> go to archetype Y
     std::unordered_map<ComponentTypeID, Archetype*> RemoveEdges; // Remove component X -> go to archetype Y
 
 private:

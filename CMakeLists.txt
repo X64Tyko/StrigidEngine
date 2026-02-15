@@ -33,7 +33,7 @@ if(ENABLE_TRACY)
     # 1 = Coarse (frame/system level, ~1-2% overhead)
     # 2 = Medium (includes per-chunk/subsystem zones, ~5-10% overhead)
     # 3 = Fine (includes per-entity zones, ~50%+ overhead)
-    set(TRACY_PROFILE_LEVEL "1" CACHE STRING "Tracy profiling detail level (1=Coarse, 2=Medium, 3=Fine)")
+    set(TRACY_PROFILE_LEVEL "3" CACHE STRING "Tracy profiling detail level (1=Coarse, 2=Medium, 3=Fine)")
     set_property(CACHE TRACY_PROFILE_LEVEL PROPERTY STRINGS "1" "2" "3")
 
     # Tracy requires these source files

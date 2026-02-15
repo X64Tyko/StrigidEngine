@@ -14,7 +14,8 @@ public:
     Ref<ColorData> color;
 
     // Lifecycle hooks
-    void PrePhysics([[maybe_unused]] double dt) {
+    void PrePhysics([[maybe_unused]] double dt)
+    {
         constexpr float TWO_PI = 6.283185307179586f;
 
         transform->RotationX += (float)dt;
@@ -28,7 +29,8 @@ public:
     // Reflection - register components and lifecycle functions
     // I don't like this... but I'm spinning my wheels fighting the static initialize
     // I'll come back.
-    static constexpr auto DefineSchema() {
+    static constexpr auto DefineSchema()
+    {
         return EntityView<T>::DefineSchema().Extend(
             &BaseCube::transform,
             &BaseCube::color
@@ -37,6 +39,7 @@ public:
 };
 
 STRIGID_REGISTER_ENTITY(CubeEntity);
+
 class CubeEntity : public BaseCube<CubeEntity>
 {
 public:
@@ -47,14 +50,17 @@ public:
 };
 
 STRIGID_REGISTER_ENTITY(SuperCube);
+
 class SuperCube : public BaseCube<SuperCube>
 {
 public:
     // Logic
-    void FixedUpdate([[maybe_unused]] double dt) {
+    void FixedUpdate([[maybe_unused]] double dt)
+    {
+        
         constexpr float TWO_PI = 6.283185307179586f;
 
-        transform->RotationX += (float)dt;
+        transform->RotationX += ((float)dt);
         if (transform->RotationX > TWO_PI) transform->RotationX -= TWO_PI;
         transform->RotationY += (float)dt * 0.7f;
         if (transform->RotationY > TWO_PI) transform->RotationY -= TWO_PI;
@@ -65,7 +71,8 @@ public:
     }
 
     // Reflection
-    static constexpr auto DefineSchema() {
+    static constexpr auto DefineSchema()
+    {
         return BaseCube<SuperCube>::DefineSchema();
     }
 };

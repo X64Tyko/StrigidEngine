@@ -20,18 +20,18 @@ public:
 
     // Entity creation with lazy archetype caching
     // Usage: EntityID player = Registry::Get().Create<PlayerController>();
-    template<typename T>
+    template <typename T>
     EntityID Create();
 
     // Destroy an entity (deferred until end of frame)
     void Destroy(EntityID Id);
 
     // Get component from entity
-    template<typename T>
+    template <typename T>
     T* GetComponent(EntityID Id);
 
     // Check if entity has component
-    template<typename T>
+    template <typename T>
     bool HasComponent(EntityID Id);
 
     // Get or create archetype for a given signature
@@ -62,7 +62,7 @@ public:
 private:
     // Initialize archetypes with data from MetaRegistry
     void InitializeArchetypes();
-    
+
     // Global entity lookup table (indexed by EntityID.GetIndex())
     std::vector<EntityRecord> EntityIndex;
 
@@ -85,13 +85,13 @@ private:
     void FreeEntityID(EntityID Id);
 
     // Helper: Build signature from component list
-    template<typename... Components>
+    template <typename... Components>
     Signature BuildSignature();
 };
 
 // Template implementations must be in header
 
-template<typename T>
+template <typename T>
 EntityID Registry::Create()
 {
     // Static local caching - archetype is calculated once per type T
@@ -110,12 +110,12 @@ EntityID Registry::Create()
             // FATAL: Entity type not registered
             const char* typeName = typeid(T).name();
             LOG_ERROR_F("FATAL: Entity type '%s' not registered! Did you forget STRIGID_REGISTER_ENTITY(%s)?",
-                       typeName, typeName);
+                        typeName, typeName);
 
             // In debug builds, assert. In release, fail gracefully
-            #ifdef _DEBUG
-                assert(false && "Entity type not registered - add STRIGID_REGISTER_ENTITY macro");
-            #endif
+#ifdef _DEBUG
+            assert(false && "Entity type not registered - add STRIGID_REGISTER_ENTITY macro");
+#endif
 
             // Return invalid entity ID
             return EntityID{};
@@ -150,7 +150,7 @@ EntityID Registry::Create()
     return Id;
 }
 
-template<typename T>
+template <typename T>
 T* Registry::GetComponent(EntityID Id)
 {
     if (!Id.IsValid())
@@ -181,22 +181,22 @@ T* Registry::GetComponent(EntityID Id)
     return &ComponentArray[Record.Index];
 }
 
-template<typename T>
+template <typename T>
 bool Registry::HasComponent(EntityID Id)
 {
     return GetComponent<T>(Id) != nullptr;
 }
 
-template<typename... Components>
+template <typename... Components>
 Signature Registry::BuildSignature()
 {
     Signature Sig;
     // Fold expression to set all component bits
-    ((Sig.Set(GetComponentTypeID<Components>() -1)), ...);
+    ((Sig.Set(GetComponentTypeID<Components>() - 1)), ...);
     return Sig;
 }
 
-template<typename... Components>
+template <typename... Components>
 std::vector<Archetype*> Registry::Query()
 {
     std::vector<Archetype*> Results;
@@ -208,6 +208,6 @@ std::vector<Archetype*> Registry::Query()
             Results.push_back(Arch.second);
         }
     }
-    
+
     return Results;
 }

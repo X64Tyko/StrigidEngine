@@ -7,7 +7,7 @@ struct alignas(16) Velocity
     float X = 0.0f;
     float Y = 0.0f;
     float Z = 0.0f;
-    float _pad = 0.0f;  // Padding for alignment
+    float _pad = 0.0f; // Padding for alignment
 };
 
 static_assert(sizeof(Velocity) == 16, "Velocity must be 16 bytes");

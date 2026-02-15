@@ -16,14 +16,15 @@
 #include "Transform.h"
 #include "CompiledShaders.h"
 
-void RenderThread::Initialize(Registry* registry, LogicThread* logic, const EngineConfig* config, SDL_GPUDevice* device, SDL_Window* window)
+void RenderThread::Initialize(Registry* registry, LogicThread* logic, const EngineConfig* config, SDL_GPUDevice* device,
+                              SDL_Window* window)
 {
     RegistryPtr = registry;
     LogicPtr = logic;
     ConfigPtr = config;
     GpuDevice = device;
     EngineWindow = window;
-    
+
     LOG_INFO("[RenderThread] Initialized");
 }
 
@@ -80,7 +81,7 @@ SDL_GPUCommandBuffer* RenderThread::TakeCommandBuffer()
 void RenderThread::ThreadMain()
 {
     // Allocate our own VisualPacket (third packet in triple buffer)
-    std::shared_ptr<FramePacket> visualPacket = std::make_shared<FramePacket>();
+    auto visualPacket = std::make_shared<FramePacket>();
 
     // TODO: Cache sparse array pointers (once they exist)
     // TransformArrayPtr = RegistryPtr->GetSparseArray<Transform>();
@@ -89,7 +90,7 @@ void RenderThread::ThreadMain()
     while (bIsRunning.load(std::memory_order_acquire))
     {
         STRIGID_ZONE_C(STRIGID_COLOR_RENDERING);
-        
+
         // FPS tracking - measure at start of frame
         if (LastFpsCounter == 0)
         {
@@ -109,19 +110,19 @@ void RenderThread::ThreadMain()
             double fps = FpsFrameCount / FpsTimer;
             double ms = (FpsTimer / FpsFrameCount) * 1000.0;
 
-            LOG_ALWAYS_F("Render FPS: %d | Frame: %.2fms", static_cast<int>(fps), ms);
+            LOG_DEBUG_F("Render FPS: %d | Frame: %.2fms", static_cast<int>(fps), ms);
 
             FpsFrameCount = 0;
             FpsTimer = 0.0;
         }
-        
+
         // Don't start another frame if the previous one hasn't been submitted
         while (!bFrameSubmitted.load(std::memory_order_acquire) && bIsRunning.load(std::memory_order_acquire))
         {
             std::this_thread::yield();
         }
         bFrameSubmitted.store(false, std::memory_order_release);
-    
+
         // Poll mailbox for new frame - exchange our visualPacket with LogicThread's mailbox
         std::shared_ptr<FramePacket> newPacket = LogicPtr->ExchangeMailbox(visualPacket);
         if (newPacket->FrameNumber > LastFrameNumber)
@@ -141,7 +142,7 @@ void RenderThread::ThreadMain()
             bFrameSubmitted.store(true, std::memory_order_release);
             continue;
         }
-        
+
         // Request GPU resources early (before interpolation work)
         RequestGPUResources();
 
@@ -282,7 +283,7 @@ void RenderThread::SnapshotSparseArrays(std::shared_ptr<FramePacket> packet)
     // Swap buffers
     std::swap(SnapshotPrevious, SnapshotCurrent);
 
-    LOG_DEBUG_F("[RenderThread] Snapshot captured: %u entities", entityCount);
+    //LOG_DEBUG_F("[RenderThread] Snapshot captured: %u entities", entityCount);
 }
 
 void RenderThread::RequestGPUResources()
@@ -341,7 +342,7 @@ bool RenderThread::InterpolateToTransferBuffer(float alpha)
         return false;
     }
 
-    InstanceData* instances = static_cast<InstanceData*>(mapped);
+    auto instances = static_cast<InstanceData*>(mapped);
 
     // Interpolate between SnapshotPrevious and SnapshotCurrent
     for (size_t i = 0; i < entityCount; ++i)
@@ -373,8 +374,8 @@ bool RenderThread::InterpolateToTransferBuffer(float alpha)
 
     SDL_UnmapGPUTransferBuffer(GpuDevice, TransferBuffer);
 
-    LOG_DEBUG_F("[RenderThread] Interpolated %zu instances (alpha=%.3f)", entityCount, alpha);
-    
+    //LOG_DEBUG_F("[RenderThread] Interpolated %zu instances (alpha=%.3f)", entityCount, alpha);
+
     return true;
 }
 
@@ -405,7 +406,7 @@ bool RenderThread::BuildCopyPassAndUniforms()
 
     // 1. Begin Copy Pass - Upload transfer buffer to instance buffer
     SDL_GPUCopyPass* copyPass = SDL_BeginGPUCopyPass(cmdBuf);
-    
+
     if (requiredSize > InstanceBufferCapacity)
     {
         ResizeInstanceBuffer(requiredSize);
@@ -426,7 +427,8 @@ bool RenderThread::BuildCopyPassAndUniforms()
     // 2. Push vertex uniforms (view/projection matrix from FramePacket)
     if (CurrentFramePacket)
     {
-        SDL_PushGPUVertexUniformData(cmdBuf, 0, CurrentFramePacket->View.ProjectionMatrix.m, sizeof(CurrentFramePacket->View.ProjectionMatrix.m));
+        SDL_PushGPUVertexUniformData(cmdBuf, 0, CurrentFramePacket->View.ProjectionMatrix.m,
+                                     sizeof(CurrentFramePacket->View.ProjectionMatrix.m));
     }
     else
     {
@@ -439,9 +441,9 @@ bool RenderThread::BuildCopyPassAndUniforms()
         };
         SDL_PushGPUVertexUniformData(cmdBuf, 0, ViewProjMatrix, sizeof(ViewProjMatrix));
     }
-    
+
     CmdBufferAtomic.store(cmdBuf, std::memory_order_release);
-    
+
     return true;
 }
 
@@ -450,7 +452,8 @@ void RenderThread::WaitForSwapchainTexture()
     STRIGID_ZONE_N("Render_Swapchain");
 
     // Spin-wait for main thread to provide resources
-    while (SwapchainTextureAtomic.load(std::memory_order_acquire) == nullptr && bIsRunning.load(std::memory_order_acquire))
+    while (SwapchainTextureAtomic.load(std::memory_order_acquire) == nullptr && bIsRunning.load(
+        std::memory_order_acquire))
     {
         std::this_thread::yield();
     }
@@ -459,10 +462,10 @@ void RenderThread::WaitForSwapchainTexture()
 void RenderThread::BuildRenderPass()
 {
     size_t entityCount = SnapshotCurrent.size();
-    
+
     SDL_GPUCommandBuffer* cmdBuf = CmdBufferAtomic.load(std::memory_order_acquire);
     SDL_GPUTexture* swapchainTex = SwapchainTextureAtomic.load(std::memory_order_acquire);
-    
+
     SDL_GPUColorTargetInfo colorTarget = {};
     colorTarget.texture = swapchainTex;
     colorTarget.clear_color = {0.5f, 0.0f, 0.1f, 1.0f};
@@ -470,7 +473,7 @@ void RenderThread::BuildRenderPass()
     colorTarget.store_op = SDL_GPU_STOREOP_STORE;
 
     SDL_GPURenderPass* renderPass = SDL_BeginGPURenderPass(cmdBuf, &colorTarget, 1, nullptr);
-    
+
     // 4. Bind pipeline and buffers
     SDL_BindGPUGraphicsPipeline(renderPass, Pipeline);
 
@@ -494,7 +497,7 @@ void RenderThread::BuildRenderPass()
 
     // 6. End render pass
     SDL_EndGPURenderPass(renderPass);
-    
+
     CmdBufferAtomic.store(cmdBuf, std::memory_order_release);
     SwapchainTextureAtomic.store(swapchainTex, std::memory_order_release);
 }
@@ -511,24 +514,24 @@ void RenderThread::SignalReadyToSubmit()
 void RenderThread::CreateCubeMesh()
 {
     STRIGID_ZONE_C(STRIGID_COLOR_RENDERING);
-    
+
     // Create vertex buffer
     SDL_GPUBufferCreateInfo vertexBufferInfo = {};
     vertexBufferInfo.usage = SDL_GPU_BUFFERUSAGE_VERTEX;
     vertexBufferInfo.size = sizeof(CubeMesh::Vertices);
-    
+
     VertexBuffer = SDL_CreateGPUBuffer(GpuDevice, &vertexBufferInfo);
     if (!VertexBuffer)
     {
         std::cerr << "Failed to create vertex buffer: " << SDL_GetError() << std::endl;
         return;
     }
-    
+
     // Upload vertex data
     SDL_GPUTransferBufferCreateInfo transferInfo = {};
     transferInfo.usage = SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD;
     transferInfo.size = sizeof(CubeMesh::Vertices);
-    
+
     SDL_GPUTransferBuffer* transferBuffer = SDL_CreateGPUTransferBuffer(GpuDevice, &transferInfo);
     void* mapped = SDL_MapGPUTransferBuffer(GpuDevice, transferBuffer, true); // true = cycle (wait if needed)
     std::memcpy(mapped, CubeMesh::Vertices, sizeof(CubeMesh::Vertices));
@@ -543,29 +546,29 @@ void RenderThread::CreateCubeMesh()
         return;
     }
     SDL_GPUCopyPass* copyPass = SDL_BeginGPUCopyPass(uploadCmd);
-    
+
     SDL_GPUTransferBufferLocation src = {};
     src.transfer_buffer = transferBuffer;
     src.offset = 0;
-    
+
     SDL_GPUBufferRegion dst = {};
     dst.buffer = VertexBuffer;
     dst.offset = 0;
     dst.size = sizeof(CubeMesh::Vertices);
-    
+
     SDL_UploadToGPUBuffer(copyPass, &src, &dst, false);
     SDL_EndGPUCopyPass(copyPass);
     SDL_SubmitGPUCommandBuffer(uploadCmd);
-    
+
     SDL_ReleaseGPUTransferBuffer(GpuDevice, transferBuffer);
-    
+
     // Create index buffer (similar process)
     SDL_GPUBufferCreateInfo indexBufferInfo = {};
     indexBufferInfo.usage = SDL_GPU_BUFFERUSAGE_INDEX;
     indexBufferInfo.size = sizeof(CubeMesh::Indices);
-    
+
     IndexBuffer = SDL_CreateGPUBuffer(GpuDevice, &indexBufferInfo);
-    
+
     // Upload index data
     transferInfo.size = sizeof(CubeMesh::Indices);
     transferBuffer = SDL_CreateGPUTransferBuffer(GpuDevice, &transferInfo);
@@ -582,31 +585,31 @@ void RenderThread::CreateCubeMesh()
         return;
     }
     copyPass = SDL_BeginGPUCopyPass(uploadCmd);
-    
+
     src.transfer_buffer = transferBuffer;
     src.offset = 0;
-    
+
     dst.buffer = IndexBuffer;
     dst.offset = 0;
     dst.size = sizeof(CubeMesh::Indices);
-    
+
     SDL_UploadToGPUBuffer(copyPass, &src, &dst, false);
     SDL_EndGPUCopyPass(copyPass);
     SDL_SubmitGPUCommandBuffer(uploadCmd);
-    
+
     SDL_ReleaseGPUTransferBuffer(GpuDevice, transferBuffer);
 }
 
 void RenderThread::CreateInstanceBuffer(size_t Capacity)
 {
     STRIGID_ZONE_C(STRIGID_COLOR_RENDERING);
-    
+
     InstanceBufferCapacity = Capacity;
-    
+
     SDL_GPUBufferCreateInfo bufferInfo = {};
     bufferInfo.usage = SDL_GPU_BUFFERUSAGE_VERTEX;
     bufferInfo.size = sizeof(InstanceData) * static_cast<uint32_t>(Capacity);
-    
+
     InstanceBuffer = SDL_CreateGPUBuffer(GpuDevice, &bufferInfo);
     if (!InstanceBuffer)
     {
@@ -617,7 +620,7 @@ void RenderThread::CreateInstanceBuffer(size_t Capacity)
 void RenderThread::CreateRenderPipeline()
 {
     STRIGID_ZONE_C(STRIGID_COLOR_RENDERING);
-    
+
     // Create vertex shader
     SDL_GPUShaderCreateInfo vertShaderInfo = {};
     vertShaderInfo.code = (const uint8_t*)CompiledShaders::VertexShader;
@@ -629,14 +632,14 @@ void RenderThread::CreateRenderPipeline()
     vertShaderInfo.num_storage_textures = 0;
     vertShaderInfo.num_storage_buffers = 0;
     vertShaderInfo.num_uniform_buffers = 1;
-    
+
     VertexShader = SDL_CreateGPUShader(GpuDevice, &vertShaderInfo);
     if (!VertexShader)
     {
         std::cerr << "Failed to create vertex shader: " << SDL_GetError() << std::endl;
         return;
     }
-    
+
     // Create fragment shader
     SDL_GPUShaderCreateInfo fragShaderInfo = {};
     fragShaderInfo.code = (const uint8_t*)CompiledShaders::FragmentShader;
@@ -648,47 +651,47 @@ void RenderThread::CreateRenderPipeline()
     fragShaderInfo.num_storage_textures = 0;
     fragShaderInfo.num_storage_buffers = 0;
     fragShaderInfo.num_uniform_buffers = 0;
-    
+
     FragmentShader = SDL_CreateGPUShader(GpuDevice, &fragShaderInfo);
     if (!FragmentShader)
     {
         std::cerr << "Failed to create fragment shader: " << SDL_GetError() << std::endl;
         return;
     }
-    
+
     std::cout << "Shaders created successfully!" << std::endl;
-    
+
     // Define vertex attributes
     SDL_GPUVertexAttribute vertexAttributes[5] = {};
-    
+
     // Location 0: vertex position (vec3)
     vertexAttributes[0].location = 0;
     vertexAttributes[0].format = SDL_GPU_VERTEXELEMENTFORMAT_FLOAT3;
     vertexAttributes[0].offset = 0;
     vertexAttributes[0].buffer_slot = 0;
-    
+
     // Location 1: instance position (vec3)
     vertexAttributes[1].location = 1;
     vertexAttributes[1].format = SDL_GPU_VERTEXELEMENTFORMAT_FLOAT3;
     vertexAttributes[1].offset = 0;
     vertexAttributes[1].buffer_slot = 1;
-    
+
     // Location 2: instance rotation (vec3)
     vertexAttributes[2].location = 2;
     vertexAttributes[2].format = SDL_GPU_VERTEXELEMENTFORMAT_FLOAT3;
-    vertexAttributes[2].offset = 16;  // Changed from 12 due to padding
+    vertexAttributes[2].offset = 16; // Changed from 12 due to padding
     vertexAttributes[2].buffer_slot = 1;
 
     // Location 3: instance scale (vec3)
     vertexAttributes[3].location = 3;
     vertexAttributes[3].format = SDL_GPU_VERTEXELEMENTFORMAT_FLOAT3;
-    vertexAttributes[3].offset = 32;  // Changed from 24 due to padding
+    vertexAttributes[3].offset = 32; // Changed from 24 due to padding
     vertexAttributes[3].buffer_slot = 1;
 
     // Location 4: instance color (vec4)
     vertexAttributes[4].location = 4;
     vertexAttributes[4].format = SDL_GPU_VERTEXELEMENTFORMAT_FLOAT4;
-    vertexAttributes[4].offset = 48;  // Changed from 36 due to padding
+    vertexAttributes[4].offset = 48; // Changed from 36 due to padding
     vertexAttributes[4].buffer_slot = 1;
 
     // Define vertex buffers
@@ -699,23 +702,23 @@ void RenderThread::CreateRenderPipeline()
     vertexBuffers[0].pitch = sizeof(CubeMesh::Vertex);
     vertexBuffers[0].input_rate = SDL_GPU_VERTEXINPUTRATE_VERTEX;
     vertexBuffers[0].instance_step_rate = 0;
-    
+
     // Buffer 1: per-instance (transform + color)
     vertexBuffers[1].slot = 1;
     vertexBuffers[1].pitch = sizeof(InstanceData);
     vertexBuffers[1].input_rate = SDL_GPU_VERTEXINPUTRATE_INSTANCE;
     vertexBuffers[1].instance_step_rate = 0;
-    
+
     SDL_GPUVertexInputState vertexInputState = {};
     vertexInputState.vertex_buffer_descriptions = vertexBuffers;
     vertexInputState.num_vertex_buffers = 2;
     vertexInputState.vertex_attributes = vertexAttributes;
     vertexInputState.num_vertex_attributes = 5;
-    
+
     // Color target
     SDL_GPUColorTargetDescription colorTarget = {};
     colorTarget.format = SDL_GetGPUSwapchainTextureFormat(GpuDevice, EngineWindow);
-    
+
     // Graphics pipeline
     SDL_GPUGraphicsPipelineCreateInfo pipelineInfo = {};
     pipelineInfo.vertex_shader = VertexShader;
@@ -724,7 +727,7 @@ void RenderThread::CreateRenderPipeline()
     pipelineInfo.primitive_type = SDL_GPU_PRIMITIVETYPE_TRIANGLELIST;
     pipelineInfo.target_info.num_color_targets = 1;
     pipelineInfo.target_info.color_target_descriptions = &colorTarget;
-    
+
     Pipeline = SDL_CreateGPUGraphicsPipeline(GpuDevice, &pipelineInfo);
     if (!Pipeline)
     {

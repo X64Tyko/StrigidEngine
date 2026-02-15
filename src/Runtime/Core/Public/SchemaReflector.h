@@ -8,17 +8,28 @@
 
 // --- TYPE TRAITS ---
 // Strips Ref<T> down to T
-template <typename T> struct StripRef;
-template <typename T> struct StripRef<Ref<T>> { using Type = T; };
+template <typename T>
+struct StripRef;
+
+template <typename T>
+struct StripRef<Ref<T>>
+{
+    using Type = T;
+};
 
 // Strips Ref<T> Class::* down to T
-template <typename C, typename M> struct StripRef<M C::*> { using Type = typename StripRef<M>::Type; };
+template <typename C, typename M>
+struct StripRef<M C::*>
+{
+    using Type = typename StripRef<M>::Type;
+};
 
 template <typename Class>
-struct PrefabReflector {
-
+struct PrefabReflector
+{
     // --- 1. REGISTRATION (Static Init) ---
-    static bool Register() {
+    static bool Register()
+    {
         // Compile-time validation of entity type
         VALIDATE_ENTITY_HAS_SCHEMA(Class);
         //VALIDATE_ENTITY_IS_STANDARD_LAYOUT(Class);
@@ -26,12 +37,13 @@ struct PrefabReflector {
         MetaRegistry::Get().RegisterPrefab<Class>();
 
         constexpr auto schema = Class::DefineSchema();
-        
+
         // Register Components by iterating the tuple
-        std::apply([](auto... args) {
+        std::apply([](auto... args)
+        {
             (ProcessSchemaItem(args), ...);
         }, schema.members);
-        
+
         return true;
     }
 
@@ -58,14 +70,5 @@ struct PrefabReflector {
         static const bool g_Reflect_##CLASS = []() { \
             PrefabReflector<CLASS>::Register(); \
             return true; \
-        }(); \
-    }
-
-#define STRIGID_REGISTER_TEMPLATE_ENTITY(CLASS) \
-    template <typename T> class CLASS; \
-    namespace { \
-        static const bool g_Reflect_##CLASS = []() { \
-            PrefabReflector<CLASS>::Register(); \
-        return true; \
         }(); \
     }

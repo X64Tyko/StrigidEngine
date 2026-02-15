@@ -15,12 +15,15 @@
 #include <random>
 
 // Define global component counter (declared in SchemaReflector.h)
-namespace Internal {
+namespace Internal
+{
     uint32_t g_GlobalComponentCounter(1);
     ClassID g_GlobalClassCounter = 1;
 }
 
 StrigidEngine::StrigidEngine()
+: EngineWindow(nullptr)
+, GpuDevice(nullptr)
 {
 }
 
@@ -32,7 +35,7 @@ bool StrigidEngine::Initialize(const char* title, int width, int height)
 {
     STRIGID_ZONE_N("Engine_Init");
 
-    Logger::Get().Init("StrigidEngine.log", LogLevel::Error);
+    Logger::Get().Init("StrigidEngine.log", LogLevel::Debug);
     LOG_INFO("StrigidEngine initialization started");
 
     // Initialize SDL (should already be initialized by Engine)
@@ -70,8 +73,9 @@ bool StrigidEngine::Initialize(const char* title, int width, int height)
         SDL_DestroyWindow(EngineWindow);
         return false;
     }
-    
-    if (!SDL_SetGPUSwapchainParameters(GpuDevice, EngineWindow, SDL_GPU_SWAPCHAINCOMPOSITION_SDR, SDL_GPU_PRESENTMODE_MAILBOX))
+
+    if (!SDL_SetGPUSwapchainParameters(GpuDevice, EngineWindow, SDL_GPU_SWAPCHAINCOMPOSITION_SDR,
+                                       SDL_GPU_PRESENTMODE_MAILBOX))
     {
         std::cerr << "Swapchain Parameters Failed: " << SDL_GetError() << std::endl;
         SDL_DestroyGPUDevice(GpuDevice);
@@ -91,7 +95,8 @@ bool StrigidEngine::Initialize(const char* title, int width, int height)
     std::uniform_real_distribution<float> posZ(-500.0f, -200.0f);
     std::uniform_real_distribution<float> color(0.2f, 1.0f);
 
-    for (int i = 0; i < 500000; ++i)
+    static int32_t EntityCount = 500000;
+    for (int i = 0; i < EntityCount; ++i)
     {
         CubeEntity cube;
         EntityID id = RegistryPtr->Create<CubeEntity>();
@@ -110,7 +115,7 @@ bool StrigidEngine::Initialize(const char* title, int width, int height)
         cube.color->A = color(gen);
     }
 
-    LOG_ALWAYS("Created 100000 test entities");
+    LOG_ALWAYS_F("Created %i test entities", EntityCount);
 
     // Create threads
     Logic = std::make_unique<LogicThread>();
@@ -136,19 +141,12 @@ void StrigidEngine::Run()
     bIsRunning = true;
 
     const uint64_t perfFrequency = SDL_GetPerformanceFrequency();
-    uint64_t lastCounter = SDL_GetPerformanceCounter();
-
-    //const double targetFrameTime = Config.GetTargetFrameTime();
 
     while (bIsRunning.load(std::memory_order_acquire))
     {
         STRIGID_ZONE_N("Main_Frame");
 
         const uint64_t frameStartCounter = SDL_GetPerformanceCounter();
-        uint64_t counterElapsed = frameStartCounter - lastCounter;
-        lastCounter = frameStartCounter;
-
-        double dt = static_cast<double>(counterElapsed) / static_cast<double>(perfFrequency);
 
         // Pump events early
         PumpEvents();
@@ -156,12 +154,15 @@ void StrigidEngine::Run()
         // Service render thread (check for GPU resource requests or submit commands)
         ServiceRenderThread();
 
+        // Frame limiter (if InputPollHz is set in config)
+        if (Config.InputPollHz > 0)
+        {
+            WaitForTiming(frameStartCounter, perfFrequency);
+        }
+
         // FPS tracking
         STRIGID_FRAME_MARK();
-        CalculateFPS(dt);
-        
-        // Limiting this for now, don't need to blow up a core spinning through here
-        std::this_thread::sleep_for(std::chrono::microseconds(1));
+        CalculateFPS();
     }
 
     Shutdown();
@@ -216,7 +217,7 @@ void StrigidEngine::ServiceRenderThread()
     {
         SubmitRenderCommands();
     }
-    
+
     // Check if RenderThread needs GPU resources
     if (Render->NeedsGPUResources())
     {
@@ -228,19 +229,17 @@ void StrigidEngine::AcquireAndProvideGPUResources()
 {
     STRIGID_ZONE_N("Main_AcquireGPU");
 
-    // TODO: Get GPU device from Window
-    // TODO: Access FramePacer from Window - FramePacer.BeginFrame() to wait for fence
     if (!Pacer.BeginFrame())
         return;
 
-    // TODO: Acquire command buffer and swapchain texture
+    // Acquire command buffer and swapchain texture
     SDL_GPUCommandBuffer* cmdBuf = SDL_AcquireGPUCommandBuffer(GpuDevice);
     if (!cmdBuf)
     {
         // No command buffer available, skip this frame
         return;
     }
-    // TODO: Provide to RenderThread via Render->ProvideGPUResources(cmd, swapchain)
+    // Provide to RenderThread via Render->ProvideGPUResources(cmd, swapchain)
     SDL_GPUTexture* swapchainTex;
     if (!SDL_AcquireGPUSwapchainTexture(cmdBuf, EngineWindow, &swapchainTex, nullptr, nullptr) || !swapchainTex)
     {
@@ -248,10 +247,8 @@ void StrigidEngine::AcquireAndProvideGPUResources()
         SDL_CancelGPUCommandBuffer(cmdBuf);
         return;
     }
-    
-    Render->ProvideGPUResources(cmdBuf, swapchainTex);
 
-    LOG_TRACE("[Main] GPU resources acquisition - TODO: Implement");
+    Render->ProvideGPUResources(cmdBuf, swapchainTex);
 }
 
 void StrigidEngine::SubmitRenderCommands()
@@ -268,23 +265,51 @@ void StrigidEngine::SubmitRenderCommands()
 
     Pacer.EndFrame(cmdBuf);
     Render->NotifyFrameSubmitted();
-
-    LOG_TRACE("[Main] Submitted command buffer to GPU - TODO: Implement");
 }
 
-void StrigidEngine::CalculateFPS(double dt)
+void StrigidEngine::CalculateFPS()
 {
     FrameCount++;
-    FpsTimer += dt;
+    const double currentTime = SDL_GetPerformanceCounter() / static_cast<double>(SDL_GetPerformanceFrequency());
+    FpsTimer += currentTime - LastFPSCheck;
+    LastFPSCheck = currentTime;
 
     if (FpsTimer >= 1.0)
     {
         double fps = FrameCount / FpsTimer;
         double ms = (FpsTimer / FrameCount) * 1000.0;
 
-        LOG_ALWAYS_F("Main FPS: %d | Frame: %.2fms", static_cast<int>(fps), ms);
+        LOG_DEBUG_F("Main FPS: %d | Frame: %.2fms", static_cast<int>(fps), ms);
 
         FrameCount = 0;
-        FpsTimer = 0.0;
+        FpsTimer = 0;
+    }
+}
+
+void StrigidEngine::WaitForTiming(uint64_t frameStart, uint64_t perfFrequency)
+{
+    STRIGID_ZONE_N("Main_WaitTiming");
+
+    const uint64_t targetTicks = static_cast<uint64_t>(1.0 / Config.InputPollHz * static_cast<double>(perfFrequency));
+    const uint64_t frameEnd = frameStart + targetTicks;
+
+    uint64_t currentCounter = SDL_GetPerformanceCounter();
+    if (frameEnd > currentCounter)
+    {
+        const double remainingSec =
+            static_cast<double>(frameEnd - currentCounter) / static_cast<double>(perfFrequency);
+
+        constexpr double kSleepMarginSec = 0.002;
+
+        if (remainingSec > kSleepMarginSec)
+        {
+            const double sleepSec = remainingSec - kSleepMarginSec;
+            SDL_Delay(static_cast<uint32_t>(sleepSec * 1000.0));
+        }
+
+        while (SDL_GetPerformanceCounter() < frameEnd)
+        {
+            // Busy wait
+        }
     }
 }

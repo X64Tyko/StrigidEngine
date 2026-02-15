@@ -1,15 +1,17 @@
 ﻿#pragma once
 #include <SDL3/SDL_gpu.h>
 
-struct FrameContext {
+struct FrameContext
+{
     SDL_GPUFence* fence = nullptr;
     SDL_GPUCommandBuffer* cmd_buffer = nullptr;
 };
 
-class FramePacer {
+class FramePacer
+{
 public:
     static constexpr int FRAMES_IN_FLIGHT = 3;
-    
+
 private:
     FrameContext frames[FRAMES_IN_FLIGHT];
     int frame_index = 0;
@@ -17,7 +19,9 @@ private:
 
 public:
     int GetFrameIndex() const { return frame_index; }
-    void Initialize(SDL_GPUDevice* _device) {
+
+    void Initialize(SDL_GPUDevice* _device)
+    {
         device = _device;
         // Pre-allocate fences? No, SDL3 acquires them on demand usually, 
         // but we need handles to wait on.
@@ -27,11 +31,13 @@ public:
 
     // Call this AT THE START of your Render Loop.
     // It enforces the "Speed Limit" before you do any work.
-    bool BeginFrame() {
+    bool BeginFrame()
+    {
         FrameContext& ctx = frames[frame_index];
 
         // 1. The Governor: If this slot is still busy on the GPU, WAIT.
-        if (ctx.fence) {
+        if (ctx.fence)
+        {
             if (SDL_QueryGPUFence(device, ctx.fence))
             {
                 SDL_ReleaseGPUFence(device, ctx.fence);
@@ -48,9 +54,10 @@ public:
     }
 
     // Call this AT THE END, right before Submit.
-    void EndFrame(SDL_GPUCommandBuffer* cmd) {
+    void EndFrame(SDL_GPUCommandBuffer* cmd)
+    {
         FrameContext& ctx = frames[frame_index];
-        
+
         // 1. Get a fresh fence for this new submission
         ctx.fence = SDL_SubmitGPUCommandBufferAndAcquireFence(cmd);
 

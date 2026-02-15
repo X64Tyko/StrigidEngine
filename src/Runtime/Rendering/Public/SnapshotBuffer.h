@@ -7,7 +7,8 @@
  * This structure matches the layout we need for interpolation
  * and can be directly copied from Transform + ColorData
  */
-struct alignas(16) SnapshotEntry {
+struct alignas(16) SnapshotEntry
+{
     // Transform data (48 bytes)
     float PositionX, PositionY, PositionZ;
     float RotationX, RotationY, RotationZ;
@@ -17,6 +18,7 @@ struct alignas(16) SnapshotEntry {
     // ColorData (16 bytes)
     float ColorR, ColorG, ColorB, ColorA;
 };
+
 static_assert(sizeof(SnapshotEntry) == 64, "SnapshotEntry must be 64 bytes");
 
 /**
@@ -25,7 +27,8 @@ static_assert(sizeof(SnapshotEntry) == 64, "SnapshotEntry must be 64 bytes");
  * RenderThread stores pointers to the render/physics sparse arrays
  * to quickly snapshot without ECS queries
  */
-struct SparseArraySnapshot {
+struct SparseArraySnapshot
+{
     void* TransformArray = nullptr;
     void* ColorArray = nullptr;
     uint32_t EntityCount = 0;

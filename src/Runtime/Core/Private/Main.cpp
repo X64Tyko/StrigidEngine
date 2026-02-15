@@ -43,8 +43,8 @@ void TestRegistry()
     for (int i = 0; i < 10; ++i)
     {
         EntityID Id = Reg.Create<TestEntity>();
-        std::cout << "  New entity: Index=" << Id.GetIndex() 
-                  << " Gen=" << Id.GetGeneration() << std::endl;
+        std::cout << "  New entity: Index=" << Id.GetIndex()
+            << " Gen=" << Id.GetGeneration() << std::endl;
     }
 
     std::cout << "=== Test Complete ===" << std::endl << std::endl;

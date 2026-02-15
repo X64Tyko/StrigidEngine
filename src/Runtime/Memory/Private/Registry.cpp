@@ -28,7 +28,7 @@ Registry::~Registry()
 Archetype* Registry::GetOrCreateArchetype(const Signature& Sig)
 {
     STRIGID_ZONE_C(STRIGID_COLOR_MEMORY);
-    
+
     // Check if archetype already exists
     auto It = Archetypes.find(Sig);
     if (It != Archetypes.end())
@@ -37,8 +37,8 @@ Archetype* Registry::GetOrCreateArchetype(const Signature& Sig)
     }
 
     // Create new archetype
-    Archetype* NewArchetype = new Archetype(Sig);
-    
+    auto NewArchetype = new Archetype(Sig);
+
     // TODO: In Week 5, we'll build component layout from signature
     // For now, create empty archetype
     std::vector<ComponentMeta> Components;
@@ -51,7 +51,7 @@ Archetype* Registry::GetOrCreateArchetype(const Signature& Sig)
 EntityID Registry::AllocateEntityID(uint16_t TypeID)
 {
     STRIGID_ZONE_C(STRIGID_COLOR_MEMORY);
-    
+
     EntityID Id;
     Id.Value = 0;
 
@@ -86,7 +86,7 @@ EntityID Registry::AllocateEntityID(uint16_t TypeID)
 void Registry::FreeEntityID(EntityID Id)
 {
     STRIGID_ZONE_C(STRIGID_COLOR_MEMORY);
-    
+
     uint32_t Index = Id.GetIndex();
     if (Index >= EntityIndex.size())
         return;
@@ -109,7 +109,7 @@ void Registry::Destroy(EntityID Id)
 void Registry::ProcessDeferredDestructions()
 {
     STRIGID_ZONE_C(STRIGID_COLOR_MEMORY);
-    
+
     for (EntityID Id : PendingDestructions)
     {
         if (!Id.IsValid())
@@ -130,7 +130,7 @@ void Registry::ProcessDeferredDestructions()
 
         // TODO: Week 12 - Mark entity as inactive in chunk's ActiveMask
         // For now, just invalidate the record
-        
+
         // Remove from archetype (will be implemented with swap-and-pop in Week 12)
         // Record.Arch->RemoveEntity(chunkIndex, Record.Index);
 
@@ -139,7 +139,7 @@ void Registry::ProcessDeferredDestructions()
     }
 
     PendingDestructions.clear();
-    
+
     STRIGID_PLOT("PendingDestructions", (double)PendingDestructions.size());
 }
 
@@ -168,11 +168,12 @@ void Registry::InvokeUpdate(double dt)
     for (auto& [sig, archetype] : Archetypes)
     {
         MetaRegistry& MR = MetaRegistry::Get();
-        
+
         auto meta = MR.EntityGetters[*archetype->ResidentClassIDs.begin()];
         if (!meta.Update)
             continue;
-        
+
+        alignas(16) char View[MAX_ENTITY_VIEW_SIZE];
         // Iterate through all chunks in this archetype
         for (size_t chunkIdx = 0; chunkIdx < archetype->Chunks.size(); ++chunkIdx)
         {
@@ -181,7 +182,7 @@ void Registry::InvokeUpdate(double dt)
 
             if (entityCount == 0)
                 continue;
-            
+
             // Build array of component array pointers for this chunk
             void* componentArrays[MAX_COMPONENTS];
             {
@@ -193,7 +194,6 @@ void Registry::InvokeUpdate(double dt)
                 }
             }
 
-            alignas(16) char View[64];
             STRIGID_ZONE_MEDIUM_N("Invoke_Entity_Loop");
             for (uint32_t CompIndex = 0; CompIndex < entityCount; CompIndex++)
             {
@@ -212,11 +212,12 @@ void Registry::InvokePrePhys(double dt)
     for (auto& [sig, archetype] : Archetypes)
     {
         MetaRegistry& MR = MetaRegistry::Get();
-        
+
         auto meta = MR.EntityGetters[*archetype->ResidentClassIDs.begin()];
         if (!meta.PrePhys)
             continue;
-        
+
+        alignas(16) char View[MAX_ENTITY_VIEW_SIZE];
         // Iterate through all chunks in this archetype
         for (size_t chunkIdx = 0; chunkIdx < archetype->Chunks.size(); ++chunkIdx)
         {
@@ -225,7 +226,7 @@ void Registry::InvokePrePhys(double dt)
 
             if (entityCount == 0)
                 continue;
-            
+
             // Build array of component array pointers for this chunk
             void* componentArrays[MAX_COMPONENTS];
             {
@@ -237,13 +238,15 @@ void Registry::InvokePrePhys(double dt)
                 }
             }
 
-            alignas(16) char View[64];
             STRIGID_ZONE_MEDIUM_N("Invoke_Entity_Loop");
+            meta.PrePhys(dt, componentArrays, entityCount, View);
+            /*
             for (uint32_t CompIndex = 0; CompIndex < entityCount; CompIndex++)
             {
                 meta.Hydrate(componentArrays, CompIndex, View);
                 meta.PrePhys(dt, View);
             }
+            */
         }
     }
 }
@@ -256,11 +259,12 @@ void Registry::InvokePostPhys(double dt)
     for (auto& [sig, archetype] : Archetypes)
     {
         MetaRegistry& MR = MetaRegistry::Get();
-        
+
         auto meta = MR.EntityGetters[*archetype->ResidentClassIDs.begin()];
         if (!meta.PostPhys)
             continue;
-        
+
+        alignas(16) char View[MAX_ENTITY_VIEW_SIZE];
         // Iterate through all chunks in this archetype
         for (size_t chunkIdx = 0; chunkIdx < archetype->Chunks.size(); ++chunkIdx)
         {
@@ -269,7 +273,7 @@ void Registry::InvokePostPhys(double dt)
 
             if (entityCount == 0)
                 continue;
-            
+
             // Build array of component array pointers for this chunk
             void* componentArrays[MAX_COMPONENTS];
             {
@@ -281,7 +285,6 @@ void Registry::InvokePostPhys(double dt)
                 }
             }
 
-            alignas(16) char View[64];
             STRIGID_ZONE_MEDIUM_N("Invoke_Entity_Loop");
             for (uint32_t CompIndex = 0; CompIndex < entityCount; CompIndex++)
             {

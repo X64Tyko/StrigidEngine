@@ -15,7 +15,7 @@ void LogicThread::Initialize(Registry* registry, const EngineConfig* config, int
 
     // Allocate 3 FramePackets for triple buffering
     StagingPacket = std::make_shared<FramePacket>();
-    std::shared_ptr<FramePacket> mailboxPacket = std::make_shared<FramePacket>();
+    auto mailboxPacket = std::make_shared<FramePacket>();
     // Third packet will be allocated by RenderThread as its VisualPacket
 
     Mailbox.store(mailboxPacket, std::memory_order_release);
@@ -80,7 +80,7 @@ void LogicThread::ThreadMain()
         lastCounter = frameStartCounter;
 
         double dt = static_cast<double>(counterElapsed) / static_cast<double>(perfFrequency);
-        
+
         // FPS tracking
         FpsFrameCount++;
         FpsTimer += dt;
@@ -90,10 +90,20 @@ void LogicThread::ThreadMain()
             double fps = FpsFrameCount / FpsTimer;
             double ms = (FpsTimer / FpsFrameCount) * 1000.0;
 
-            LOG_ALWAYS_F("Logic FPS: %d | Frame: %.2fms", static_cast<int>(fps), ms);
+            LOG_DEBUG_F("Logic FPS: %d | Frame: %.2fms", static_cast<int>(fps), ms);
 
             FpsFrameCount = 0;
             FpsTimer = 0.0;
+        }
+        if (FpsFixedTimer >= 1.0)
+        {
+            double fps = FpsFixedCount / FpsFixedTimer;
+            double ms = (FpsFixedTimer / FpsFixedCount) * 1000.0;
+
+            LOG_DEBUG_F("Fixed FPS: %d | Frame: %.2fms", static_cast<int>(fps), ms);
+
+            FpsFixedCount = 0;
+            FpsFixedTimer = 0.0;
         }
 
         // Spiral of death cap
@@ -107,27 +117,33 @@ void LogicThread::ThreadMain()
         // Fixed update loop with substepping
         if (fixedStepTime > 0.0)
         {
+            STRIGID_ZONE_C(STRIGID_COLOR_LOGIC);
+
             int steps = 0;
             while (Accumulator >= fixedStepTime && steps < kMaxPhysSubSteps)
             {
+                // FPS tracking
+                FpsFixedCount++;
+                FpsFixedTimer += fixedStepTime;
+                
                 PrePhysics(fixedStepTime);
                 // insert Sim physics here
                 PostPhysics(fixedStepTime);
                 Accumulator -= fixedStepTime;
                 ++steps;
             }
-            
+
             ProduceFramePacket();
         }
 
         // Variable update
         Update(dt);
-        
+
         // Frame limiter (if MaxFPS is set in config)
-         if (ConfigPtr->TargetFPS > 0)
-         {
-             WaitForTiming(frameStartCounter, perfFrequency);
-         }
+        if (ConfigPtr->TargetFPS > 0)
+        {
+            WaitForTiming(frameStartCounter, perfFrequency);
+        }
     }
 }
 
@@ -177,32 +193,32 @@ void LogicThread::ProduceFramePacket()
     float Fov = 60.0f * 3.14159f / 180.0f; // 60 degrees in radians
     float ZNear = 0.1f;
     float ZFar = 1000.0f;
-    
+
     // Perspective projection matrix (column-major for GLSL)
     float F = 1.0f / std::tan(Fov / 2.0f);
     StagingPacket->View.ProjectionMatrix.m[0] = F / AspectRatio;
     StagingPacket->View.ProjectionMatrix.m[1] = 0.0f;
     StagingPacket->View.ProjectionMatrix.m[2] = 0.0f;
     StagingPacket->View.ProjectionMatrix.m[3] = 0.0f;
-    
+
     StagingPacket->View.ProjectionMatrix.m[4] = 0.0f;
     StagingPacket->View.ProjectionMatrix.m[5] = F;
     StagingPacket->View.ProjectionMatrix.m[6] = 0.0f;
     StagingPacket->View.ProjectionMatrix.m[7] = 0.0f;
-    
+
     StagingPacket->View.ProjectionMatrix.m[8] = 0.0f;
     StagingPacket->View.ProjectionMatrix.m[9] = 0.0f;
     StagingPacket->View.ProjectionMatrix.m[10] = ZFar / (ZFar - ZNear);
     StagingPacket->View.ProjectionMatrix.m[11] = -(ZFar * ZNear) / (ZFar - ZNear);
-    
+
     StagingPacket->View.ProjectionMatrix.m[12] = 0.0f;
     StagingPacket->View.ProjectionMatrix.m[13] = 0.0f;
     StagingPacket->View.ProjectionMatrix.m[14] = 1;
     StagingPacket->View.ProjectionMatrix.m[15] = 0.0f;
-    
+
     // View matrix = identity for now (camera at origin)
     // ViewMatrix is already initialized to identity in Matrix4 constructor
-    
+
     // Camera position at origin
     StagingPacket->View.CameraPosition.x = 0.0f;
     StagingPacket->View.CameraPosition.y = 0.0f;
@@ -224,7 +240,7 @@ void LogicThread::PublishFramePacket()
 
 void LogicThread::WaitForTiming(uint64_t frameStart, uint64_t perfFrequency)
 {
-    STRIGID_ZONE_N("Main_WaitTiming");
+    STRIGID_ZONE_N("Logic_WaitTiming");
 
     const double targetFrameTimeSec = ConfigPtr->GetTargetFrameTime();
     const uint64_t targetTicks = static_cast<uint64_t>(targetFrameTimeSec * static_cast<double>(perfFrequency));

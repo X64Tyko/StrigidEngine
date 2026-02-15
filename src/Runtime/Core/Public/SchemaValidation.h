@@ -3,21 +3,25 @@
 
 // Schema Validation - Provides better compile-time error messages for common mistakes
 
-namespace SchemaValidation {
+namespace SchemaValidation
+{
+    // Check if a type has a DefineSchema() method
+    template <typename T, typename = void>
+    struct HasDefineSchema : std::false_type
+    {
+    };
 
-// Check if a type has a DefineSchema() method
-template<typename T, typename = void>
-struct HasDefineSchema : std::false_type {};
+    template <typename T>
+    struct HasDefineSchema<T, std::void_t<decltype(T::DefineSchema())>> : std::true_type
+    {
+    };
 
-template<typename T>
-struct HasDefineSchema<T, std::void_t<decltype(T::DefineSchema())>> : std::true_type {};
-
-// Check if a type is a valid component (POD-like, no vtable)
-template<typename T>
-struct IsValidComponent {
-    static constexpr bool value = std::is_standard_layout_v<T> && std::is_trivially_copyable_v<T>;
-};
-
+    // Check if a type is a valid component (POD-like, no vtable)
+    template <typename T>
+    struct IsValidComponent
+    {
+        static constexpr bool value = std::is_standard_layout_v<T> && std::is_trivially_copyable_v<T>;
+    };
 } // namespace SchemaValidation
 
 // Helpful error message macros with better formatting

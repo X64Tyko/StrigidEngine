@@ -11,27 +11,37 @@
 #endif
 
 // Math types
-struct Vector3 {
+struct Vector3
+{
     float x, y, z;
 
-    Vector3() : x(0), y(0), z(0) {}
-    Vector3(float x, float y, float z) : x(x), y(y), z(z) {}
+    Vector3() : x(0), y(0), z(0)
+    {
+    }
+
+    Vector3(float x, float y, float z) : x(x), y(y), z(z)
+    {
+    }
 
     Vector3 operator+(const Vector3& other) const { return Vector3(x + other.x, y + other.y, z + other.z); }
     Vector3 operator-(const Vector3& other) const { return Vector3(x - other.x, y - other.y, z - other.z); }
     Vector3 operator*(float scalar) const { return Vector3(x * scalar, y * scalar, z * scalar); }
 
     float Length() const { return std::sqrt(x * x + y * y + z * z); }
-    Vector3 Normalized() const {
+
+    Vector3 Normalized() const
+    {
         float len = Length();
         return len > 0 ? Vector3(x / len, y / len, z / len) : Vector3();
     }
 };
 
-struct Matrix4 {
+struct Matrix4
+{
     float m[16]; // Column-major order
 
-    Matrix4() {
+    Matrix4()
+    {
         for (int i = 0; i < 16; i++) m[i] = 0;
         m[0] = m[5] = m[10] = m[15] = 1.0f; // Identity
     }
@@ -47,25 +57,27 @@ using ComponentTypeID = uint32_t;
 
 // Component Signature definition as a bitset - tracks which components are present
 static constexpr size_t MAX_COMPONENTS = 256;
-typedef std::bitset<MAX_COMPONENTS> ComponentSignature;
-typedef uint16_t ClassID;
+using ComponentSignature = std::bitset<MAX_COMPONENTS>;
+using ClassID = uint16_t;
 
 // Component metadata - describes how a component is laid out in memory
 struct ComponentMeta
 {
-    ComponentTypeID TypeID;  // Numeric ID (0-255) for this component type
-    size_t Size;           // sizeof(Component)
-    size_t Alignment;      // alignof(Component)
-    size_t OffsetInChunk;  // Where this component's array starts in the chunk
+    ComponentTypeID TypeID; // Numeric ID (0-255) for this component type
+    size_t Size; // sizeof(Component)
+    size_t Alignment; // alignof(Component)
+    size_t OffsetInChunk; // Where this component's array starts in the chunk
 };
 
 // Global counter (hidden in cpp)
-namespace Internal {
+namespace Internal
+{
     extern uint32_t g_GlobalComponentCounter;
 }
 
 template <typename T>
-ComponentTypeID GetComponentTypeID() {
+ComponentTypeID GetComponentTypeID()
+{
     // THIS LINE RUNS ONCE PER TYPE (T)
     // The first time you call GetTypeID<Transform>(), it grabs a number.
     // Every subsequent time, it skips this and just returns 'id'.
@@ -82,11 +94,11 @@ union EntityID
     // Bitfield layout
     struct
     {
-        uint64_t Index      : 20; // 1 Million entities (array slot)
+        uint64_t Index : 20; // 1 Million entities (array slot)
         uint64_t Generation : 16; // 65k recycles (server-grade stability)
-        uint64_t TypeID     : 12; // 4k class types (function dispatch)
-        uint64_t OwnerID    : 8;  // 256 owners (network routing)
-        uint64_t MetaFlags  : 8;  // Reserved for future use
+        uint64_t TypeID : 12; // 4k class types (function dispatch)
+        uint64_t OwnerID : 8; // 256 owners (network routing)
+        uint64_t MetaFlags : 8; // Reserved for future use
     };
 
     // Required interface (for swappability)
@@ -96,7 +108,13 @@ union EntityID
     inline uint8_t GetOwnerID() const { return static_cast<uint8_t>(OwnerID); }
 
     inline bool IsValid() const { return Value != 0; }
-    static EntityID Invalid() { EntityID Id; Id.Value = 0; return Id; }
+
+    static EntityID Invalid()
+    {
+        EntityID Id;
+        Id.Value = 0;
+        return Id;
+    }
 
     // Comparison operators
     inline bool operator==(const EntityID& Other) const { return Value == Other.Value; }
@@ -114,7 +132,7 @@ union EntityID
 // Hash specialization for std::unordered_map
 namespace std
 {
-    template<>
+    template <>
     struct hash<EntityID>
     {
         size_t operator()(const EntityID& Id) const noexcept

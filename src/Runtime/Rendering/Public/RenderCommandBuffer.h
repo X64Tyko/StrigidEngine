@@ -15,16 +15,16 @@
 #endif
 
 
-
 // Instance data format for GPU upload
 // Aligned to 16 bytes for SIMD vectorization and GPU alignment
 struct alignas(16) InstanceData
 {
-    float PositionX, PositionY, PositionZ, _pad0;     // 16 bytes (was 12)
-    float RotationX, RotationY, RotationZ, _pad1;     // 16 bytes (was 12)
-    float ScaleX, ScaleY, ScaleZ, _pad2;              // 16 bytes (was 12)
-    float ColorR, ColorG, ColorB, ColorA;             // 16 bytes (same)
+    float PositionX, PositionY, PositionZ, _pad0; // 16 bytes (was 12)
+    float RotationX, RotationY, RotationZ, _pad1; // 16 bytes (was 12)
+    float ScaleX, ScaleY, ScaleZ, _pad2; // 16 bytes (was 12)
+    float ColorR, ColorG, ColorB, ColorA; // 16 bytes (same)
 };
+
 static_assert(sizeof(InstanceData) == 64, "InstanceData must be 64 bytes for optimal vectorization");
 
 
@@ -32,11 +32,12 @@ static_assert(sizeof(InstanceData) == 64, "InstanceData must be 64 bytes for opt
  * Render Command Types
  * Embedded in header to identify command type
  */
-enum class RenderCommandType : uint8_t {
-    FrameStart,      // Marks beginning of frame commands
-    DrawInstanced,   // Instanced draw call with embedded instance data
-    FrameEnd,        // Marks end of frame, triggers present
-    Wrap,           // Tells the Tail that it should reset to the beginning of the buffer
+enum class RenderCommandType : uint8_t
+{
+    FrameStart, // Marks beginning of frame commands
+    DrawInstanced, // Instanced draw call with embedded instance data
+    FrameEnd, // Marks end of frame, triggers present
+    Wrap, // Tells the Tail that it should reset to the beginning of the buffer
 };
 
 int operator<<(RenderCommandType lhs, int rhs);
@@ -45,38 +46,47 @@ int operator<<(RenderCommandType lhs, int rhs);
  * Base Render Command
  * All render commands inherit from this to provide consistent header access
  */
-struct alignas(16) RenderCommand {
-    union {
+struct alignas(16) RenderCommand
+{
+    union
+    {
         alignas(uint16_t) uint64_t Value;
-        struct {
-            uint32_t Finished : 1;   // Command finished writing flag
-            uint32_t Type     : 7;   // RenderCommandType
-            uint32_t FrameNum : 32;  // The frame number we're rendering
-            uint32_t Count    : 24;  // Command-specific count (instances, bytes, etc)
+
+        struct
+        {
+            uint32_t Finished : 1; // Command finished writing flag
+            uint32_t Type : 7; // RenderCommandType
+            uint32_t FrameNum : 32; // The frame number we're rendering
+            uint32_t Count : 24; // Command-specific count (instances, bytes, etc)
         };
     } Header;
 
-    RenderCommandType GetType() const {
+    RenderCommandType GetType() const
+    {
         return static_cast<RenderCommandType>(Header.Type);
     }
 
-    bool GetCommandFinished() const {
+    bool GetCommandFinished() const
+    {
         return Header.Finished;
     }
 
-    uint32_t GetFrameNum() const {
+    uint32_t GetFrameNum() const
+    {
         return Header.FrameNum;
     }
 
-    uint32_t GetCount() const {
+    uint32_t GetCount() const
+    {
         return Header.Count;
     }
 
-    void SetTypeAndCount(RenderCommandType type, uint32_t count, bool finished = false) {
+    void SetTypeAndCount(RenderCommandType type, uint32_t count, bool finished = false)
+    {
         Header.Type = static_cast<uint8_t>(type);
         Header.Count = count;
         Header.Finished = finished;
-        
+
         static uint32_t FrameNumber = 0;
         if (type == RenderCommandType::FrameStart)
         {
@@ -85,7 +95,8 @@ struct alignas(16) RenderCommand {
         Header.FrameNum = FrameNumber;
     }
 
-    void SetCommandFinished() {
+    void SetCommandFinished()
+    {
         Header.Finished = 1;
     }
 };
@@ -95,8 +106,9 @@ struct alignas(16) RenderCommand {
  * Instanced draw call with embedded instance data
  * Followed immediately by variable-length InstanceData array
  */
-struct DrawInstancedCommand : RenderCommand {
-    InstanceData instances[];  // Flexible array member - actual data follows
+struct DrawInstancedCommand : RenderCommand
+{
+    InstanceData instances[]; // Flexible array member - actual data follows
 };
 
 /**
@@ -112,17 +124,18 @@ struct DrawInstancedCommand : RenderCommand {
  *   If the writer is MAX_BUFFER_FRAMES ahead of the reader it will
  *   rewind head to lastFrameHead and overwrite old commands.
  */
-class RenderCommandBuffer {
+class RenderCommandBuffer
+{
 public:
     // Conservative sizing for ~3 frames of 100k entities (6.4MB each)
     static constexpr size_t MAX_COMMAND_SIZE = 1024 * 1024 * 16;
     static constexpr size_t NUM_BUFFER_FRAMES = 3;
     static constexpr size_t MAX_BUFFER_BYTES = 2 * NUM_BUFFER_FRAMES * MAX_COMMAND_SIZE;
-     /**
-     * Buffer Resizing:
-     *   TODO: If single-frame command data exceeds 30% of buffer size,
-     *   consider mutex-locked reallocation with size doubling strategy.
-     *   This prevents pathological cases where large draws can't fit. */
+    /**
+    * Buffer Resizing:
+    *   TODO: If single-frame command data exceeds 30% of buffer size,
+    *   consider mutex-locked reallocation with size doubling strategy.
+    *   This prevents pathological cases where large draws can't fit. */
 
     RenderCommandBuffer();
     ~RenderCommandBuffer();
@@ -155,13 +168,13 @@ public:
      *       // Handle wrap: copy partial data, then remainder to wrapPtr
      *   }
      */
-    template<typename T>
+    template <typename T>
     T* AllocateCommand(RenderCommandType type, uint32_t dataSize, uint8_t*& outWrapPtr, uint32_t& outWrapAfter);
-    
+
     RenderCommand* GetCommand(uint8_t*& outWrapPtr, uint32_t& outWrapAfter);
-    
+
     bool IsPreviousFrameInProgress() const;
-    
+
     void CommitCommand(size_t dataSize);
 
     /**
@@ -194,22 +207,25 @@ private:
     bool IsInRange(uint32_t value, uint32_t start, uint32_t end) const;
 
     uint8_t* buffer;
-    std::atomic<uint32_t> tail;          // Render thread reads from here (byte offset)
-    std::atomic<uint32_t> head;          // Main thread writes to here (byte offset)
+    std::atomic<uint32_t> tail; // Render thread reads from here (byte offset)
+    std::atomic<uint32_t> head; // Main thread writes to here (byte offset)
     std::atomic<uint32_t> lastFrameHead; // Head position at last FrameStart
 };
 
 // Template implementation
-template<typename T>
-T* RenderCommandBuffer::AllocateCommand(RenderCommandType type, uint32_t dataSize, uint8_t*& outWrapPtr, uint32_t& outWrapAfter) {
-
+template <typename T>
+T* RenderCommandBuffer::AllocateCommand(RenderCommandType type, uint32_t dataSize, uint8_t*& outWrapPtr,
+                                        uint32_t& outWrapAfter)
+{
     // Frame boundary check: if starting new frame and render hasn't consumed previous frame, rewind
-    if (type == RenderCommandType::FrameStart) {
+    if (type == RenderCommandType::FrameStart)
+    {
         uint32_t last = lastFrameHead.load(std::memory_order_relaxed);
         uint32_t currentTail = tail.load(std::memory_order_acquire);
         uint32_t currentHead = head.load(std::memory_order_relaxed);
 
-        if (!IsInRange(currentTail, last, currentHead)) {
+        if (!IsInRange(currentTail, last, currentHead))
+        {
             // Render thread hasn't consumed previous frame, overwrite it
             head.store(last, std::memory_order_release);
         }
@@ -221,7 +237,7 @@ T* RenderCommandBuffer::AllocateCommand(RenderCommandType type, uint32_t dataSiz
                 currentHead = 0;
                 head.store(currentHead, std::memory_order_relaxed);
             }
-            
+
             // Render caught up, update lastFrameHead to current position
             lastFrameHead.store(currentHead, std::memory_order_relaxed);
         }

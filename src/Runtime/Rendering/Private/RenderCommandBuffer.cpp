@@ -14,14 +14,15 @@ int operator<<(RenderCommandType lhs, int rhs)
 
 RenderCommandBuffer::RenderCommandBuffer()
     : buffer(nullptr)
-    , tail(0)
-    , head(0)
-    , lastFrameHead(0)
+      , tail(0)
+      , head(0)
+      , lastFrameHead(0)
 {
     // Allocate 32MB buffer
     buffer = static_cast<uint8_t*>(std::malloc(MAX_BUFFER_BYTES));
 
-    if (!buffer) {
+    if (!buffer)
+    {
         // Handle allocation failure
         // TODO: Log error, throw exception, or handle gracefully
     }
@@ -32,13 +33,15 @@ RenderCommandBuffer::RenderCommandBuffer()
 
 RenderCommandBuffer::~RenderCommandBuffer()
 {
-    if (buffer) {
+    if (buffer)
+    {
         std::free(buffer);
         buffer = nullptr;
     }
 }
 
-void RenderCommandBuffer::WrapCommandBuffer(uint32_t current, uint32_t next, uint8_t*& outWrapPtr, uint32_t& outWrapAfter)
+void RenderCommandBuffer::WrapCommandBuffer(uint32_t current, uint32_t next, uint8_t*& outWrapPtr,
+                                            uint32_t& outWrapAfter)
 {
     outWrapPtr = nullptr;
     outWrapAfter = 0;
@@ -76,7 +79,7 @@ RenderCommand* RenderCommandBuffer::GetCommand(uint8_t*& outWrapPtr, uint32_t& o
     STRIGID_ZONE_N("RenderThread_ProcessCommand");
 
     // Peek at command header using struct accessors (endian-safe)
-    const RenderCommand* cmdHeader = reinterpret_cast<const RenderCommand*>(&buffer[currentTail]);
+    auto cmdHeader = reinterpret_cast<const RenderCommand*>(&buffer[currentTail]);
 
     // Check if command is finished being written
     if (!cmdHeader->GetCommandFinished())
@@ -91,7 +94,7 @@ RenderCommand* RenderCommandBuffer::GetCommand(uint8_t*& outWrapPtr, uint32_t& o
 
     switch (cmdType)
     {
-        case RenderCommandType::FrameStart:
+    case RenderCommandType::FrameStart:
         {
             STRIGID_ZONE_N("RenderThread_FrameStart");
             LOG_DEBUG_F("[RenderThread] FrameStart at %u", currentTail);
@@ -101,12 +104,12 @@ RenderCommand* RenderCommandBuffer::GetCommand(uint8_t*& outWrapPtr, uint32_t& o
             return reinterpret_cast<RenderCommand*>(&buffer[currentTail]);
         }
 
-        case RenderCommandType::DrawInstanced:
+    case RenderCommandType::DrawInstanced:
         {
             STRIGID_ZONE_N("RenderThread_DrawInstanced");
 
             // Read full command header to get instance count
-            DrawInstancedCommand* drawCmd = reinterpret_cast<DrawInstancedCommand*>(&buffer[currentTail]);
+            auto drawCmd = reinterpret_cast<DrawInstancedCommand*>(&buffer[currentTail]);
             uint32_t instanceCount = drawCmd->GetCount();
 
             LOG_DEBUG_F("[RenderThread] DrawInstanced: %u instances at tail=%u", instanceCount, currentTail);
@@ -114,11 +117,12 @@ RenderCommand* RenderCommandBuffer::GetCommand(uint8_t*& outWrapPtr, uint32_t& o
             size_t cmdSize = sizeof(DrawInstancedCommand) + sizeof(InstanceData) * instanceCount;
             WrapCommandBuffer(currentTail, static_cast<uint32_t>(currentTail + cmdSize), outWrapPtr, outWrapAfter);
 
-            if (outWrapPtr) {
+            if (outWrapPtr)
+            {
                 LOG_WARN_F("[RenderThread] DrawInstanced data WRAPS! tail=%u, cmdSize=%zu, wrapAfter=%u",
-                    currentTail, cmdSize, outWrapAfter);
+                           currentTail, cmdSize, outWrapAfter);
             }
-                
+
             //LOG_ALWAYS_F("Current Color: B-%f R-%f", drawCmd->instances[0].ColorB, drawCmd->instances[0].ColorR);
 
             uint32_t newTail = (currentTail + static_cast<uint32_t>(cmdSize)) % MAX_BUFFER_BYTES;
@@ -127,7 +131,7 @@ RenderCommand* RenderCommandBuffer::GetCommand(uint8_t*& outWrapPtr, uint32_t& o
             return drawCmd;
         }
 
-        case RenderCommandType::FrameEnd:
+    case RenderCommandType::FrameEnd:
         {
             STRIGID_ZONE_N("RenderThread_FrameEnd");
             LOG_DEBUG_F("[RenderThread] FrameEnd at %u", currentTail);
@@ -137,22 +141,22 @@ RenderCommand* RenderCommandBuffer::GetCommand(uint8_t*& outWrapPtr, uint32_t& o
             return reinterpret_cast<RenderCommand*>(&buffer[currentTail]);
         }
 
-        default:
-            LOG_FATAL_F("[RenderThread] Unknown RenderCommandType: %d (raw header value: 0x%I64X) at tail=%u",
-                cmdType, cmdHeader->Header.Value, currentTail);
-            break;
+    default:
+        LOG_FATAL_F("[RenderThread] Unknown RenderCommandType: %d (raw header value: 0x%I64X) at tail=%u",
+                    cmdType, cmdHeader->Header.Value, currentTail);
+        break;
     }
-    
+
     return nullptr;
 }
 
 bool RenderCommandBuffer::IsPreviousFrameInProgress() const
 {
-        uint32_t last = lastFrameHead.load(std::memory_order_relaxed);
-        uint32_t currentTail = tail.load(std::memory_order_acquire);
-        uint32_t currentHead = head.load(std::memory_order_relaxed);
+    uint32_t last = lastFrameHead.load(std::memory_order_relaxed);
+    uint32_t currentTail = tail.load(std::memory_order_acquire);
+    uint32_t currentHead = head.load(std::memory_order_relaxed);
 
-        return IsInRange(currentTail, last, currentHead);
+    return IsInRange(currentTail, last, currentHead);
 }
 
 void RenderCommandBuffer::CommitCommand(size_t dataSize)
@@ -165,9 +169,9 @@ void RenderCommandBuffer::CommitCommand(size_t dataSize)
 
 bool RenderCommandBuffer::IsInRange(uint32_t value, [[maybe_unused]] uint32_t start, uint32_t end) const
 {
-    const RenderCommand* tailHeader = reinterpret_cast<const RenderCommand*>(&buffer[value]);
-    const RenderCommand* headHeader = reinterpret_cast<const RenderCommand*>(&buffer[end]);
-    
+    auto tailHeader = reinterpret_cast<const RenderCommand*>(&buffer[value]);
+    auto headHeader = reinterpret_cast<const RenderCommand*>(&buffer[end]);
+
     // TODO: if the FrameNumber wraps this breaks
     return headHeader->GetFrameNum() - tailHeader->GetFrameNum() < NUM_BUFFER_FRAMES;
 }

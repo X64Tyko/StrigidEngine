@@ -38,7 +38,8 @@ struct EngineConfig;
  * 6. Main retrieves CmdBuffer, submits via FramePacer
  * 7. Main loops back to step 1
  */
-class StrigidEngine {
+class StrigidEngine
+{
 public:
     StrigidEngine();
     ~StrigidEngine();
@@ -50,25 +51,26 @@ public:
     void Shutdown();
 
     // Singleton
-    static StrigidEngine& Get() {
+    static StrigidEngine& Get()
+    {
         static StrigidEngine instance;
         return instance;
     }
 
 private:
     // Sentinel Tasks (Main Thread)
-    void PumpEvents();                  // Handle OS events
-    void ServiceRenderThread();         // Check if RenderThread needs GPU resources or wants to submit
+    void PumpEvents(); // Handle OS events
+    void ServiceRenderThread(); // Check if RenderThread needs GPU resources or wants to submit
     void AcquireAndProvideGPUResources(); // Acquire cmd + swapchain, provide to RenderThread
-    void SubmitRenderCommands();        // Take CmdBuffer from RenderThread and submit
+    void SubmitRenderCommands(); // Take CmdBuffer from RenderThread and submit
     void WaitForTiming(uint64_t frameStart, uint64_t perfFrequency);
 
     // FPS tracking
-    void CalculateFPS(double dt);
+    void CalculateFPS();
 
     // --- Core Systems ---
-    SDL_Window* EngineWindow;   
-    SDL_GPUDevice* GpuDevice;    // MUST be on main thread for SDL
+    SDL_Window* EngineWindow;
+    SDL_GPUDevice* GpuDevice; // MUST be on main thread for SDL
     std::unique_ptr<Registry> RegistryPtr;
     EngineConfig Config;
     FramePacer Pacer;
@@ -81,6 +83,7 @@ private:
     std::atomic<bool> bIsRunning{false};
 
     // FPS tracking
-    double FpsTimer = 0.0;
+    double FpsTimer = 0;
+    double LastFPSCheck = 0;
     int FrameCount = 0;
 };

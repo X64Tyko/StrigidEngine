@@ -5,9 +5,9 @@
 
 Archetype::Archetype(const Signature& Sig, const char* DebugName)
     : ArchSignature(Sig)
-    , DebugName(DebugName)
-    , EntitiesPerChunk(0)
-    , TotalEntityCount(0)
+      , DebugName(DebugName)
+      , EntitiesPerChunk(0)
+      , TotalEntityCount(0)
 {
 }
 
@@ -48,7 +48,7 @@ void Archetype::BuildLayout(const std::vector<ComponentMeta>& Components)
     // Reserve some space for potential chunk header in future
     constexpr size_t ReservedHeaderSpace = 64;
     size_t UsableSpace = Chunk::DATA_SIZE - ReservedHeaderSpace;
-    
+
     if (TotalStride > 0)
     {
         EntitiesPerChunk = static_cast<uint32_t>(UsableSpace / TotalStride);
@@ -64,7 +64,7 @@ void Archetype::BuildLayout(const std::vector<ComponentMeta>& Components)
     for (const ComponentMeta& Meta : Components)
     {
         ComponentMeta LayoutMeta = Meta;
-        
+
         // Align offset to component's alignment requirement
         size_t Misalignment = CurrentOffset % Meta.Alignment;
         if (Misalignment != 0)
@@ -136,7 +136,7 @@ void Archetype::RemoveEntity(size_t ChunkIndex, uint32_t LocalIndex)
     // For now, just placeholder
     // TODO: Mark entity as inactive in chunk's ActiveMask
     // Actual swap-and-pop happens during compaction phase
-    
+
     (void)ChunkIndex;
     (void)LocalIndex;
 }
@@ -154,7 +154,7 @@ void* Archetype::GetComponentArrayRaw(Chunk* TargetChunk, ComponentTypeID TypeID
 Chunk* Archetype::AllocateChunk()
 {
     STRIGID_ZONE_C(STRIGID_COLOR_MEMORY);
-    Chunk* NewChunk = new Chunk();
+    auto NewChunk = new Chunk();
 
     // Tracy memory profiling: Track chunk allocation with pool name
     // This lets you see separate pools for Transform, Velocity, etc.

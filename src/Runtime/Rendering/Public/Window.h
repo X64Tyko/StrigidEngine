@@ -25,16 +25,17 @@ class Window
 public:
     Window();
     ~Window();
-    
+
     int Open(const char* Title, int W, int H);
     void Render();
     void Shutdown();
-    
+
     void SetTitle(const char* Title);
-    
+
     // Instanced rendering API
-    void DrawInstances(const InstanceData* Instances, size_t Count, const uint8_t* WrapStart = nullptr, size_t WrapCount = 0);
-    
+    void DrawInstances(const InstanceData* Instances, size_t Count, const uint8_t* WrapStart = nullptr,
+                       size_t WrapCount = 0);
+
     // Get screen dimensions
     int GetWidth() const { return Width; }
     int GetHeight() const { return Height; }

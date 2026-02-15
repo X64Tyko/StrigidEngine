@@ -7,7 +7,10 @@
 // Uses bitset to track which components are present
 struct Signature
 {
-    Signature(ComponentSignature Bits = 0) : Bits(Bits) {}
+    Signature(ComponentSignature Bits = 0) : Bits(Bits)
+    {
+    }
+
     ComponentSignature Bits;
 
     // Set a component bit
@@ -55,7 +58,7 @@ struct Signature
 // Hash specialization for std::unordered_map
 namespace std
 {
-    template<>
+    template <>
     struct hash<Signature>
     {
         size_t operator()(const Signature& Sig) const noexcept

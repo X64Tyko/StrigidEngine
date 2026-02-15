@@ -14,87 +14,87 @@
 // Default is level 1 (coarse) when TRACY_ENABLE is defined
 
 #ifdef TRACY_ENABLE
-    #include <tracy/Tracy.hpp>
+#include <tracy/Tracy.hpp>
 
-    // Determine profiling level (default to 1 if not specified)
-    #ifndef TRACY_PROFILE_LEVEL
-        #define TRACY_PROFILE_LEVEL 1
-    #endif
+// Determine profiling level (default to 1 if not specified)
+#ifndef TRACY_PROFILE_LEVEL
+#define TRACY_PROFILE_LEVEL 1
+#endif
 
-    // Frame marker - always enabled when Tracy is on
-    #define STRIGID_FRAME_MARK() FrameMark
+// Frame marker - always enabled when Tracy is on
+#define STRIGID_FRAME_MARK() FrameMark
 
-    // Level 1: Coarse profiling (frame/system boundaries)
-    #if TRACY_PROFILE_LEVEL >= 1
-        #define STRIGID_ZONE_COARSE() ZoneScoped
-        #define STRIGID_ZONE_COARSE_N(name) ZoneScopedN(name)
-        #define STRIGID_ZONE_COARSE_C(color) ZoneScopedC(color)
-    #else
-        #define STRIGID_ZONE_COARSE()
-        #define STRIGID_ZONE_COARSE_N(name)
-        #define STRIGID_ZONE_COARSE_C(color)
-    #endif
+// Level 1: Coarse profiling (frame/system boundaries)
+#if TRACY_PROFILE_LEVEL >= 1
+#define STRIGID_ZONE_COARSE() ZoneScoped
+#define STRIGID_ZONE_COARSE_N(name) ZoneScopedN(name)
+#define STRIGID_ZONE_COARSE_C(color) ZoneScopedC(color)
+#else
+#define STRIGID_ZONE_COARSE()
+#define STRIGID_ZONE_COARSE_N(name)
+#define STRIGID_ZONE_COARSE_C(color)
+#endif
 
-    // Level 2: Medium profiling (subsystems, larger functions)
-    #if TRACY_PROFILE_LEVEL >= 2
-        #define STRIGID_ZONE_MEDIUM() ZoneScoped
-        #define STRIGID_ZONE_MEDIUM_N(name) ZoneScopedN(name)
-        #define STRIGID_ZONE_MEDIUM_C(color) ZoneScopedC(color)
-    #else
-        #define STRIGID_ZONE_MEDIUM()
-        #define STRIGID_ZONE_MEDIUM_N(name)
-        #define STRIGID_ZONE_MEDIUM_C(color)
-    #endif
+// Level 2: Medium profiling (subsystems, larger functions)
+#if TRACY_PROFILE_LEVEL >= 2
+#define STRIGID_ZONE_MEDIUM() ZoneScoped
+#define STRIGID_ZONE_MEDIUM_N(name) ZoneScopedN(name)
+#define STRIGID_ZONE_MEDIUM_C(color) ZoneScopedC(color)
+#else
+#define STRIGID_ZONE_MEDIUM()
+#define STRIGID_ZONE_MEDIUM_N(name)
+#define STRIGID_ZONE_MEDIUM_C(color)
+#endif
 
-    // Level 3: Fine profiling (hot loops, per-entity operations)
-    #if TRACY_PROFILE_LEVEL >= 3
-        #define STRIGID_ZONE_FINE() ZoneScoped
-        #define STRIGID_ZONE_FINE_N(name) ZoneScopedN(name)
-        #define STRIGID_ZONE_FINE_C(color) ZoneScopedC(color)
-    #else
-        #define STRIGID_ZONE_FINE()
-        #define STRIGID_ZONE_FINE_N(name)
-        #define STRIGID_ZONE_FINE_C(color)
-    #endif
+// Level 3: Fine profiling (hot loops, per-entity operations)
+#if TRACY_PROFILE_LEVEL >= 3
+#define STRIGID_ZONE_FINE() ZoneScoped
+#define STRIGID_ZONE_FINE_N(name) ZoneScopedN(name)
+#define STRIGID_ZONE_FINE_C(color) ZoneScopedC(color)
+#else
+#define STRIGID_ZONE_FINE()
+#define STRIGID_ZONE_FINE_N(name)
+#define STRIGID_ZONE_FINE_C(color)
+#endif
 
-    // Legacy macros (map to COARSE for compatibility)
-    #define STRIGID_ZONE() STRIGID_ZONE_COARSE()
-    #define STRIGID_ZONE_N(name) STRIGID_ZONE_COARSE_N(name)
-    #define STRIGID_ZONE_C(color) STRIGID_ZONE_COARSE_C(color)
+// Legacy macros (map to COARSE for compatibility)
+#define STRIGID_ZONE() STRIGID_ZONE_COARSE()
+#define STRIGID_ZONE_N(name) STRIGID_ZONE_COARSE_N(name)
+#define STRIGID_ZONE_C(color) STRIGID_ZONE_COARSE_C(color)
 
-    // Zone with dynamic text (e.g., "Processing Entity 42")
-    #define STRIGID_ZONE_TEXT(text, size) ZoneText(text, size)
+// Zone with dynamic text (e.g., "Processing Entity 42")
+#define STRIGID_ZONE_TEXT(text, size) ZoneText(text, size)
 
-    // Memory profiling
-    #define STRIGID_ALLOC(ptr, size) TracyAlloc(ptr, size)
-    #define STRIGID_FREE(ptr) TracyFree(ptr)
-    #define STRIGID_ALLOC_N(ptr, size, name) TracyAllocN(ptr, size, name)
-    #define STRIGID_FREE_N(ptr, name) TracyFreeN(ptr, name)
+// Memory profiling
+#define STRIGID_ALLOC(ptr, size) TracyAlloc(ptr, size)
+#define STRIGID_FREE(ptr) TracyFree(ptr)
+#define STRIGID_ALLOC_N(ptr, size, name) TracyAllocN(ptr, size, name)
+#define STRIGID_FREE_N(ptr, name) TracyFreeN(ptr, name)
 
-    // Plots (for custom metrics like FPS, entity count, etc.)
-    #define STRIGID_PLOT(name, value) TracyPlot(name, value)
+// Plots (for custom metrics like FPS, entity count, etc.)
+#define STRIGID_PLOT(name, value) TracyPlot(name, value)
 
 #else
-    // No-op macros when Tracy is disabled
-    #define STRIGID_FRAME_MARK()
-    #define STRIGID_ZONE()
-    #define STRIGID_ZONE_N(name)
-    #define STRIGID_ZONE_C(color)
-    #define STRIGID_ZONE_COARSE()
-    #define STRIGID_ZONE_COARSE_N(name)
-    #define STRIGID_ZONE_COARSE_C(color)
-    #define STRIGID_ZONE_MEDIUM()
-    #define STRIGID_ZONE_MEDIUM_N(name)
-    #define STRIGID_ZONE_MEDIUM_C(color)
-    #define STRIGID_ZONE_FINE()
-    #define STRIGID_ZONE_FINE_N(name)
-    #define STRIGID_ZONE_FINE_C(color)
-    #define STRIGID_ZONE_TEXT(text, size)
-    #define STRIGID_ALLOC(ptr, size)
-    #define STRIGID_FREE(ptr)
-    #define STRIGID_ALLOC_N(ptr, size, name)
-    #define STRIGID_FREE_N(ptr, name)
-    #define STRIGID_PLOT(name, value)
+// No-op macros when Tracy is disabled
+#define STRIGID_FRAME_MARK()
+#define STRIGID_ZONE()
+#define STRIGID_ZONE_N(name)
+#define STRIGID_ZONE_C(color)
+#define STRIGID_ZONE_COARSE()
+#define STRIGID_ZONE_COARSE_N(name)
+#define STRIGID_ZONE_COARSE_C(color)
+#define STRIGID_ZONE_MEDIUM()
+#define STRIGID_ZONE_MEDIUM_N(name)
+#define STRIGID_ZONE_MEDIUM_C(color)
+#define STRIGID_ZONE_FINE()
+#define STRIGID_ZONE_FINE_N(name)
+#define STRIGID_ZONE_FINE_C(color)
+#define STRIGID_ZONE_TEXT(text, size)
+#define STRIGID_ALLOC(ptr, size)
+#define STRIGID_FREE(ptr)
+#define STRIGID_ALLOC_N(ptr, size, name)
+#define STRIGID_FREE_N(ptr, name)
+#define STRIGID_PLOT(name, value)
 #endif
 
 // Tracy color definitions (24-bit RGB)

@@ -4,7 +4,8 @@
 /**
  * ViewState: Camera/Projection data for rendering
  */
-struct ViewState {
+struct ViewState
+{
     Matrix4 ViewMatrix;
     Matrix4 ProjectionMatrix;
     Vector3 CameraPosition;
@@ -13,7 +14,8 @@ struct ViewState {
 /**
  * SceneState: Global scene environment
  */
-struct SceneState {
+struct SceneState
+{
     Vector3 SunDirection;
     Vector3 SunColor;
 };
@@ -24,18 +26,20 @@ struct SceneState {
  * Logic Thread produces these at FixedUpdateHz
  * Render Thread consumes via triple-buffer mailbox
  */
-struct FramePacket {
-    ViewState   View;
-    SceneState  Scene;
+struct FramePacket
+{
+    ViewState View;
+    SceneState Scene;
 
     // Timing
-    double SimulationTime;      // Current simulation time
+    double SimulationTime; // Current simulation time
 
     // Snapshot Metadata
     uint32_t ActiveEntityCount; // How many entities in the sparse arrays
-    uint32_t FrameNumber;       // Increments each FixedUpdate, signals new data available
+    uint32_t FrameNumber; // Increments each FixedUpdate, signals new data available
 
-    void Clear() {
+    void Clear()
+    {
         ActiveEntityCount = 0;
         FrameNumber = 0;
     }

@@ -1,4 +1,5 @@
-﻿struct UserCmd {
+﻿struct UserCmd
+{
     uint32_t SequenceNumber; // #1, #2, #3...
     float ForwardMove;
     float SideMove;

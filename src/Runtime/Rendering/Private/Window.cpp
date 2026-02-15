@@ -62,8 +62,9 @@ int Window::Open(const char* title, int w, int h)
         SDL_DestroyWindow(EngineWindow);
         return -1;
     }
-    
-    if (!SDL_SetGPUSwapchainParameters(GpuDevice, EngineWindow, SDL_GPU_SWAPCHAINCOMPOSITION_SDR, SDL_GPU_PRESENTMODE_MAILBOX))
+
+    if (!SDL_SetGPUSwapchainParameters(GpuDevice, EngineWindow, SDL_GPU_SWAPCHAINCOMPOSITION_SDR,
+                                       SDL_GPU_PRESENTMODE_MAILBOX))
     {
         std::cerr << "Swapchain Parameters Failed: " << SDL_GetError() << std::endl;
         SDL_DestroyGPUDevice(GpuDevice);
@@ -167,24 +168,24 @@ void Window::SetTitle(const char* title)
 void Window::CreateCubeMesh()
 {
     STRIGID_ZONE_C(STRIGID_COLOR_RENDERING);
-    
+
     // Create vertex buffer
     SDL_GPUBufferCreateInfo vertexBufferInfo = {};
     vertexBufferInfo.usage = SDL_GPU_BUFFERUSAGE_VERTEX;
     vertexBufferInfo.size = sizeof(CubeMesh::Vertices);
-    
+
     VertexBuffer = SDL_CreateGPUBuffer(GpuDevice, &vertexBufferInfo);
     if (!VertexBuffer)
     {
         std::cerr << "Failed to create vertex buffer: " << SDL_GetError() << std::endl;
         return;
     }
-    
+
     // Upload vertex data
     SDL_GPUTransferBufferCreateInfo transferInfo = {};
     transferInfo.usage = SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD;
     transferInfo.size = sizeof(CubeMesh::Vertices);
-    
+
     SDL_GPUTransferBuffer* transferBuffer = SDL_CreateGPUTransferBuffer(GpuDevice, &transferInfo);
     void* mapped = SDL_MapGPUTransferBuffer(GpuDevice, transferBuffer, true); // true = cycle (wait if needed)
     std::memcpy(mapped, CubeMesh::Vertices, sizeof(CubeMesh::Vertices));
@@ -199,29 +200,29 @@ void Window::CreateCubeMesh()
         return;
     }
     SDL_GPUCopyPass* copyPass = SDL_BeginGPUCopyPass(uploadCmd);
-    
+
     SDL_GPUTransferBufferLocation src = {};
     src.transfer_buffer = transferBuffer;
     src.offset = 0;
-    
+
     SDL_GPUBufferRegion dst = {};
     dst.buffer = VertexBuffer;
     dst.offset = 0;
     dst.size = sizeof(CubeMesh::Vertices);
-    
+
     SDL_UploadToGPUBuffer(copyPass, &src, &dst, false);
     SDL_EndGPUCopyPass(copyPass);
     SDL_SubmitGPUCommandBuffer(uploadCmd);
-    
+
     SDL_ReleaseGPUTransferBuffer(GpuDevice, transferBuffer);
-    
+
     // Create index buffer (similar process)
     SDL_GPUBufferCreateInfo indexBufferInfo = {};
     indexBufferInfo.usage = SDL_GPU_BUFFERUSAGE_INDEX;
     indexBufferInfo.size = sizeof(CubeMesh::Indices);
-    
+
     IndexBuffer = SDL_CreateGPUBuffer(GpuDevice, &indexBufferInfo);
-    
+
     // Upload index data
     transferInfo.size = sizeof(CubeMesh::Indices);
     transferBuffer = SDL_CreateGPUTransferBuffer(GpuDevice, &transferInfo);
@@ -238,31 +239,31 @@ void Window::CreateCubeMesh()
         return;
     }
     copyPass = SDL_BeginGPUCopyPass(uploadCmd);
-    
+
     src.transfer_buffer = transferBuffer;
     src.offset = 0;
-    
+
     dst.buffer = IndexBuffer;
     dst.offset = 0;
     dst.size = sizeof(CubeMesh::Indices);
-    
+
     SDL_UploadToGPUBuffer(copyPass, &src, &dst, false);
     SDL_EndGPUCopyPass(copyPass);
     SDL_SubmitGPUCommandBuffer(uploadCmd);
-    
+
     SDL_ReleaseGPUTransferBuffer(GpuDevice, transferBuffer);
 }
 
 void Window::CreateInstanceBuffer(size_t Capacity, int BufferIndex)
 {
     STRIGID_ZONE_C(STRIGID_COLOR_RENDERING);
-    
+
     InstanceBufferCapacities[BufferIndex] = Capacity;
-    
+
     SDL_GPUBufferCreateInfo bufferInfo = {};
     bufferInfo.usage = SDL_GPU_BUFFERUSAGE_VERTEX;
     bufferInfo.size = sizeof(InstanceData) * static_cast<uint32_t>(Capacity);
-    
+
     InstanceBuffers[BufferIndex] = SDL_CreateGPUBuffer(GpuDevice, &bufferInfo);
     if (!InstanceBuffers[BufferIndex])
     {
@@ -273,7 +274,7 @@ void Window::CreateInstanceBuffer(size_t Capacity, int BufferIndex)
 void Window::CreateRenderPipeline()
 {
     STRIGID_ZONE_C(STRIGID_COLOR_RENDERING);
-    
+
     // Create vertex shader
     SDL_GPUShaderCreateInfo vertShaderInfo = {};
     vertShaderInfo.code = (const uint8_t*)CompiledShaders::VertexShader;
@@ -285,14 +286,14 @@ void Window::CreateRenderPipeline()
     vertShaderInfo.num_storage_textures = 0;
     vertShaderInfo.num_storage_buffers = 0;
     vertShaderInfo.num_uniform_buffers = 1;
-    
+
     VertexShader = SDL_CreateGPUShader(GpuDevice, &vertShaderInfo);
     if (!VertexShader)
     {
         std::cerr << "Failed to create vertex shader: " << SDL_GetError() << std::endl;
         return;
     }
-    
+
     // Create fragment shader
     SDL_GPUShaderCreateInfo fragShaderInfo = {};
     fragShaderInfo.code = (const uint8_t*)CompiledShaders::FragmentShader;
@@ -304,47 +305,47 @@ void Window::CreateRenderPipeline()
     fragShaderInfo.num_storage_textures = 0;
     fragShaderInfo.num_storage_buffers = 0;
     fragShaderInfo.num_uniform_buffers = 0;
-    
+
     FragmentShader = SDL_CreateGPUShader(GpuDevice, &fragShaderInfo);
     if (!FragmentShader)
     {
         std::cerr << "Failed to create fragment shader: " << SDL_GetError() << std::endl;
         return;
     }
-    
+
     std::cout << "Shaders created successfully!" << std::endl;
-    
+
     // Define vertex attributes
     SDL_GPUVertexAttribute vertexAttributes[5] = {};
-    
+
     // Location 0: vertex position (vec3)
     vertexAttributes[0].location = 0;
     vertexAttributes[0].format = SDL_GPU_VERTEXELEMENTFORMAT_FLOAT3;
     vertexAttributes[0].offset = 0;
     vertexAttributes[0].buffer_slot = 0;
-    
+
     // Location 1: instance position (vec3)
     vertexAttributes[1].location = 1;
     vertexAttributes[1].format = SDL_GPU_VERTEXELEMENTFORMAT_FLOAT3;
     vertexAttributes[1].offset = 0;
     vertexAttributes[1].buffer_slot = 1;
-    
+
     // Location 2: instance rotation (vec3)
     vertexAttributes[2].location = 2;
     vertexAttributes[2].format = SDL_GPU_VERTEXELEMENTFORMAT_FLOAT3;
-    vertexAttributes[2].offset = 16;  // Changed from 12 due to padding
+    vertexAttributes[2].offset = 16; // Changed from 12 due to padding
     vertexAttributes[2].buffer_slot = 1;
 
     // Location 3: instance scale (vec3)
     vertexAttributes[3].location = 3;
     vertexAttributes[3].format = SDL_GPU_VERTEXELEMENTFORMAT_FLOAT3;
-    vertexAttributes[3].offset = 32;  // Changed from 24 due to padding
+    vertexAttributes[3].offset = 32; // Changed from 24 due to padding
     vertexAttributes[3].buffer_slot = 1;
 
     // Location 4: instance color (vec4)
     vertexAttributes[4].location = 4;
     vertexAttributes[4].format = SDL_GPU_VERTEXELEMENTFORMAT_FLOAT4;
-    vertexAttributes[4].offset = 48;  // Changed from 36 due to padding
+    vertexAttributes[4].offset = 48; // Changed from 36 due to padding
     vertexAttributes[4].buffer_slot = 1;
 
     // Define vertex buffers
@@ -355,23 +356,23 @@ void Window::CreateRenderPipeline()
     vertexBuffers[0].pitch = sizeof(CubeMesh::Vertex);
     vertexBuffers[0].input_rate = SDL_GPU_VERTEXINPUTRATE_VERTEX;
     vertexBuffers[0].instance_step_rate = 0;
-    
+
     // Buffer 1: per-instance (transform + color)
     vertexBuffers[1].slot = 1;
     vertexBuffers[1].pitch = sizeof(InstanceData);
     vertexBuffers[1].input_rate = SDL_GPU_VERTEXINPUTRATE_INSTANCE;
     vertexBuffers[1].instance_step_rate = 0;
-    
+
     SDL_GPUVertexInputState vertexInputState = {};
     vertexInputState.vertex_buffer_descriptions = vertexBuffers;
     vertexInputState.num_vertex_buffers = 2;
     vertexInputState.vertex_attributes = vertexAttributes;
     vertexInputState.num_vertex_attributes = 5;
-    
+
     // Color target
     SDL_GPUColorTargetDescription colorTarget = {};
     colorTarget.format = SDL_GetGPUSwapchainTextureFormat(GpuDevice, EngineWindow);
-    
+
     // Graphics pipeline
     SDL_GPUGraphicsPipelineCreateInfo pipelineInfo = {};
     pipelineInfo.vertex_shader = VertexShader;
@@ -380,7 +381,7 @@ void Window::CreateRenderPipeline()
     pipelineInfo.primitive_type = SDL_GPU_PRIMITIVETYPE_TRIANGLELIST;
     pipelineInfo.target_info.num_color_targets = 1;
     pipelineInfo.target_info.color_target_descriptions = &colorTarget;
-    
+
     Pipeline = SDL_CreateGPUGraphicsPipeline(GpuDevice, &pipelineInfo);
     if (!Pipeline)
     {
@@ -395,10 +396,10 @@ void Window::CreateRenderPipeline()
 void Window::DrawInstances(const InstanceData* Instances, size_t Count, const uint8_t* WrapStart, size_t WrapCount)
 {
     STRIGID_ZONE_C(STRIGID_COLOR_RENDERING);
-    
+
     if (Count == 0 || !Pipeline)
         return;
-    
+
     // Frame pacing
     FramePacer.BeginFrame();
 
@@ -413,7 +414,7 @@ void Window::DrawInstances(const InstanceData* Instances, size_t Count, const ui
             SDL_ReleaseGPUBuffer(GpuDevice, InstanceBuffer);
         }
         CreateInstanceBuffer(Count * 2, frame_index);
-        InstanceBuffer = InstanceBuffers[frame_index];  // Update local variable
+        InstanceBuffer = InstanceBuffers[frame_index]; // Update local variable
     }
 
     // Upload instance data to GPU using cached transfer buffer
@@ -429,16 +430,16 @@ void Window::DrawInstances(const InstanceData* Instances, size_t Count, const ui
             SDL_ReleaseGPUTransferBuffer(GpuDevice, TransferBuffer);
         }
 
-        TransferBufferCapacities[frame_index] = requiredSize * 2;  // Over-allocate to avoid frequent resizes
+        TransferBufferCapacities[frame_index] = requiredSize * 2; // Over-allocate to avoid frequent resizes
 
         SDL_GPUTransferBufferCreateInfo transferInfo = {};
         transferInfo.usage = SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD;
         transferInfo.size = static_cast<uint32_t>(TransferBufferCapacities[frame_index]);
 
         TransferBuffers[frame_index] = SDL_CreateGPUTransferBuffer(GpuDevice, &transferInfo);
-        TransferBuffer = TransferBuffers[frame_index];  // Update local variable
+        TransferBuffer = TransferBuffers[frame_index]; // Update local variable
     }
-    
+
     // Acquire command buffer and swapchain texture FIRST (fail fast if unavailable)
     SDL_GPUCommandBuffer* cmdBuf = SDL_AcquireGPUCommandBuffer(GpuDevice);
     if (!cmdBuf)
@@ -454,7 +455,7 @@ void Window::DrawInstances(const InstanceData* Instances, size_t Count, const ui
         SDL_CancelGPUCommandBuffer(cmdBuf);
         return;
     }
-    
+
     if (WrapStart)
     {
         STRIGID_ZONE_N("Wrapping Buffer");
@@ -463,14 +464,14 @@ void Window::DrawInstances(const InstanceData* Instances, size_t Count, const ui
     }
     else
     {
-        std::memcpy(mapped, Instances, requiredSize);   
+        std::memcpy(mapped, Instances, requiredSize);
     }
     SDL_UnmapGPUTransferBuffer(GpuDevice, TransferBuffer);
 
     SDL_GPUCopyPass* copyPass = SDL_BeginGPUCopyPass(cmdBuf);
 
     SDL_GPUTransferBufferLocation src = {};
-    src.transfer_buffer = TransferBuffer;  // Use cached transfer buffer
+    src.transfer_buffer = TransferBuffer; // Use cached transfer buffer
     src.offset = 0;
 
     SDL_GPUBufferRegion dst = {};
@@ -480,26 +481,26 @@ void Window::DrawInstances(const InstanceData* Instances, size_t Count, const ui
 
     SDL_UploadToGPUBuffer(copyPass, &src, &dst, false);
     SDL_EndGPUCopyPass(copyPass);
-    
+
     // Create simple perspective camera matrix
     static float AspectRatio = static_cast<float>(Width) / static_cast<float>(Height);
     static float Fov = 60.0f * 3.14159f / 180.0f; // 60 degrees in radians
     static float ZNear = 0.1f;
     static float ZFar = 1000.0f;
-    
+
     // Perspective projection matrix (column-major for GLSL)
     static float F = 1.0f / std::tan(Fov / 2.0f);
     static float ViewProjMatrix[16] = {
         // Column 0
         F / AspectRatio, 0.0f, 0.0f, 0.0f,
         // Column 1
-        0.0f, F, 0.0f, 0.0f,  // Note: No Y-flip, SDL3 handles NDC conversion
+        0.0f, F, 0.0f, 0.0f, // Note: No Y-flip, SDL3 handles NDC conversion
         // Column 2
         0.0f, 0.0f, ZFar / (ZFar - ZNear), -(ZFar * ZNear) / (ZFar - ZNear),
         // Column 3
         0.0f, 0.0f, 1.0f, 0.0f
     };
-    
+
     // Push uniform data to shader BEFORE beginning render pass (mat4 = 64 bytes)
     SDL_PushGPUVertexUniformData(cmdBuf, 0, ViewProjMatrix, sizeof(ViewProjMatrix));
 
@@ -511,29 +512,29 @@ void Window::DrawInstances(const InstanceData* Instances, size_t Count, const ui
         SDL_CancelGPUCommandBuffer(cmdBuf);
         return;
     }
-    
+
     SDL_GPUColorTargetInfo colorTarget = {};
     colorTarget.texture = swapchainTex;
     colorTarget.clear_color = {0.1f, 0.1f, 0.1f, 1.0f};
     colorTarget.load_op = SDL_GPU_LOADOP_CLEAR;
     colorTarget.store_op = SDL_GPU_STOREOP_STORE;
-    
-    
+
+
     SDL_GPURenderPass* renderPass = SDL_BeginGPURenderPass(cmdBuf, &colorTarget, 1, nullptr);
     SDL_BindGPUGraphicsPipeline(renderPass, Pipeline);
-    
-    
+
+
     SDL_GPUBufferBinding vertexBinding = {VertexBuffer, 0};
     SDL_BindGPUVertexBuffers(renderPass, 0, &vertexBinding, 1);
-    
+
     SDL_GPUBufferBinding instanceBinding = {InstanceBuffer, 0};
     SDL_BindGPUVertexBuffers(renderPass, 1, &instanceBinding, 1);
-    
+
     SDL_GPUBufferBinding indexBinding = {IndexBuffer, 0};
     SDL_BindGPUIndexBuffer(renderPass, &indexBinding, SDL_GPU_INDEXELEMENTSIZE_16BIT);
-    
+
     SDL_DrawGPUIndexedPrimitives(renderPass, CubeMesh::IndexCount, static_cast<uint32_t>(Count), 0, 0, 0);
-    
+
     SDL_EndGPURenderPass(renderPass);
 
     FramePacer.EndFrame(cmdBuf);
