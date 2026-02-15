@@ -78,6 +78,18 @@ void Archetype::BuildLayout(const std::vector<ComponentMeta>& Components)
         // Advance offset by (size * capacity)
         CurrentOffset += Meta.Size * EntitiesPerChunk;
     }
+    // Build cached iteration data for fast component access
+    ComponentIterationCache.clear();
+    ComponentIterationCache.reserve(ComponentLayout.size());
+    for (const auto& [typeID, meta] : ComponentLayout)
+    {
+        ComponentCacheEntry entry;
+        entry.TypeID = typeID;
+        entry.IsFieldDecomposed = false;
+        entry.ChunkOffset = meta.OffsetInChunk;
+        ComponentIterationCache.push_back(entry);
+    }
+
 
     // Verify we didn't overflow chunk
     assert(CurrentOffset <= Chunk::DATA_SIZE && "Component layout exceeds chunk size!");
@@ -149,6 +161,15 @@ void* Archetype::GetComponentArrayRaw(Chunk* TargetChunk, ComponentTypeID TypeID
 
     const ComponentMeta& Meta = It->second;
     return TargetChunk->GetBuffer(static_cast<uint32_t>(Meta.OffsetInChunk));
+}
+std::vector<void*> Archetype::GetFieldArrays(Chunk* TargetChunk, ComponentTypeID TypeID)
+{
+    auto It = ComponentLayout.find(TypeID);
+    if (It == ComponentLayout.end())
+        return {};
+
+    const ComponentMeta& Meta = It->second;
+    return {TargetChunk->GetBuffer(static_cast<uint32_t>(Meta.OffsetInChunk))};
 }
 
 Chunk* Archetype::AllocateChunk()

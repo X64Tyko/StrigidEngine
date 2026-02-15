@@ -35,6 +35,15 @@ public:
     // Component layout information
     std::unordered_map<ComponentTypeID, ComponentMeta> ComponentLayout;
 
+    // Cached component iteration data (built once in BuildLayout)
+    struct ComponentCacheEntry
+    {
+        ComponentTypeID TypeID;
+        bool IsFieldDecomposed;
+        size_t ChunkOffset;
+    };
+    std::vector<ComponentCacheEntry> ComponentIterationCache;
+
     // Get the number of entities in a specific chunk (handles tail chunk)
     uint32_t GetChunkCount(size_t ChunkIndex) const;
 
@@ -72,6 +81,9 @@ public:
 
     // Get raw pointer to component array
     void* GetComponentArrayRaw(Chunk* TargetChunk, ComponentTypeID TypeID);
+
+    // Get field arrays for decomposed components (SoA)
+    std::vector<void*> GetFieldArrays(Chunk* TargetChunk, ComponentTypeID TypeID);
 
     // Build the internal SoA layout from component list
     void BuildLayout(const std::vector<ComponentMeta>& Components);

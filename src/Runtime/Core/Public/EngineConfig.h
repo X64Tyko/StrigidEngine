@@ -6,16 +6,16 @@ struct EngineConfig
     int TargetFPS = 0; // 0 = Uncapped
 
     // Physics/Simulation (Fixed High) - e.g., 60Hz or 128Hz
-    int FixedUpdateHz = 60;
+    int FixedUpdateHz = 128;
 
     // Networking (Fixed Low/Med) - e.g., 20Hz or 30Hz
     // This is your "Tick Rate". Lower = Less Bandwidth, Higher = More Precision.
     int NetworkUpdateHz = 30;
-    
+
     // Input (and window management)
     // This controls how fast your main thread goes, higher = better input latency
     int InputPollHz = 1000;
-    
+
     // --- Helpers ---
     double GetTargetFrameTime() const
     {

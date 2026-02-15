@@ -22,7 +22,7 @@ using UpdateFunc = void(*)(double dt, void* storage);
 using HydrateFunc = void(*)(void**, uint32_t, void*);
 using PhysFunc = void(*)(double, void**, uint32_t, void*);
 
-constexpr size_t MAX_ENTITY_VIEW_SIZE = 128;
+constexpr size_t MAX_ENTITY_VIEW_SIZE = 256;
 
 struct EntityMeta
 {
@@ -73,17 +73,18 @@ public:
         {
             EntityGetters[ID].Update = []([[maybe_unused]] double dt, [[maybe_unused]] void* storage)
             {
-                T* view = (T*)storage;
+                T* view = static_cast<T*>(storage);
                 view->Update(dt);
             };
         }
 
         if constexpr (HasPrePhysics<T>)
         {
-            EntityGetters[ID].PrePhys = []([[maybe_unused]] double dt, [[maybe_unused]] void** componentArrays, [[maybe_unused]] uint32_t componentCount, [[maybe_unused]] void* storage)
+            EntityGetters[ID].PrePhys = []([[maybe_unused]] double dt, [[maybe_unused]] void** componentArrays,
+                                           [[maybe_unused]] uint32_t componentCount, [[maybe_unused]] void* storage)
             {
                 // in order to support vectorization, might need to look into _mm256. Creating a Wide version of components
-                T* view = (T*)storage;
+                T* view = static_cast<T*>(storage);
                 for (uint32_t i = 0; i < componentCount; ++i)
                 {
                     view->Hydrate(componentArrays, i);
@@ -96,14 +97,14 @@ public:
         {
             EntityGetters[ID].PostPhys = []([[maybe_unused]] double dt, [[maybe_unused]] void* storage)
             {
-                T* view = (T*)storage;
+                T* view = static_cast<T*>(storage);
                 view->PostPhysics(dt);
             };
         }
 
         EntityGetters[ID].Hydrate = [](void** componentArrays, uint32_t index, void* storage)
         {
-            T* view = (T*)storage;
+            T* view = static_cast<T*>(storage);
             view->Hydrate(componentArrays, index);
         };
     }

@@ -4,7 +4,7 @@
 
 **Purpose:** A personal R&D sandbox designed to strip away modern engine abstractions and validate that a strict data-oriented architecture can deliver sub-millisecond latency.
 
-**Objective:** A high-performance, data-oriented engine prioritizing mechanical elegance and input-to-photon latency.
+**Objective:** A high-performance, data-oriented engine prioritizing mechanical elegance and input-to-photon latency, while maintining as close to existing OOP style and stucture on the user end as possible.
 
 **Constraint:** Zero "allocation-per-frame" in hot paths. Scale to 100,000+ active entities at >250 FPS.
 

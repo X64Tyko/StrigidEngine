@@ -167,6 +167,9 @@ void Registry::InvokeUpdate(double dt)
     // Iterate through all archetypes
     for (auto& [sig, archetype] : Archetypes)
     {
+        if (archetype->TotalEntityCount == 0)
+            continue;
+
         MetaRegistry& MR = MetaRegistry::Get();
 
         auto meta = MR.EntityGetters[*archetype->ResidentClassIDs.begin()];
@@ -187,10 +190,10 @@ void Registry::InvokeUpdate(double dt)
             void* componentArrays[MAX_COMPONENTS];
             {
                 STRIGID_ZONE_MEDIUM_N("Build_Component_Arrays"); // Level 2: Per-chunk profiling
-                for (const auto& [compTypeID, compMeta] : archetype->ComponentLayout)
+                for (const auto& cacheEntry : archetype->ComponentIterationCache)
                 {
-                    void* arrayPtr = archetype->GetComponentArrayRaw(chunk, compTypeID);
-                    componentArrays[compTypeID] = arrayPtr;
+                    void* arrayPtr = chunk->GetBuffer(static_cast<uint32_t>(cacheEntry.ChunkOffset));
+                    componentArrays[cacheEntry.TypeID] = arrayPtr;
                 }
             }
 
@@ -211,6 +214,9 @@ void Registry::InvokePrePhys(double dt)
     // Iterate through all archetypes
     for (auto& [sig, archetype] : Archetypes)
     {
+        if (archetype->TotalEntityCount == 0)
+            continue;
+
         MetaRegistry& MR = MetaRegistry::Get();
 
         auto meta = MR.EntityGetters[*archetype->ResidentClassIDs.begin()];
@@ -231,10 +237,10 @@ void Registry::InvokePrePhys(double dt)
             void* componentArrays[MAX_COMPONENTS];
             {
                 STRIGID_ZONE_MEDIUM_N("Build_Component_Arrays"); // Level 2: Per-chunk profiling
-                for (const auto& [compTypeID, compMeta] : archetype->ComponentLayout)
+                for (const auto& cacheEntry : archetype->ComponentIterationCache)
                 {
-                    void* arrayPtr = archetype->GetComponentArrayRaw(chunk, compTypeID);
-                    componentArrays[compTypeID] = arrayPtr;
+                    void* arrayPtr = chunk->GetBuffer(static_cast<uint32_t>(cacheEntry.ChunkOffset));
+                    componentArrays[cacheEntry.TypeID] = arrayPtr;
                 }
             }
 
@@ -258,6 +264,9 @@ void Registry::InvokePostPhys(double dt)
     // Iterate through all archetypes
     for (auto& [sig, archetype] : Archetypes)
     {
+        if (archetype->TotalEntityCount == 0)
+            continue;
+
         MetaRegistry& MR = MetaRegistry::Get();
 
         auto meta = MR.EntityGetters[*archetype->ResidentClassIDs.begin()];
@@ -278,10 +287,10 @@ void Registry::InvokePostPhys(double dt)
             void* componentArrays[MAX_COMPONENTS];
             {
                 STRIGID_ZONE_MEDIUM_N("Build_Component_Arrays"); // Level 2: Per-chunk profiling
-                for (const auto& [compTypeID, compMeta] : archetype->ComponentLayout)
+                for (const auto& cacheEntry : archetype->ComponentIterationCache)
                 {
-                    void* arrayPtr = archetype->GetComponentArrayRaw(chunk, compTypeID);
-                    componentArrays[compTypeID] = arrayPtr;
+                    void* arrayPtr = chunk->GetBuffer(static_cast<uint32_t>(cacheEntry.ChunkOffset));
+                    componentArrays[cacheEntry.TypeID] = arrayPtr;
                 }
             }
 
