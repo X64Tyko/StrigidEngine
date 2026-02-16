@@ -2,13 +2,31 @@
 
 ## Executive Summary
 
-**Purpose:** A personal R&D sandbox designed to strip away modern engine abstractions and validate that a strict data-oriented architecture can deliver sub-millisecond latency.
+**Purpose:** A personal R&D sandbox designed to strip away modern engine abstractions and validate that a strict
+data-oriented architecture can deliver sub-millisecond latency.
 
-**Objective:** A high-performance, data-oriented engine prioritizing mechanical elegance and input-to-photon latency, while maintining as close to existing OOP style and stucture on the user end as possible.
+**Objective:** A high-performance, data-oriented engine prioritizing mechanical elegance and input-to-photon latency,
+while maintining as close to existing OOP style and stucture on the user end as possible.
 
 **Constraint:** Zero "allocation-per-frame" in hot paths. Scale to 100,000+ active entities at >250 FPS.
 
-**Philosophy:** White-box architecture - users can understand, debug, and modify the engine without black-box abstractions. "Build it to break it." I use this project to stress-test architectural theories (like lock-free triple-buffering) that are too risky to implement directly into a live commercial product.
+**Philosophy:** White-box architecture - users can understand, debug, and modify the engine without black-box
+abstractions. "Build it to break it." I use this project to stress-test architectural theories (like lock-free
+triple-buffering) that are too risky to implement directly into a live commercial product.
+
+---
+
+## TL;DR Current Metrics
+
+- 1M entities ~5ms PrePhysics call. Just transform updates.
+- Rendering 1M at 51FPS, no culling, depth, etc..
+- Trinity split:
+    - Main: Input polling and window management 1KHz
+    - Logic: Running the fixed update and variadic update loop
+    - Render: Requests resources from Main, builds PRU commands
+- Proper SoA with component decomposition, ready for sparse sets for 128(variable) history buffers and true SIMD phys
+  rendering.
+- OOP facade remains in tact, though at the moment creating new components requires significant boilerplate.
 
 ---
 
@@ -19,6 +37,7 @@
 **Three specialized threads, each with a distinct purpose:**
 
 #### Sentinel (Main Thread)
+
 - **OS Event Pumping** - `SDL_PollEvent()` (required on main thread)
 - **Window Ownership** - SDL3 requirement
 - **GPU Resource Management** - Acquire CmdBuffer/SwapchainTexture, Submit via FramePacer
@@ -27,6 +46,7 @@
 - **Target Rate:** 500-1000 Hz (uncapped, minimal work)
 
 #### Brain (Logic Thread)
+
 - **Fixed Timestep Simulation** - FixedUpdate at `EngineConfig.FixedUpdateHz` (60/120Hz)
 - **Variable Update** - Update(dt) every frame for time-sensitive logic
 - **Accumulator/Substepping** - Catch up on missed fixed timesteps (spiral of death protection)
@@ -35,6 +55,7 @@
 - **Target Rate:** 60-120 Hz (configurable, deterministic)
 
 #### Encoder (Render Thread)
+
 - **FramePacket Consumption** - Poll mailbox for new simulation state (lock-free)
 - **Direct Page Access** - Read from committed triple-buffered sparse array pages (zero-copy)
 - **Integrated Processing** - Culling + interpolation + dead entity filtering in single pass
@@ -48,6 +69,7 @@
 ### II. Communication & Synchronization
 
 #### Triple Buffer Mailbox (Lock-Free)
+
 ```
 Brain (Writer)           Mailbox (Atomic)        Encoder (Reader)
     │                         │                        │
@@ -65,11 +87,13 @@ Brain (Writer)           Mailbox (Atomic)        Encoder (Reader)
 ```
 
 **Benefits:**
+
 - Brain never blocks on Encoder
 - Encoder always gets latest complete frame
 - Zero locks, zero contention
 
 #### Frame Synchronization Handshake
+
 ```
 Encoder                                  Sentinel
    │                                        │
@@ -92,6 +116,7 @@ Encoder                                  Sentinel
 **Purpose:** Prevent Encoder from starting frame N+1 before frame N is submitted (avoids semaphore errors).
 
 #### GPU Resource Atomics
+
 - `bNeedsGPUResources` - Encoder → Sentinel request
 - `bReadyToSubmit` - Encoder → Sentinel completion signal
 - `CmdBufferAtomic` - Sentinel → Encoder → Sentinel handoff
@@ -101,7 +126,9 @@ Encoder                                  Sentinel
 ### III. Memory Model: Hybrid-Sparse Relational ECS
 
 #### The Core (Hot Path) - **In Progress**
+
 **Triple-Buffered Bespoke Sparse Sets:**
+
 - Components: `Transform`, `Velocity`, `BoneArray`, `HBV`
 - Paged for 100% cache density
 - **Page₀ (Committed - Oldest)** ← Render reads as Previous
@@ -109,6 +136,7 @@ Encoder                                  Sentinel
 - **Page₂ (Writing - Active)** ← Logic writes
 
 **Page Rotation (Logic Thread):**
+
 ```cpp
 void LogicThread::FixedUpdate(dt) {
     // 1. Write to Page₂
@@ -123,6 +151,7 @@ void LogicThread::FixedUpdate(dt) {
 ```
 
 **Direct Access (Render Thread):**
+
 ```cpp
 void RenderThread::ProcessEntities() {
     // Zero-copy access to committed pages
@@ -142,12 +171,14 @@ void RenderThread::ProcessEntities() {
 ```
 
 #### The Shell (Cold Path) - **Current Implementation**
+
 - **Single-Buffered Archetype Chunks**
     - `Health`, `Inventory`, `AIState`, `ColorData`
     - PoD-only logic data
     - Chunk-based allocation (16KB chunks)
 
 #### The Bridge
+
 - **Centralized Registry** mapping `EntityID → {CorePagePtr, ShellChunkPtr}`
 - **Current:** All components in Shell (Archetype system)
 - **In Progress:** Migrate Transform to triple-buffered Core
@@ -158,6 +189,7 @@ void RenderThread::ProcessEntities() {
 ## 2. Completed Milestones
 
 ### ✅ Week 4-5: ECS-Driven Rendering
+
 - SDL3 GPU rendering pipeline (Vulkan/Metal/D3D12 backend)
 - Instanced rendering (100,000 cubes @ 130 FPS single-threaded)
 - ECS with Transform, ColorData, Velocity components
@@ -166,31 +198,39 @@ void RenderThread::ProcessEntities() {
 - Persistent instance buffer optimization
 
 ### ✅ Week 6: The Strigid Trinity Implementation
+
 **Three-thread architecture fully operational:**
+
 - Sentinel (Main): 502 FPS - Event pump, GPU resource management
 - Brain (Logic): 207 FPS - Fixed timestep simulation, FramePacket production
-  - (The FPS was set to cap at 240, this runs well above that when not capped, I think there's an issue with either the FPS counting or the WaitForTime function)
+    - (The FPS was set to cap at 240, this runs well above that when not capped, I think there's an issue with either
+      the FPS counting or the WaitForTime function)
 - Encoder (Render): 321 FPS - Snapshot, interpolation, GPU command encoding
-  - This is currently just copying the instance data straight from the archetype chunks since we don't have the triple buffer sparse sets created yet.
+    - This is currently just copying the instance data straight from the archetype chunks since we don't have the triple
+      buffer sparse sets created yet.
 
 **Lock-free communication:**
+
 - Triple-buffer mailbox (Brain → Encoder)
 - Frame synchronization handshake (Encoder → Sentinel)
 
 **Snapshot + Interpolation rendering:**
+
 - RenderThread snapshots ECS state when FrameNumber changes
 - Double-buffered snapshots (Previous/Current)
 - Interpolates between snapshots at variable rate using alpha
 - Buttery smooth rendering even with 60Hz fixed simulation
 
 **GPU resource management:**
+
 - Transfer buffer with resize-on-demand
 - Instance buffer with resize-on-demand
 - Proper buffer cleanup (no memory leaks)
 - FramePacer with 3 frames in flight
-  - Kinda wanna try 2 next, need some latency testing in so I can see input to render time.
+    - Kinda wanna try 2 next, need some latency testing in so I can see input to render time.
 
 **Performance achieved (100k entities):**
+
 - Render: 321 FPS (3.11ms per frame)
 - Logic: 207 FPS (4.81ms per frame)
 - Main: 502 FPS (1.99ms per frame)
@@ -206,8 +246,9 @@ void RenderThread::ProcessEntities() {
 **Goal:** Replace naive rendering with CPU-driven state-sorted command stream.
 
 **Why CPU-Driven?**
+
 - GPU-driven (indirect draw) locks logic into compute shaders
-  - May tinker with this, if it goes well could simply include it as a default option
+    - May tinker with this, if it goes well could simply include it as a default option
 - Harder to debug and extend for users
 - CPU sorting is fast enough for 100k entities (<1ms)
 - Maintains "white box" philosophy
@@ -225,6 +266,7 @@ void RenderThread::ProcessEntities() {
 ```
 
 **Sort Order:**
+
 1. **Layer** - Opaque before Transparent (correctness)
 2. **Depth** - Front-to-back for Opaque (early-Z), Back-to-front for Transparent
 3. **Pipeline** - Minimize expensive shader switches
@@ -232,6 +274,7 @@ void RenderThread::ProcessEntities() {
 5. **Mesh** - Batch geometry
 
 **Tasks:**
+
 - [ ] **RenderSorter Class** - Generate, store, and sort 64-bit keys
 - [ ] **Key Generation** - Compute keys during snapshot/interpolation phase
 - [ ] **Radix Sort** - O(N) integer sort for >10k entities
@@ -239,6 +282,7 @@ void RenderThread::ProcessEntities() {
 - [ ] **Z-Prepass** - Optional opaque-only depth pass for complex scenes
 
 **Success Criteria:**
+
 - Sorting <1ms for 100k entities
 - Measured reduction in GPU state changes (Tracy GPU profiling)
 - Foundation for multiple materials/meshes
@@ -248,11 +292,13 @@ void RenderThread::ProcessEntities() {
 **Goal:** Replace template-based iteration with CRTP for zero-overhead polymorphism.
 
 **Current Bottleneck:**
+
 - `RegistryPtr->InvokeAll(LifecycleType::FixedUpdate, dt)` uses function pointers
 - Type lookups per entity
 - Logic thread chokes at 1M entities
 
 **CRTP Solution:**
+
 ```cpp
 template<typename Derived>
 class EntityView {
@@ -276,12 +322,14 @@ registry.ForEach<Transform, ColorData>([](Transform& t, ColorData& c) {
 ```
 
 **Tasks:**
+
 - [ ] **EntityView Base** - CRTP base class template
 - [ ] **ForEach Iterator** - Direct component iteration, no indirection
 - [ ] **Batch Operations** - Vectorize common operations (rotation, movement)
 - [ ] **Remove InvokeAll** - Replace with CRTP views
 
 **Success Criteria:**
+
 - 1M entities at stable 60 FPS on Logic thread
 - Zero virtual calls in hot path
 - Auto-vectorization (verify with assembly inspection)
@@ -331,6 +379,7 @@ class TripleBufferedSparseSet {
 ```
 
 **InterpEntry (Render-Ready Data):**
+
 ```cpp
 struct InterpEntry {
     uint64_t sortKey;    // For state sorting
@@ -344,6 +393,7 @@ std::vector<InterpEntry> InterpBuffer;  // Only visible entities
 ```
 
 **Tasks:**
+
 - [ ] **TripleBufferedSparseSet Template** - Implement with page rotation
 - [ ] **Migrate Transform to Triple Buffer** - Move from Archetype to Core
 - [ ] **Update LogicThread** - Add SwapPages() after FixedUpdate
@@ -353,6 +403,7 @@ std::vector<InterpEntry> InterpBuffer;  // Only visible entities
 - [ ] **Frustum Culling** - Camera visibility test during interpolation
 
 **Success Criteria:**
+
 - Zero memcpy in snapshot path (verify with profiler)
 - ~5ms eliminated for 100k entities (snapshot copy removed)
 - InterpBuffer only contains visible entities
@@ -362,11 +413,12 @@ std::vector<InterpEntry> InterpBuffer;  // Only visible entities
 **Performance Expectations:**
 
 | Entities | Old Flow (Copy+Interp) | New Flow (Direct+Cull+Interp) | Savings |
-|----------|----------------------|-------------------------------|---------|
-| 100k     | ~8ms                 | ~4ms                          | 50%     |
-| 1M       | ~80ms (unacceptable) | ~20-40ms (with SIMD)          | 50-75%  |
+|----------|------------------------|-------------------------------|---------|
+| 100k     | ~8ms                   | ~4ms                          | 50%     |
+| 1M       | ~80ms (unacceptable)   | ~20-40ms (with SIMD)          | 50-75%  |
 
 **Key Rules:**
+
 1. Logic NEVER reads from Page₀/Page₁ - only writes to Page₂
 2. Render NEVER reads from Page₂ - only reads Page₀/Page₁
 3. SwapPages() is atomic - single instruction rotation
@@ -376,20 +428,27 @@ std::vector<InterpEntry> InterpBuffer;  // Only visible entities
 ---
 
 ## 4. Networking Architecture: The Deterministic Bridge
-   Philosophy: Server authority with client-side autonomy. Reject the "destroy and recreate" pattern of standard engines in favor of "bind and reconcile."
+
+Philosophy: Server authority with client-side autonomy. Reject the "destroy and recreate" pattern of standard engines in
+favor of "bind and reconcile."
 
 ### I. The IO Model (Sentinel-Driven)
+
 Networking is treated as Input, not Logic.
 
-Socket Pump: The Sentinel (Main) Thread owns the GameNetworkingSockets (GNS) context. It pumps callbacks and buffers packets.
+Socket Pump: The Sentinel (Main) Thread owns the GameNetworkingSockets (GNS) context. It pumps callbacks and buffers
+packets.
 
 Handoff: Packets are atomic-swapped into the Brain (Logic) Thread's mailbox at the start of the FixedUpdate window.
 
-Benefit: The Logic thread never burns CPU cycles waiting on socket syscalls or packet decryption. It only processes hot, pre-fetched data.
-    
-- This is going to need soe testing and work, if our net tick is 128 and our fixed update is 60 we're creating a lot of our own latency.
+Benefit: The Logic thread never burns CPU cycles waiting on socket syscalls or packet decryption. It only processes hot,
+pre-fetched data.
+
+- This is going to need soe testing and work, if our net tick is 128 and our fixed update is 60 we're creating a lot of
+  our own latency.
 
 ### II. Identity & Ownership (The 8-Bit Lock)
+
 We embed ownership directly into the 64-bit EntityID to allow for O(1) authority checks without cache misses.
 
 ```C++
@@ -410,24 +469,31 @@ union EntityID
 
 Fast Auth Checks: bool IsMine(EntityID id) { return (id >> 56) == LocalClientID; }
 ```
+
 Routing: Packets are inherently filterable by looking at the second byte of the EntityID.
 
 ### III. The "Raw Memory" Protocol
+
 We reject high-level serialization layers (like FArchive) in favor of Memory Replication.
 
 Packet Structure: A trimmed version of the Render Thread's InstanceData.
-    
-- This is neat, but we'll also likely need to replicate data from the Shell data as well, How do we allow quick copy packet creation as well as user marked replicated data?
 
-Delta Compression: We memcpy the current simulation state against the last acknowledged state (XOR delta) directly from the Chunk memory.
+- This is neat, but we'll also likely need to replicate data from the Shell data as well, How do we allow quick copy
+  packet creation as well as user marked replicated data?
 
-Customizability: Users can define NetSerialize hooks for specific components, but the default is a raw memory block copy.
+Delta Compression: We memcpy the current simulation state against the last acknowledged state (XOR delta) directly from
+the Chunk memory.
+
+Customizability: Users can define NetSerialize hooks for specific components, but the default is a raw memory block
+copy.
 
 - Add this to the lifetime functionality in the EntityView?
 
 ### IV. R&D Hypothesis: Prediction Buffers & Object Linking
+
 The Problem:
-Standard engines (like Unreal) handle prediction errors by destroying the client's predicted actor and spawning a new server-authoritative actor. This can break gameplay logic references and causes visual popping.
+Standard engines (like Unreal) handle prediction errors by destroying the client's predicted actor and spawning a new
+server-authoritative actor. This can break gameplay logic references and causes visual popping.
 
 The Strigid Solution: "Prediction Binding"
 
@@ -435,20 +501,25 @@ Spawn Prediction: Client spawns a "Predicted Entity" immediately.
 
 Server Handshake: Server sends the authoritative spawn.
 
-Binding: Instead of destroying the local entity, Strigid binds the Server ID to the Local ID. The local entity adopts the Server's authority but keeps its local memory address active.
+Binding: Instead of destroying the local entity, Strigid binds the Server ID to the Local ID. The local entity adopts
+the Server's authority but keeps its local memory address active.
 
-- Leveraging rollback and resim systems for this could prove useful, so that the server can insert the predicted object exactly where it exists on the client.
+- Leveraging rollback and resim systems for this could prove useful, so that the server can insert the predicted object
+  exactly where it exists on the client.
 
 ### Experimental: "Context-Aware Prediction Paging"
+
 To solve the memory cost of full-world rollback, we are testing a Prediction Buffer system:
 
 Phase 1 (Identify): During FixedUpdate, any component touched by a predicted input is flagged.
 
 Phase 2 (Cache): flagged components are copied to a linear "Prediction Page" before modification.
 
-Phase 3 (Rollback): On misprediction, we memcpy only the Prediction Page back into the Core, rather than restoring the entire world state.
+Phase 3 (Rollback): On misprediction, we memcpy only the Prediction Page back into the Core, rather than restoring the
+entire world state.
 
-Mitigation: To prevent "butterfly effect" desync (where a resimulation touches an object that wasn't in the buffer), we speculatively cache objects within the bounding volume of the predicted entity.
+Mitigation: To prevent "butterfly effect" desync (where a resimulation touches an object that wasn't in the buffer), we
+speculatively cache objects within the bounding volume of the predicted entity.
 
 ---
 
@@ -459,6 +530,7 @@ Mitigation: To prevent "butterfly effect" desync (where a resimulation touches a
 **Goal:** Implement Pre-Physics → Sim → Post-Physics execution flow.
 
 **The Loop:**
+
 ```cpp
 // 1. Pre-Physics (Intent)
 for (auto& entity : activeEntities) {
@@ -478,11 +550,13 @@ CorePageManager.SwapPages();  // Page₁ → Page₀ (commit)
 ```
 
 **Physics Integration:**
+
 - Map `CorePage::Transform` directly to Jolt Physics bodies
 - Zero-copy physics (solver writes directly to Core page)
 - Brain never calls virtual functions during Sim
 
 **Tasks:**
+
 - [ ] **Jolt Physics Integration** - Map Core pages to physics world
 - [ ] **Pre/Post-Physics Hooks** - Add to entity lifecycle
 - [ ] **Collision Callbacks** - Trigger from Post-Physics phase
@@ -492,6 +566,7 @@ CorePageManager.SwapPages();  // Page₁ → Page₀ (commit)
 **Goal:** High-performance animation without per-bone objects.
 
 **BoneArray Component:**
+
 ```cpp
 struct BoneArray<64> {  // Fixed-size, inline storage
     Vector3 Deltas[64];  // Bone position offsets from bind pose
@@ -499,11 +574,13 @@ struct BoneArray<64> {  // Fixed-size, inline storage
 ```
 
 **Delta-Batching:**
+
 - Sort by SkeletonID (all humanoids together)
 - Upload bone matrices in batches
 - Compute Skinning Shader applies deltas
 
 **Tasks:**
+
 - [ ] **Asset Pipeline** - Load glTF/OBJ into Mesh/Skeleton assets
 - [ ] **BoneArray Component** - Fixed-size inline storage
 - [ ] **Skinning Shader** - Compute or Vertex shader bone application
@@ -512,23 +589,28 @@ struct BoneArray<64> {  // Fixed-size, inline storage
 ### Phase 6: Advanced Interactions
 
 **Sentinel Input (1000Hz):**
+
 - High-frequency input sampling on Main thread
 - Input history buffer for replay/prediction
 - Action mapping (raw input → gameplay actions)
 
 **Sentinel UI:**
+
 - Dear ImGui on Main thread for debug overlays
 - Zero impact on Logic/Render threads
 
 **Audio:**
+
 - Trigger events from Post-Physics phase
 - 3D positional audio tied to Transform
 
 **Camera:**
+
 - FPS camera controller (WASD + mouse look)
 - Multiple camera modes (orbit, free-fly, fixed)
 
 **Tasks:**
+
 - [ ] **Input System** - 1000Hz sampling, action maps
 - [ ] **Dear ImGui Integration** - Debug UI on Sentinel
 - [ ] **Audio System** - SDL3 Audio or OpenAL
@@ -537,24 +619,29 @@ struct BoneArray<64> {  // Fixed-size, inline storage
 ### Phase 7: Production Polish
 
 **Binary Serialization:**
+
 - `memcpy` Shell chunks directly to disk
 - Instant save/load (no JSON parsing)
 - Scene file format
 
 **Entity Validation:**
+
 - `static_assert(std::is_trivially_copyable)` in `STRIGID_REGISTER_CLASS`
 - Compile-time enforcement of PoD-only components
 
 **Automated Testing:**
+
 - Unit tests for ECS memory integrity
 - Threading handoff tests (verify lock-free correctness)
 - Performance regression tests (100k entity baseline)
 
 **Hot Reload:**
+
 - Asset hot-reloading (textures, meshes, shaders)
 - Development iteration speed
 
 **Tasks:**
+
 - [ ] **Binary Serialization** - Scene save/load
 - [ ] **Component Validation** - Compile-time checks
 - [ ] **Test Harness** - Google Test / Catch2
@@ -564,14 +651,14 @@ struct BoneArray<64> {  // Fixed-size, inline storage
 
 ## 6. Performance Targets
 
-| Metric                  | Target            | Current Status      |
-|-------------------------|-------------------|---------------------|
-| **Throughput**          | 100k @ >230 FPS   | ✅ 100k @ 321 FPS   |
-| **Latency**             | <16ms input→photon| 🎯 In progress      |
-| **Memory**              | <1GB for 1M entities | 🎯 Target          |
-| **Thread Safety**       | Zero race conditions | ✅ TSan clean      |
-| **Frame Consistency**   | Zero stutters     | ✅ Achieved         |
-| **Scalability**         | 1M entities @ 60 FPS | 🎯 CRTP required  |
+| Metric                | Target               | Current Status   |
+|-----------------------|----------------------|------------------|
+| **Throughput**        | 100k @ >230 FPS      | ✅ 100k @ 321 FPS |
+| **Latency**           | <16ms input→photon   | 🎯 In progress   |
+| **Memory**            | <1GB for 1M entities | 🎯 Target        |
+| **Thread Safety**     | Zero race conditions | ✅ TSan clean     |
+| **Frame Consistency** | Zero stutters        | ✅ Achieved       |
+| **Scalability**       | 1M entities @ 60 FPS | 🎯 CRTP required |
 
 ---
 
@@ -590,6 +677,7 @@ struct BoneArray<64> {  // Fixed-size, inline storage
 ## 8. Data Structures Reference
 
 ### FramePacket
+
 ```cpp
 struct FramePacket {
     ViewState   View;              // Camera matrix, projection (64 bytes)
@@ -601,6 +689,7 @@ struct FramePacket {
 ```
 
 ### SnapshotEntry (1:1 with InstanceData)
+
 ```cpp
 struct alignas(16) SnapshotEntry {
     float PositionX, PositionY, PositionZ;
@@ -613,6 +702,7 @@ struct alignas(16) SnapshotEntry {
 ```
 
 ### InstanceData (GPU Upload Format)
+
 ```cpp
 struct alignas(16) InstanceData {
     float PositionX, PositionY, PositionZ, _pad0;  // 16 bytes
@@ -624,6 +714,7 @@ struct alignas(16) InstanceData {
 ```
 
 ### TripleBufferedSparseSet
+
 ```cpp
 template<typename T>
 class TripleBufferedSparseSet {
@@ -648,6 +739,7 @@ class TripleBufferedSparseSet {
 ```
 
 ### InterpEntry (Replaces SnapshotEntry)
+
 ```cpp
 struct InterpEntry {
     uint64_t sortKey;       // For state-sorted rendering
@@ -662,8 +754,10 @@ std::vector<InterpEntry> InterpBuffer;  // Cleared each frame
 ```
 
 **Comparison:**
+
 - **Old:** SnapshotPrevious + SnapshotCurrent (2 full copies, 9.6MB for 100k)
 - **New:** InterpPrevious + InterpBuffer only (visible entities only, ~3-7MB for 100k with culling)
+
 ```
 
 ### DrawCall (Sort Key + Reference)
@@ -699,6 +793,7 @@ struct EngineConfig {
 ## 10. Current Status (Week 7)
 
 **Completed:**
+
 - ✅ Strigid Trinity architecture fully operational
 - ✅ Lock-free triple-buffer mailbox
 - ✅ Frame synchronization handshake
@@ -708,16 +803,19 @@ struct EngineConfig {
 - ✅ Proper buffer management (no leaks)
 
 **In Progress:**
+
 - 🔄 State-sorted rendering (64-bit sort keys)
 - 🔄 Documentation and architecture refinement
 
 **Next Priority:**
+
 - 🎯 64-bit sort key system (Layer → Pipeline → Material → Mesh)
 - 🎯 CRTP entity views for 1M entity scaling
 - 🎯 Core/Shell ECS split with triple-buffered hot components
 - 🎯 Physics integration (Jolt) with Three-Phase Sandwich
 
 **Architecture Status:**
+
 - 🏗️ Solid foundation with data-oriented design
 - 🏗️ Lock-free threading model proven stable under stress
 - 🏗️ Ready for state sorting and CRTP optimization
