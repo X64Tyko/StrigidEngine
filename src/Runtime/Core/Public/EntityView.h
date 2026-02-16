@@ -3,6 +3,8 @@
 #include "Profiler.h"
 #include "Registry.h"
 #include "SchemaReflector.h"
+#include "SoARef.h"
+#include "FieldMeta.h"
 
 // Global counter (hidden in cpp)
 namespace Internal
@@ -19,7 +21,7 @@ public:
     Registry* Reg = nullptr;
     EntityID ID = {};
 
-    static ClassID StaticClass()
+    static ClassID StaticClassID()
     {
         static ClassID id = Internal::g_GlobalClassCounter++;
         return id;
@@ -47,31 +49,74 @@ public:
         return view;
     }
 
-    void Hydrate(Registry& reg, EntityID id, void** componentArrays, uint32_t index)
+    __forceinline void Advance(uint32_t StepSize)
     {
-        STRIGID_ZONE_FINE_N("Bind_Components");
-        // Rebind Ref<T> members from component arrays (reuse cached entity)
         constexpr auto schema = T::DefineSchema();
-        BindComponentsFromArrays(this, componentArrays, index, schema.members,
-                                 std::make_index_sequence<std::tuple_size_v<decltype(schema.members)>>{});
-    }
 
-    void Hydrate(void* componentArrays[MAX_COMPONENTS], uint32_t CompIndex)
-    {
-        constexpr auto schema = T::DefineSchema();
         std::apply([&](auto&&... members)
         {
-            (..., [&]<typename T0>(T0 member)
-            {
-                if constexpr (std::is_member_object_pointer_v<T0>)
+            // Correct fold expression: call lambda with each member
+            (void)((
+                [&](auto member)
                 {
-                    using CompType = typename StripRef<T0>::Type;
-
-                    CompType* TypeArr = static_cast<CompType*>(componentArrays[GetComponentTypeID<CompType>()]);
-
-                    if (TypeArr)
+                    if constexpr (std::is_member_object_pointer_v<decltype(member)>)
                     {
-                        static_cast<T* const>(this)->*member = TypeArr + CompIndex;
+                        using MemberType = std::remove_reference_t<decltype(static_cast<T*>(this)->*member)>;
+
+                        if constexpr (IsSoARef<MemberType>::value)
+                        {
+                            (static_cast<T*>(this)->*member).index += StepSize;
+                        }
+                    }
+                }(members), ...
+            ), 0);
+        }, schema.members);
+    }
+
+    __forceinline void Hydrate(void** fieldArrayTable, uint32_t index)
+    {
+        constexpr auto schema = T::DefineSchema();
+
+        size_t fieldArrayBaseIndex = 0;
+
+        std::apply([&](auto&&... members)
+        {
+            (..., [&](auto member)
+            {
+                if constexpr (std::is_member_object_pointer_v<decltype(member)>)
+                {
+                    using MemberType = std::remove_reference_t<decltype(static_cast<T*>(this)->*member)>;
+
+                    // Check if this is a SoARef
+                    if constexpr (IsSoARef<MemberType>::value)
+                    {
+                        using ComponentType = MemberType::ComponentType;
+
+                        // Bind SoARef to field arrays
+                        (static_cast<T*>(this)->*member).Bind(
+                            &fieldArrayTable[fieldArrayBaseIndex],
+                            index
+                        );
+
+                        // Advance by number of fields for this component
+                        fieldArrayBaseIndex += ComponentFieldRegistry::Get()
+                            .GetFieldCount(GetComponentTypeID<ComponentType>());
+                    }
+                    else
+                    {
+                        // Legacy Ref<T> support (non-decomposed components)
+                        using CompType = std::remove_pointer_t<decltype((static_cast<T*>(this)->*member).ptr)>;
+
+                        CompType* TypeArr = static_cast<CompType*>(
+                            fieldArrayTable[fieldArrayBaseIndex]
+                        );
+
+                        if (TypeArr)
+                        {
+                            (static_cast<T*>(this)->*member) = TypeArr + index;
+                        }
+
+                        fieldArrayBaseIndex += 1; // Non-decomposed = 1 array
                     }
                 }
             }(members));

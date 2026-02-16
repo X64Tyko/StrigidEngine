@@ -3,6 +3,8 @@
 #include <functional>
 #include <Logger.h>
 
+#include "Profiler.h"
+
 
 // Helper concept to detect if T has a specific method
 template <typename T> concept HasOnCreate = requires(T t) { t.OnCreate(); };
@@ -20,9 +22,12 @@ class Registry;
 using ViewFactory = void(*)(Registry&, EntityID, void* outStorage);
 using UpdateFunc = void(*)(double dt, void* storage);
 using HydrateFunc = void(*)(void**, uint32_t, void*);
-using PhysFunc = void(*)(double, void**, uint32_t, void*);
+using PhysFunc = void(*)(double, void**, uint32_t);
 
-constexpr size_t MAX_ENTITY_VIEW_SIZE = 256;
+#define REGISTER_ENTITY_PREPHYS(Type, ClassID) \
+    case ClassID: InvokePrePhysicsImpl<Type>(dt, fieldArrayTable, componentCount); break;
+
+constexpr size_t MAX_ENTITY_VIEW_SIZE = 128;
 
 struct EntityMeta
 {
@@ -34,6 +39,45 @@ struct EntityMeta
     UpdateFunc Update = nullptr;
     HydrateFunc Hydrate = nullptr;
 };
+
+template <typename T>
+__forceinline void InvokePrePhysicsImpl(double dt, void** fieldArrayTable, uint32_t componentCount)
+{
+    alignas(16) T viewBatch[8];
+
+    constexpr uint32_t SIMD_BATCH = 8;
+    uint32_t simdCount = (componentCount / SIMD_BATCH) * SIMD_BATCH;
+
+    // Hydrate - compiler can unroll this
+#pragma loop(ivdep)
+    for (uint32_t j = 0; j < SIMD_BATCH; ++j)
+    {
+        viewBatch[j].Hydrate(fieldArrayTable, j);
+    }
+
+    // Process batches
+    for (uint32_t i = 0; i < simdCount; i += SIMD_BATCH)
+    {
+#pragma loop(ivdep)
+        for (uint32_t j = 0; j < SIMD_BATCH; ++j)
+        {
+            viewBatch[j].PrePhysics(dt);
+        }
+
+#pragma loop(ivdep)
+        for (uint32_t j = 0; j < SIMD_BATCH; ++j)
+        {
+            viewBatch[j].Advance(SIMD_BATCH);
+        }
+    }
+
+    // Tail
+    int j = 0;
+    for (uint32_t i = simdCount; i < componentCount; ++i)
+    {
+        viewBatch[j++].PrePhysics(dt);
+    }
+}
 
 class MetaRegistry
 {
@@ -60,7 +104,8 @@ public:
         }
 #endif
 
-        const ClassID ID = T::StaticClass();
+        const ClassID ID = T::StaticClassID();
+
         EntityGetters[ID].GetView = [](Registry& reg, EntityID id, void* outStorage)
         {
             T* view = new(outStorage) T();
@@ -80,16 +125,11 @@ public:
 
         if constexpr (HasPrePhysics<T>)
         {
-            EntityGetters[ID].PrePhys = []([[maybe_unused]] double dt, [[maybe_unused]] void** componentArrays,
-                                           [[maybe_unused]] uint32_t componentCount, [[maybe_unused]] void* storage)
+            // Then in RegisterEntity:
+            EntityGetters[ID].PrePhys = [](double dt, void** fieldArrayTable,
+                                           uint32_t componentCount)
             {
-                // in order to support vectorization, might need to look into _mm256. Creating a Wide version of components
-                T* view = static_cast<T*>(storage);
-                for (uint32_t i = 0; i < componentCount; ++i)
-                {
-                    view->Hydrate(componentArrays, i);
-                    view->PrePhysics(dt);
-                }
+                InvokePrePhysicsImpl<T>(dt, fieldArrayTable, componentCount);
             };
         }
 
@@ -112,7 +152,7 @@ public:
     template <typename C, typename T>
     void RegisterPrefabComponent()
     {
-        const ClassID ID = C::StaticClass();
+        const ClassID ID = C::StaticClassID();
         ComponentDef& Meta = ClassToArchetype[ID];
         std::get<ComponentSignature>(Meta).set(GetComponentTypeID<T>() - 1);
         std::get<std::vector<ComponentMeta>>(Meta).push_back({GetComponentTypeID<T>(), sizeof(T), alignof(T), 0});

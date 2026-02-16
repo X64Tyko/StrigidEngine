@@ -22,8 +22,8 @@ namespace Internal
 }
 
 StrigidEngine::StrigidEngine()
-: EngineWindow(nullptr)
-, GpuDevice(nullptr)
+    : EngineWindow(nullptr)
+      , GpuDevice(nullptr)
 {
 }
 
@@ -95,27 +95,73 @@ bool StrigidEngine::Initialize(const char* title, int width, int height)
     std::uniform_real_distribution<float> posZ(-500.0f, -200.0f);
     std::uniform_real_distribution<float> color(0.2f, 1.0f);
 
-    static int32_t EntityCount = 500000;
+    static int32_t EntityCount = 1000000;
+
+    // Step 1: Create all entities first
+    std::vector<EntityID> entityIDs;
+    entityIDs.reserve(EntityCount);
     for (int i = 0; i < EntityCount; ++i)
     {
-        CubeEntity cube;
         EntityID id = RegistryPtr->Create<CubeEntity>();
-        cube.transform = RegistryPtr->GetComponent<Transform>(id);
-        cube.color = RegistryPtr->GetComponent<ColorData>(id);
-        cube.transform->PositionX = posX(gen);
-        cube.transform->PositionY = posY(gen);
-        cube.transform->PositionZ = posZ(gen);
-        cube.transform->RotationX = 0.0f;
-        cube.transform->RotationY = 0.0f;
-        cube.transform->RotationZ = 0.0f;
-        cube.transform->ScaleX = cube.transform->ScaleY = cube.transform->ScaleZ = 1.0f;
-        cube.color->B = color(gen);
-        cube.color->R = color(gen);
-        cube.color->G = color(gen);
-        cube.color->A = color(gen);
+        entityIDs.push_back(id);
     }
 
     LOG_ALWAYS_F("Created %i test entities", EntityCount);
+
+    // Step 2: Initialize by iterating through archetypes/chunks
+    Archetype* cubeArch = RegistryPtr->GetOrCreateArchetype(
+        std::get<ComponentSignature>(MetaRegistry::Get().ClassToArchetype[CubeEntity::StaticClassID()]));
+    if (cubeArch)
+    {
+        constexpr size_t MAX_FIELD_ARRAYS = 256;
+
+        for (size_t chunkIdx = 0; chunkIdx < cubeArch->Chunks.size(); ++chunkIdx)
+        {
+            Chunk* chunk = cubeArch->Chunks[chunkIdx];
+            uint32_t entityCount = cubeArch->GetChunkCount(chunkIdx);
+
+            // Build field array table
+            void* fieldArrayTable[MAX_FIELD_ARRAYS];
+            cubeArch->BuildFieldArrayTable(chunk, fieldArrayTable);
+
+            // Get field arrays for Transform (component ID 1)
+            // Transform has 12 fields: PositionX, PositionY, PositionZ, pad, RotX, RotY, RotZ, pad, ScaleX, ScaleY, ScaleZ, pad
+            auto posXArray = static_cast<float*>(fieldArrayTable[0]);
+            auto posYArray = static_cast<float*>(fieldArrayTable[1]);
+            auto posZArray = static_cast<float*>(fieldArrayTable[2]);
+            auto rotXArray = static_cast<float*>(fieldArrayTable[4]);
+            auto rotYArray = static_cast<float*>(fieldArrayTable[5]);
+            auto rotZArray = static_cast<float*>(fieldArrayTable[6]);
+            auto scaleXArray = static_cast<float*>(fieldArrayTable[8]);
+            auto scaleYArray = static_cast<float*>(fieldArrayTable[9]);
+            auto scaleZArray = static_cast<float*>(fieldArrayTable[10]);
+
+            // ColorData starts after Transform (12 fields), so index 12-15
+            auto rArray = static_cast<float*>(fieldArrayTable[12]);
+            auto gArray = static_cast<float*>(fieldArrayTable[13]);
+            auto bArray = static_cast<float*>(fieldArrayTable[14]);
+            auto aArray = static_cast<float*>(fieldArrayTable[15]);
+
+            // Initialize all entities in this chunk
+            for (uint32_t i = 0; i < entityCount; ++i)
+            {
+                posXArray[i] = posX(gen);
+                posYArray[i] = posY(gen);
+                posZArray[i] = posZ(gen);
+                rotXArray[i] = 0.0f;
+                rotYArray[i] = 0.0f;
+                rotZArray[i] = 0.0f;
+                scaleXArray[i] = 1.0f;
+                scaleYArray[i] = 1.0f;
+                scaleZArray[i] = 1.0f;
+
+                rArray[i] = color(gen);
+                gArray[i] = color(gen);
+                bArray[i] = color(gen);
+                aArray[i] = color(gen);
+            }
+        }
+    }
 
     // Create threads
     Logic = std::make_unique<LogicThread>();

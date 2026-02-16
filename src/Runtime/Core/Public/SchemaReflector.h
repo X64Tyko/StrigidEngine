@@ -12,7 +12,7 @@ template <typename T>
 struct StripRef;
 
 template <typename T>
-struct StripRef<Ref<T>>
+struct StripRef<SoARef<T>>
 {
     using Type = T;
 };
@@ -21,7 +21,7 @@ struct StripRef<Ref<T>>
 template <typename C, typename M>
 struct StripRef<M C::*>
 {
-    using Type = typename StripRef<M>::Type;
+    using Type = StripRef<M>::Type;
 };
 
 template <typename Class>
@@ -53,7 +53,7 @@ struct PrefabReflector
         // Register component members (Ref<T>)
         if constexpr (std::is_member_object_pointer_v<decltype(memberPtr)>)
         {
-            using CompType = typename StripRef<decltype(memberPtr)>::Type;
+            using CompType = StripRef<decltype(memberPtr)>::Type;
 
             // Compile-time validation of component type
             VALIDATE_COMPONENT_IS_POD(CompType);

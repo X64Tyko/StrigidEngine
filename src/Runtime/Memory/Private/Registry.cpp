@@ -140,7 +140,7 @@ void Registry::ProcessDeferredDestructions()
 
     PendingDestructions.clear();
 
-    STRIGID_PLOT("PendingDestructions", (double)PendingDestructions.size());
+    STRIGID_PLOT("PendingDestructions", static_cast<double>(PendingDestructions.size()));
 }
 
 void Registry::InitializeArchetypes()
@@ -209,50 +209,35 @@ void Registry::InvokeUpdate(double dt)
 
 void Registry::InvokePrePhys(double dt)
 {
-    STRIGID_ZONE_C(STRIGID_COLOR_LOGIC);
+    STRIGID_ZONE_N("Registry::InvokePrePhys");
 
-    // Iterate through all archetypes
-    for (auto& [sig, archetype] : Archetypes)
+    constexpr size_t MAX_FIELD_ARRAYS = 256; // Max total fields across all components in archetype
+
+    for (auto& [sig, arch] : Archetypes)
     {
-        if (archetype->TotalEntityCount == 0)
-            continue;
-
-        MetaRegistry& MR = MetaRegistry::Get();
-
-        auto meta = MR.EntityGetters[*archetype->ResidentClassIDs.begin()];
-        if (!meta.PrePhys)
-            continue;
-
-        alignas(16) char View[MAX_ENTITY_VIEW_SIZE];
-        // Iterate through all chunks in this archetype
-        for (size_t chunkIdx = 0; chunkIdx < archetype->Chunks.size(); ++chunkIdx)
+        for (auto classID : arch->ResidentClassIDs)
         {
-            Chunk* chunk = archetype->Chunks[chunkIdx];
-            uint32_t entityCount = archetype->GetChunkCount(chunkIdx);
-
-            if (entityCount == 0)
+            PhysFunc prePhys = MetaRegistry::Get().EntityGetters[classID].PrePhys;
+            if (!prePhys)
                 continue;
 
-            // Build array of component array pointers for this chunk
-            void* componentArrays[MAX_COMPONENTS];
+            for (size_t chunkIdx = 0; chunkIdx < arch->Chunks.size(); ++chunkIdx)
             {
-                STRIGID_ZONE_MEDIUM_N("Build_Component_Arrays"); // Level 2: Per-chunk profiling
-                for (const auto& cacheEntry : archetype->ComponentIterationCache)
-                {
-                    void* arrayPtr = chunk->GetBuffer(static_cast<uint32_t>(cacheEntry.ChunkOffset));
-                    componentArrays[cacheEntry.TypeID] = arrayPtr;
-                }
-            }
+                STRIGID_ZONE_N("PrePhys Chunk Process");
+                Chunk* chunk = arch->Chunks[chunkIdx];
+                uint32_t entityCount = arch->GetChunkCount(chunkIdx);
 
-            STRIGID_ZONE_MEDIUM_N("Invoke_Entity_Loop");
-            meta.PrePhys(dt, componentArrays, entityCount, View);
-            /*
-            for (uint32_t CompIndex = 0; CompIndex < entityCount; CompIndex++)
-            {
-                meta.Hydrate(componentArrays, CompIndex, View);
-                meta.PrePhys(dt, View);
+                if (entityCount == 0)
+                    continue;
+
+                // Build field array table on stack (fast!)
+                // For CubeEntity (Transform + Velocity): 12 + 4 = 16 entries
+                void* fieldArrayTable[MAX_FIELD_ARRAYS];
+                arch->BuildFieldArrayTable(chunk, fieldArrayTable);
+
+                // Invoke batch processor with field array table
+                prePhys(dt, fieldArrayTable, entityCount);
             }
-            */
         }
     }
 }

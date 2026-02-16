@@ -1,13 +1,11 @@
 #include "../Public/Archetype.h"
 #include "Profiler.h"
-#include <algorithm>
 #include <cassert>
+#include <FieldMeta.h>
 
 Archetype::Archetype(const Signature& Sig, const char* DebugName)
     : ArchSignature(Sig)
       , DebugName(DebugName)
-      , EntitiesPerChunk(0)
-      , TotalEntityCount(0)
 {
 }
 
@@ -25,7 +23,6 @@ Archetype::~Archetype()
 
 void Archetype::BuildLayout(const std::vector<ComponentMeta>& Components)
 {
-    STRIGID_ZONE_C(STRIGID_COLOR_MEMORY);
     if (Components.empty())
     {
         // Empty archetype - set a reasonable default capacity
@@ -58,41 +55,99 @@ void Archetype::BuildLayout(const std::vector<ComponentMeta>& Components)
         EntitiesPerChunk = static_cast<uint32_t>(UsableSpace / 64); // Minimum 64 bytes per entity
     }
 
-    // Build SoA layout: [CompA, CompA, CompA...][CompB, CompB, CompB...]
-    size_t CurrentOffset = ReservedHeaderSpace;
+    size_t currentOffset = ReservedHeaderSpace;
 
-    for (const ComponentMeta& Meta : Components)
+    // Clear cached data
+    CachedFieldArrayLayout.clear();
+    FieldArrayTemplateCache.clear();
+    TotalFieldArrayCount = 0;
+
+    for (const auto& comp : Components)
     {
-        ComponentMeta LayoutMeta = Meta;
+        ComponentTypeID typeID = comp.TypeID;
 
-        // Align offset to component's alignment requirement
-        size_t Misalignment = CurrentOffset % Meta.Alignment;
-        if (Misalignment != 0)
+        // Check if component has pre-registered field decomposition
+        const std::vector<FieldMeta>* fields =
+            ComponentFieldRegistry::Get().GetFields(typeID);
+
+        if (fields && !fields->empty())
         {
-            CurrentOffset += (Meta.Alignment - Misalignment);
+            // Component is decomposed - allocate separate field arrays
+            LOG_INFO_F("Decomposing component %u into %zu field arrays",
+                       typeID, fields->size());
+
+            for (size_t fieldIdx = 0; fieldIdx < fields->size(); ++fieldIdx)
+            {
+                const FieldMeta& field = (*fields)[fieldIdx];
+
+                // Align offset for this field array
+                currentOffset = AlignOffset(currentOffset, field.Alignment);
+
+                // Store offset for this field array
+                FieldKey key{typeID, static_cast<uint32_t>(fieldIdx)};
+                FieldOffsets[key] = currentOffset;
+
+                // Add to cached layout
+                CachedFieldArrayLayout.push_back({
+                    typeID,
+                    static_cast<uint32_t>(fieldIdx),
+                    true
+                });
+
+                // Add to template cache
+                FieldArrayTemplateCache.push_back({
+                    currentOffset,
+                    field.Name
+                });
+
+                LOG_TRACE_F("  Field %s[%zu]: offset=%zu, size=%zu",
+                            field.Name, fieldIdx, currentOffset, field.Size);
+
+                // Advance by EntitiesPerChunk * field size
+                currentOffset += EntitiesPerChunk * field.Size;
+            }
+
+            TotalFieldArrayCount += fields->size();
         }
+        else
+        {
+            // Non-decomposed component - store as single array
+            LOG_INFO_F("Component %u stored as non-decomposed array", typeID);
 
-        LayoutMeta.OffsetInChunk = CurrentOffset;
-        ComponentLayout[Meta.TypeID] = LayoutMeta;
+            currentOffset = AlignOffset(currentOffset, comp.Alignment);
 
-        // Advance offset by (size * capacity)
-        CurrentOffset += Meta.Size * EntitiesPerChunk;
+            ComponentLayout[typeID] = ComponentMeta{
+                typeID,
+                comp.Size,
+                comp.Alignment,
+                currentOffset
+            };
+
+            // Add to cached layout as single array
+            CachedFieldArrayLayout.push_back({
+                typeID,
+                0,
+                false
+            });
+
+            // Add to template cache
+            FieldArrayTemplateCache.push_back({
+                currentOffset,
+                "non_decomposed"
+            });
+
+            currentOffset += EntitiesPerChunk * comp.Size;
+            TotalFieldArrayCount += 1;
+        }
     }
-    // Build cached iteration data for fast component access
-    ComponentIterationCache.clear();
-    ComponentIterationCache.reserve(ComponentLayout.size());
-    for (const auto& [typeID, meta] : ComponentLayout)
-    {
-        ComponentCacheEntry entry;
-        entry.TypeID = typeID;
-        entry.IsFieldDecomposed = false;
-        entry.ChunkOffset = meta.OffsetInChunk;
-        ComponentIterationCache.push_back(entry);
-    }
 
+    TotalChunkDataSize = currentOffset;
+    LOG_INFO_F("Archetype layout: %zu field arrays, %zu bytes, %u entities/chunk",
+               TotalFieldArrayCount, TotalChunkDataSize, EntitiesPerChunk);
 
-    // Verify we didn't overflow chunk
-    assert(CurrentOffset <= Chunk::DATA_SIZE && "Component layout exceeds chunk size!");
+    // Validate cache consistency
+    assert(CachedFieldArrayLayout.size() == TotalFieldArrayCount);
+    assert(FieldArrayTemplateCache.size() == TotalFieldArrayCount);
 }
 
 uint32_t Archetype::GetChunkCount(size_t ChunkIndex) const
@@ -153,17 +208,30 @@ void Archetype::RemoveEntity(size_t ChunkIndex, uint32_t LocalIndex)
     (void)LocalIndex;
 }
 
-void* Archetype::GetComponentArrayRaw(Chunk* TargetChunk, ComponentTypeID TypeID)
-{
-    auto It = ComponentLayout.find(TypeID);
-    if (It == ComponentLayout.end())
-        return nullptr;
-
-    const ComponentMeta& Meta = It->second;
-    return TargetChunk->GetBuffer(static_cast<uint32_t>(Meta.OffsetInChunk));
-}
 std::vector<void*> Archetype::GetFieldArrays(Chunk* TargetChunk, ComponentTypeID TypeID)
 {
+    // Check if component is decomposed
+    const std::vector<FieldMeta>* fields = ComponentFieldRegistry::Get().GetFields(TypeID);
+
+    if (fields && !fields->empty())
+    {
+        // Decomposed component - return all field arrays
+        std::vector<void*> fieldArrays;
+        fieldArrays.reserve(fields->size());
+
+        for (size_t fieldIdx = 0; fieldIdx < fields->size(); ++fieldIdx)
+        {
+            FieldKey key{TypeID, static_cast<uint32_t>(fieldIdx)};
+            auto it = FieldOffsets.find(key);
+            if (it != FieldOffsets.end())
+            {
+                fieldArrays.push_back(TargetChunk->GetBuffer(static_cast<uint32_t>(it->second)));
+            }
+        }
+
+        return fieldArrays;
+    }
+    // Non-decomposed component - return single array
     auto It = ComponentLayout.find(TypeID);
     if (It == ComponentLayout.end())
         return {};
@@ -178,7 +246,7 @@ Chunk* Archetype::AllocateChunk()
     auto NewChunk = new Chunk();
 
     // Tracy memory profiling: Track chunk allocation with pool name
-    // This lets you see separate pools for Transform, Velocity, etc.
+    // This lets you see separate pools for Archetypes
     STRIGID_ALLOC_N(NewChunk, sizeof(Chunk), DebugName);
 
     // Debug: Track virtual memory fragmentation
@@ -194,7 +262,7 @@ Chunk* Archetype::AllocateChunk()
 
     if (lastChunk != nullptr)
     {
-        ptrdiff_t gap = (char*)NewChunk - (char*)lastChunk;
+        ptrdiff_t gap = (char*)NewChunk - static_cast<char*>(lastChunk);
         STRIGID_PLOT("Chunk Gap (KB)", gap / 1024.0);
 
         // Log suspicious gaps (> 100KB means something's between chunks)
@@ -210,9 +278,9 @@ Chunk* Archetype::AllocateChunk()
     chunkCount++;
 
     // Track total span
-    ptrdiff_t totalSpan = (char*)NewChunk - (char*)firstChunk;
+    ptrdiff_t totalSpan = (char*)NewChunk - static_cast<char*>(firstChunk);
     STRIGID_PLOT("Total Span (MB)", totalSpan / (1024.0 * 1024.0));
-    STRIGID_PLOT("Chunk Count", (int64_t)chunkCount);
+    STRIGID_PLOT("Chunk Count", static_cast<int64_t>(chunkCount));
     STRIGID_PLOT("Efficiency %", (chunkCount * sizeof(Chunk) * 100.0) / (totalSpan > 0 ? totalSpan : 1));
 
     lastChunk = NewChunk;

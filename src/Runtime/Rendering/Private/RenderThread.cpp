@@ -234,18 +234,14 @@ void RenderThread::SnapshotSparseArrays(std::shared_ptr<FramePacket> packet)
 {
     STRIGID_ZONE_N("Render_Snapshot");
 
-    // Get entity count from FramePacket (Logic tells us how many)
     uint32_t entityCount = packet->ActiveEntityCount;
-
     // Resize snapshot buffer
     SnapshotCurrent.resize(entityCount);
-
-    // TODO: Use cached sparse array pointers instead of ECS queries
-    // For now, query archetypes
     std::vector<Archetype*> archetypes = RegistryPtr->Query<Transform, ColorData>();
 
-    // Copy data from sparse arrays using SnapshotEntry struct
     size_t writeIdx = 0;
+    constexpr size_t MAX_FIELD_ARRAYS = 256;
+
     for (Archetype* arch : archetypes)
     {
         for (size_t chunkIdx = 0; chunkIdx < arch->Chunks.size(); ++chunkIdx)
@@ -253,37 +249,54 @@ void RenderThread::SnapshotSparseArrays(std::shared_ptr<FramePacket> packet)
             Chunk* chunk = arch->Chunks[chunkIdx];
             uint32_t chunkEntityCount = arch->GetChunkCount(chunkIdx);
 
-            Transform* transforms = arch->GetComponentArray<Transform>(chunk, GetComponentTypeID<Transform>());
-            ColorData* colors = arch->GetComponentArray<ColorData>(chunk, GetComponentTypeID<ColorData>());
+            if (chunkEntityCount == 0)
+                continue;
 
+            // Build field array table
+            void* fieldArrayTable[MAX_FIELD_ARRAYS];
+            arch->BuildFieldArrayTable(chunk, fieldArrayTable);
+
+            // Get Transform field arrays (indices 0-11)
+            auto posXArray = static_cast<float*>(fieldArrayTable[0]);
+            auto posYArray = static_cast<float*>(fieldArrayTable[1]);
+            auto posZArray = static_cast<float*>(fieldArrayTable[2]);
+            auto rotXArray = static_cast<float*>(fieldArrayTable[4]);
+            auto rotYArray = static_cast<float*>(fieldArrayTable[5]);
+            auto rotZArray = static_cast<float*>(fieldArrayTable[6]);
+            auto scaleXArray = static_cast<float*>(fieldArrayTable[8]);
+            auto scaleYArray = static_cast<float*>(fieldArrayTable[9]);
+            auto scaleZArray = static_cast<float*>(fieldArrayTable[10]);
+
+            // Get ColorData field arrays (starts at index 12 for CubeEntity)
+            auto rArray = static_cast<float*>(fieldArrayTable[12]);
+            auto gArray = static_cast<float*>(fieldArrayTable[13]);
+            auto bArray = static_cast<float*>(fieldArrayTable[14]);
+            auto aArray = static_cast<float*>(fieldArrayTable[15]);
+
+            // Copy data to snapshot
             for (uint32_t i = 0; i < chunkEntityCount; ++i)
             {
                 SnapshotEntry& entry = SnapshotCurrent[writeIdx++];
 
-                // Copy Transform (1:1 mapping)
-                entry.PositionX = transforms[i].PositionX;
-                entry.PositionY = transforms[i].PositionY;
-                entry.PositionZ = transforms[i].PositionZ;
-                entry.RotationX = transforms[i].RotationX;
-                entry.RotationY = transforms[i].RotationY;
-                entry.RotationZ = transforms[i].RotationZ;
-                entry.ScaleX = transforms[i].ScaleX;
-                entry.ScaleY = transforms[i].ScaleY;
-                entry.ScaleZ = transforms[i].ScaleZ;
+                // Copy transform data
+                entry.PositionX = posXArray[i];
+                entry.PositionY = posYArray[i];
+                entry.PositionZ = posZArray[i];
+                entry.RotationX = rotXArray[i];
+                entry.RotationY = rotYArray[i];
+                entry.RotationZ = rotZArray[i];
+                entry.ScaleX = scaleXArray[i];
+                entry.ScaleY = scaleYArray[i];
+                entry.ScaleZ = scaleZArray[i];
 
-                // Copy ColorData (1:1 mapping)
-                entry.ColorR = colors[i].R;
-                entry.ColorG = colors[i].G;
-                entry.ColorB = colors[i].B;
-                entry.ColorA = colors[i].A;
+                // Copy color data
+                entry.ColorR = rArray[i];
+                entry.ColorG = gArray[i];
+                entry.ColorB = bArray[i];
+                entry.ColorA = aArray[i];
             }
         }
     }
-
-    // Swap buffers
-    std::swap(SnapshotPrevious, SnapshotCurrent);
-
-    //LOG_DEBUG_F("[RenderThread] Snapshot captured: %u entities", entityCount);
 }
 
 void RenderThread::RequestGPUResources()

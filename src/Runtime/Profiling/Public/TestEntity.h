@@ -12,9 +12,9 @@ STRIGID_REGISTER_ENTITY(TestEntity);
 
 class TestEntity : public EntityView<TestEntity>
 {
-    Ref<Transform> Transform;
-    Ref<Velocity> Velocity;
-    Ref<ColorData> Color;
+    SoARef<Transform> Transform;
+    SoARef<Velocity> Velocity;
+    SoARef<ColorData> Color;
 
     // Reflection - register components and lifecycle functions
 public:

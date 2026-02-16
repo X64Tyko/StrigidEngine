@@ -3,6 +3,7 @@
 #include "Signature.h"
 #include "Archetype.h"
 #include "EntityRecord.h"
+#include "SoARef.h"
 #include <vector>
 #include <unordered_map>
 #include <queue>
@@ -18,7 +19,7 @@ public:
     Registry();
     ~Registry();
 
-    // Entity creation with lazy archetype caching
+    // Entity creation, Reflection allows this to be extremely quick
     // Usage: EntityID player = Registry::Get().Create<PlayerController>();
     template <typename T>
     EntityID Create();
@@ -29,6 +30,10 @@ public:
     // Get component from entity
     template <typename T>
     T* GetComponent(EntityID Id);
+
+    // Get SoA component reference from entity
+    template <typename T>
+    SoARef<T> GetComponentSoA(EntityID Id);
 
     // Check if entity has component
     template <typename T>
@@ -100,7 +105,7 @@ EntityID Registry::Create()
 
     if (!Initialized)
     {
-        ClassID classID = T::StaticClass();
+        ClassID classID = T::StaticClassID();
         auto& metaComponents = MetaRegistry::Get().ClassToArchetype;
 
 #ifdef _DEBUG // || _WITH_EDITOR
@@ -112,13 +117,13 @@ EntityID Registry::Create()
             LOG_ERROR_F("FATAL: Entity type '%s' not registered! Did you forget STRIGID_REGISTER_ENTITY(%s)?",
                         typeName, typeName);
 
-            // In debug builds, assert. In release, fail gracefully
+        // In debug builds, assert. In release, fail gracefully
 #ifdef _DEBUG
-            assert(false && "Entity type not registered - add STRIGID_REGISTER_ENTITY macro");
+        assert(false && "Entity type not registered - add STRIGID_REGISTER_ENTITY macro");
 #endif
 
-            // Return invalid entity ID
-            return EntityID{};
+        // Return invalid entity ID
+        return EntityID{};
         }
 #endif
 
@@ -129,7 +134,7 @@ EntityID Registry::Create()
     }
 
     // Allocate entity ID
-    EntityID Id = AllocateEntityID(T::StaticClass());
+    EntityID Id = AllocateEntityID(T::StaticClassID());
 
     // Allocate slot in archetype
     Archetype::EntitySlot Slot = CachedArchetype->PushEntity();
@@ -179,6 +184,39 @@ T* Registry::GetComponent(EntityID Id)
 
     // Return pointer to this entity's component
     return &ComponentArray[Record.Index];
+}
+
+template <typename T>
+SoARef<T> Registry::GetComponentSoA(EntityID Id)
+{
+    SoARef<T> ref;
+
+    if (!Id.IsValid())
+        return ref;
+
+    uint32_t Index = Id.GetIndex();
+    if (Index >= EntityIndex.size())
+        return ref;
+
+    EntityRecord& Record = EntityIndex[Index];
+
+    // Validate generation (detect use-after-free)
+    if (Record.Generation != Id.GetGeneration())
+        return ref;
+
+    if (!Record.IsValid())
+        return ref;
+
+    ComponentTypeID TypeID = GetComponentTypeID<T>();
+
+    // Get field arrays from archetype
+    std::vector<void*> fieldArrays = Record.Arch->GetFieldArrays(Record.TargetChunk, TypeID);
+    if (fieldArrays.empty())
+        return ref;
+
+    // Bind SoARef to field arrays
+    ref.Bind(fieldArrays.data(), Record.Index);
+    return ref;
 }
 
 template <typename T>

@@ -5,30 +5,35 @@
 #include "EntityView.h"
 #include "Schema.h"
 #include "SchemaReflector.h"
+#include "SoARef.h"
 
 template <typename T>
 class BaseCube : public EntityView<T>
 {
 public:
-    Ref<Transform> transform;
-    Ref<ColorData> color;
+    // Use SoARef instead of Ref for field-decomposed components
+    SoARef<Transform> transform;
+    SoARef<ColorData> color;
 
     // Lifecycle hooks
-    void PrePhysics([[maybe_unused]] double dt)
+    __forceinline void PrePhysics([[maybe_unused]] double dt)
     {
         constexpr float TWO_PI = 6.283185307179586f;
 
-        transform->RotationX += (float)dt;
+        // SoARef uses operator->() which returns accessor with FieldProxy
+        // transform->RotationX returns FieldProxy<float>
+        // Operator += is defined on FieldProxy, so this works naturally!
+        transform->PositionX += static_cast<float>(dt);
         if (transform->RotationX > TWO_PI) transform->RotationX -= TWO_PI;
-        transform->RotationY += (float)dt * 0.7f;
+
+        transform->RotationY += static_cast<float>(dt) * 0.7f;
         if (transform->RotationY > TWO_PI) transform->RotationY -= TWO_PI;
-        transform->RotationZ += (float)dt * 0.5f;
+
+        transform->RotationZ += static_cast<float>(dt) * 0.5f;
         if (transform->RotationZ > TWO_PI) transform->RotationZ -= TWO_PI;
     }
 
     // Reflection - register components and lifecycle functions
-    // I don't like this... but I'm spinning my wheels fighting the static initialize
-    // I'll come back.
     static constexpr auto DefineSchema()
     {
         return EntityView<T>::DefineSchema().Extend(
@@ -55,19 +60,18 @@ class SuperCube : public BaseCube<SuperCube>
 {
 public:
     // Logic
-    void FixedUpdate([[maybe_unused]] double dt)
+    __forceinline void PrePhysics([[maybe_unused]] double dt)
     {
-        
         constexpr float TWO_PI = 6.283185307179586f;
 
-        transform->RotationX += ((float)dt);
+        transform->RotationX += static_cast<float>(dt);
         if (transform->RotationX > TWO_PI) transform->RotationX -= TWO_PI;
-        transform->RotationY += (float)dt * 0.7f;
+
+        transform->RotationY += static_cast<float>(dt) * 0.7f;
         if (transform->RotationY > TWO_PI) transform->RotationY -= TWO_PI;
-        transform->RotationZ += (float)dt * 0.5f;
+
+        transform->RotationZ += static_cast<float>(dt) * 0.5f;
         if (transform->RotationZ > TWO_PI) transform->RotationZ -= TWO_PI;
-        //color->R = color->B;
-        //color->B = (color->B == 1.0f ? 0.0f : 1.0f);
     }
 
     // Reflection
