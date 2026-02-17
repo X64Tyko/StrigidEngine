@@ -237,7 +237,7 @@ void RenderThread::SnapshotSparseArrays(std::shared_ptr<FramePacket> packet)
     uint32_t entityCount = packet->ActiveEntityCount;
     // Resize snapshot buffer
     SnapshotCurrent.resize(entityCount);
-    std::vector<Archetype*> archetypes = RegistryPtr->Query<Transform, ColorData>();
+    std::vector<Archetype*> archetypes = RegistryPtr->ComponentQuery<Transform, ColorData>();
 
     size_t writeIdx = 0;
     constexpr size_t MAX_FIELD_ARRAYS = 256;

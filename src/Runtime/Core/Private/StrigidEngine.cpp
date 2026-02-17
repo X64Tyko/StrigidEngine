@@ -110,7 +110,8 @@ bool StrigidEngine::Initialize(const char* title, int width, int height)
 
     // Step 2: Initialize by iterating through archetypes/chunks
     Archetype* cubeArch = RegistryPtr->GetOrCreateArchetype(
-        std::get<ComponentSignature>(MetaRegistry::Get().ClassToArchetype[CubeEntity::StaticClassID()]));
+        std::get<ComponentSignature>(MetaRegistry::Get().ClassToArchetype[CubeEntity::StaticClassID()]),
+        CubeEntity::StaticClassID());
     if (cubeArch)
     {
         constexpr size_t MAX_FIELD_ARRAYS = 256;

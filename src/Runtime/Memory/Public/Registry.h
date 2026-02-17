@@ -40,13 +40,13 @@ public:
     bool HasComponent(EntityID Id);
 
     // Get or create archetype for a given signature
-    Archetype* GetOrCreateArchetype(const Signature& Sig);
+    Archetype* GetOrCreateArchetype(const Signature& Sig, const ClassID& ID);
 
     // Apply all pending destructions (called at end of frame)
     void ProcessDeferredDestructions();
 
     template <typename... Components>
-    std::vector<Archetype*> Query();
+    std::vector<Archetype*> ComponentQuery();
 
     // Invoke all lifecycle functions of a specific type
     void InvokeUpdate(double dt = 0.0);
@@ -77,8 +77,8 @@ private:
     // Next entity index to allocate (if free list is empty)
     uint32_t NextEntityIndex = 0;
 
-    // Archetype storage (signature → archetype)
-    std::unordered_map<Signature, Archetype*> Archetypes;
+    // Archetype storage (pair<signature, classID> → archetype)
+    std::unordered_map<Archetype::ArchetypeKey, Archetype*, ArchetypeKeyHash> Archetypes;
 
     // Pending destructions (processed at end of frame)
     std::vector<EntityID> PendingDestructions;
@@ -129,7 +129,7 @@ EntityID Registry::Create()
 
         Signature Sig = std::get<ComponentSignature>(metaComponents[classID]);
 
-        CachedArchetype = GetOrCreateArchetype(Sig);
+        CachedArchetype = GetOrCreateArchetype(Sig, classID);
         Initialized = true;
     }
 
@@ -235,13 +235,13 @@ Signature Registry::BuildSignature()
 }
 
 template <typename... Components>
-std::vector<Archetype*> Registry::Query()
+std::vector<Archetype*> Registry::ComponentQuery()
 {
     std::vector<Archetype*> Results;
     Signature Sig = BuildSignature<Components...>();
     for (auto Arch : Archetypes)
     {
-        if (Arch.first.Contains(Sig))
+        if (Arch.first.Sig.Contains(Sig))
         {
             Results.push_back(Arch.second);
         }

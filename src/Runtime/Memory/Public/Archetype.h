@@ -13,17 +13,29 @@
 class Archetype
 {
 public:
-    Archetype(const Signature& Sig, const char* DebugName = "Archetype");
+    struct ArchetypeKey
+    {
+        Signature Sig;
+        ClassID ID;
+
+        bool operator==(const ArchetypeKey& other) const
+        {
+            return ID == other.ID && Sig == other.Sig;
+        }
+    };
+
+    Archetype(const Signature& Sig, const ClassID& ID, const char* DebugName = "Archetype");
+    Archetype(const ArchetypeKey& ArchKey, const char* DebugName = "Archetype");
     ~Archetype();
 
     // Component signature
     Signature ArchSignature;
 
+    // ClassID - needed for using the correct entity during Hydration
+    ClassID ArchClassID;
+
     // Debug name for profiling
     const char* DebugName;
-
-    // Resident class types (multiple classes can share same archetype)
-    std::unordered_set<uint16_t> ResidentClassIDs;
 
     // Entity capacity and tracking
     uint32_t EntitiesPerChunk = 0; // How many entities fit in one chunk
@@ -228,4 +240,32 @@ public:
 private:
     // Allocate a new chunk
     Chunk* AllocateChunk();
+};
+
+struct ArchetypeKeyHash
+{
+    size_t operator()(const Archetype::ArchetypeKey& key) const
+    {
+        // Start with classID
+        size_t hash = key.ID;
+
+        // Mix in signature using FNV-1a
+        constexpr size_t FNV_PRIME = 0x100000001b3;
+        constexpr size_t FNV_OFFSET = 0xcbf29ce484222325;
+
+        hash = FNV_OFFSET;
+        hash ^= key.ID;
+        hash *= FNV_PRIME;
+
+        // Process signature in 64-bit chunks
+        auto data = reinterpret_cast<const uint64_t*>(&key.Sig);
+        for (size_t i = 0; i < MAX_COMPONENTS / 64; ++i)
+        {
+            // 256 bits = 4 × 64-bit chunks
+            hash ^= data[i];
+            hash *= FNV_PRIME;
+        }
+
+        return hash;
+    }
 };

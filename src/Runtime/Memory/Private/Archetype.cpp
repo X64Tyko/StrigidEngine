@@ -3,8 +3,16 @@
 #include <cassert>
 #include <FieldMeta.h>
 
-Archetype::Archetype(const Signature& Sig, const char* DebugName)
+Archetype::Archetype(const Signature& Sig, const ClassID& ID, const char* DebugName)
     : ArchSignature(Sig)
+      , ArchClassID(ID)
+      , DebugName(DebugName)
+{
+}
+
+Archetype::Archetype(const ArchetypeKey& ArchKey, const char* DebugName)
+    : ArchSignature(ArchKey.Sig)
+      , ArchClassID(ArchKey.ID)
       , DebugName(DebugName)
 {
 }

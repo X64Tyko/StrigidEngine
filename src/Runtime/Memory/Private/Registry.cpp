@@ -25,26 +25,27 @@ Registry::~Registry()
     Archetypes.clear();
 }
 
-Archetype* Registry::GetOrCreateArchetype(const Signature& Sig)
+Archetype* Registry::GetOrCreateArchetype(const Signature& Sig, const ClassID& ID)
 {
     STRIGID_ZONE_C(STRIGID_COLOR_MEMORY);
+    auto key = Archetype::ArchetypeKey(Sig, ID);
 
     // Check if archetype already exists
-    auto It = Archetypes.find(Sig);
+    auto It = Archetypes.find(key);
     if (It != Archetypes.end())
     {
         return It->second;
     }
 
     // Create new archetype
-    auto NewArchetype = new Archetype(Sig);
+    auto NewArchetype = new Archetype(Sig, ID);
 
     // TODO: In Week 5, we'll build component layout from signature
     // For now, create empty archetype
     std::vector<ComponentMeta> Components;
     NewArchetype->BuildLayout(Components);
 
-    Archetypes[Sig] = NewArchetype;
+    Archetypes[key] = NewArchetype;
     return NewArchetype;
 }
 
@@ -150,13 +151,13 @@ void Registry::InitializeArchetypes()
 
     for (auto Arch : MR.ClassToArchetype)
     {
-        Archetype*& NewArch = Archetypes[std::get<ComponentSignature>(Arch.second)];
+        auto key = Archetype::ArchetypeKey(std::get<ComponentSignature>(Arch.second), Arch.first);
+        Archetype*& NewArch = Archetypes[key];
         if (!NewArch)
         {
-            NewArch = new Archetype(std::get<ComponentSignature>(Arch.second));
+            NewArch = new Archetype(key);
             NewArch->BuildLayout(std::get<std::vector<ComponentMeta>>(Arch.second));
         }
-        NewArch->ResidentClassIDs.insert(Arch.first);
     }
 }
 
@@ -172,7 +173,7 @@ void Registry::InvokeUpdate(double dt)
 
         MetaRegistry& MR = MetaRegistry::Get();
 
-        auto meta = MR.EntityGetters[*archetype->ResidentClassIDs.begin()];
+        auto meta = MR.EntityGetters[archetype->ArchClassID];
         if (!meta.Update)
             continue;
 
@@ -209,35 +210,32 @@ void Registry::InvokeUpdate(double dt)
 
 void Registry::InvokePrePhys(double dt)
 {
-    STRIGID_ZONE_N("Registry::InvokePrePhys");
+    STRIGID_ZONE_C(STRIGID_COLOR_LOGIC);
 
-    constexpr size_t MAX_FIELD_ARRAYS = 256; // Max total fields across all components in archetype
+    constexpr size_t MAX_FIELD_ARRAYS = 64; // Max total fields across all components in archetype
 
     for (auto& [sig, arch] : Archetypes)
     {
-        for (auto classID : arch->ResidentClassIDs)
+        PhysFunc prePhys = MetaRegistry::Get().EntityGetters[sig.ID].PrePhys;
+        if (!prePhys)
+            continue;
+
+        for (size_t chunkIdx = 0; chunkIdx < arch->Chunks.size(); ++chunkIdx)
         {
-            PhysFunc prePhys = MetaRegistry::Get().EntityGetters[classID].PrePhys;
-            if (!prePhys)
+            STRIGID_ZONE_N("PrePhys Chunk Process");
+            Chunk* chunk = arch->Chunks[chunkIdx];
+            uint32_t entityCount = arch->GetChunkCount(chunkIdx);
+
+            if (entityCount == 0)
                 continue;
 
-            for (size_t chunkIdx = 0; chunkIdx < arch->Chunks.size(); ++chunkIdx)
-            {
-                STRIGID_ZONE_N("PrePhys Chunk Process");
-                Chunk* chunk = arch->Chunks[chunkIdx];
-                uint32_t entityCount = arch->GetChunkCount(chunkIdx);
+            // Build field array table on stack (fast!)
+            // For CubeEntity (Transform + Velocity): 12 + 4 = 16 entries
+            void* fieldArrayTable[MAX_FIELD_ARRAYS];
+            arch->BuildFieldArrayTable(chunk, fieldArrayTable);
 
-                if (entityCount == 0)
-                    continue;
-
-                // Build field array table on stack (fast!)
-                // For CubeEntity (Transform + Velocity): 12 + 4 = 16 entries
-                void* fieldArrayTable[MAX_FIELD_ARRAYS];
-                arch->BuildFieldArrayTable(chunk, fieldArrayTable);
-
-                // Invoke batch processor with field array table
-                prePhys(dt, fieldArrayTable, entityCount);
-            }
+            // Invoke batch processor with field array table
+            prePhys(dt, fieldArrayTable, entityCount);
         }
     }
 }
@@ -254,7 +252,7 @@ void Registry::InvokePostPhys(double dt)
 
         MetaRegistry& MR = MetaRegistry::Get();
 
-        auto meta = MR.EntityGetters[*archetype->ResidentClassIDs.begin()];
+        auto meta = MR.EntityGetters[archetype->ArchClassID];
         if (!meta.PostPhys)
             continue;
 

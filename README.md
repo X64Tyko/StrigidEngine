@@ -18,7 +18,7 @@ triple-buffering) that are too risky to implement directly into a live commercia
 
 ## TL;DR Current Metrics
 
-- 1M entities ~5ms PrePhysics call. Just transform updates.
+- 1M entities ~3.5ms PrePhysics call. Just transform updates.
 - Rendering 1M at 51FPS, no culling, depth, etc..
 - Trinity split:
     - Main: Input polling and window management 1KHz
