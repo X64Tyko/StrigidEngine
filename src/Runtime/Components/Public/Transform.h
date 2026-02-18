@@ -7,6 +7,7 @@
 // Inherits from SoAComponent for automatic field decomposition
 struct alignas(16) Transform : SoAComponent<Transform>
 {
+    STRIGID_HOT_COMPONENT()
     float PositionX = 0.0f;
     float PositionY = 0.0f;
     float PositionZ = 0.0f;

@@ -84,7 +84,7 @@ bool StrigidEngine::Initialize(const char* title, int width, int height)
     }
 
     // Create Registry
-    RegistryPtr = std::make_unique<Registry>();
+    RegistryPtr = std::make_unique<Registry>(&Config);
     Pacer.Initialize(GpuDevice);
 
     // Create 100k test entities (same as old code)

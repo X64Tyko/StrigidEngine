@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 #include "FieldMeta.h"
 #include <tuple>
 #include <array>
@@ -46,7 +46,7 @@ private:
 
     // Extract metadata from a member pointer
     template <size_t Index, typename FieldType>
-    static FieldMeta ExtractFieldMeta(FieldType Derived::*member)
+    static FieldMeta ExtractFieldMeta(FieldType Derived::* member)
     {
         // Create temporary to get offset
         Derived temp{};
@@ -58,7 +58,7 @@ private:
             sizeof(FieldType),
             alignof(FieldType),
             offset,
-            0,  // OffsetInChunk computed later by Archetype::BuildLayout
+            0, // OffsetInChunk computed later by Archetype::BuildLayout
             name
         };
     }
@@ -77,3 +77,6 @@ concept HasFieldDecomposition = requires
     namespace { \
         static bool _##ComponentType##_FieldsRegistered = ComponentType::RegisterFieldsStatic(); \
     }
+
+#define STRIGID_HOT_COMPONENT() \
+    alignas(4) static inline bool bHotComp = true;

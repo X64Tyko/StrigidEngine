@@ -15,7 +15,7 @@ struct EntityRecord
     uint16_t Generation = 0; // For validation (matches EntityID.Generation)
 
     // Check if this record is valid
-    inline bool IsValid() const
+    bool IsValid() const
     {
         return Arch != nullptr && TargetChunk != nullptr;
     }

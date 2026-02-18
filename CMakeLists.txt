@@ -6,7 +6,7 @@ project(StrigidEngine VERSION 0.1 LANGUAGES CXX)
 # -----------------------------------------------------------------------------
 # 1. STANDARDS & COMPILER SETTINGS
 # -----------------------------------------------------------------------------
-set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 

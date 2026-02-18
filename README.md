@@ -6,9 +6,10 @@
 data-oriented architecture can deliver sub-millisecond latency.
 
 **Objective:** A high-performance, data-oriented engine prioritizing mechanical elegance and input-to-photon latency,
-while maintining as close to existing OOP style and stucture on the user end as possible.
+while maintaining as close to existing OOP style and stucture on the user end as possible.
 
-**Constraint:** Zero "allocation-per-frame" in hot paths. Scale to 100,000+ active entities at >250 FPS.
+**Constraint:** Zero "allocation-per-frame" in hot paths. Scale to 100,000+ active entities running Logic at 512Hz fixed
+and input at 1Khz
 
 **Philosophy:** White-box architecture - users can understand, debug, and modify the engine without black-box
 abstractions. "Build it to break it." I use this project to stress-test architectural theories (like lock-free

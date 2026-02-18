@@ -1,7 +1,10 @@
 #pragma once
 #include <tuple>
+#include <unordered_set>
 #include <functional>
 #include <Logger.h>
+#include "Types.h"
+#include "Signature.h"
 
 #include "Profiler.h"
 
@@ -17,12 +20,7 @@ template <typename T> concept HasOnDeactivate = requires(T t) { t.OnDeactivate()
 template <typename T> concept HasOnCollide = requires(T t) { t.OnCollide(); };
 template <typename T> concept HasDefineSchema = requires(T t) { t.DefineSchema(); };
 
-class Registry;
-
-using ViewFactory = void(*)(Registry&, EntityID, void* outStorage);
-using UpdateFunc = void(*)(double dt, void* storage);
-using HydrateFunc = void(*)(void**, uint32_t, void*);
-using PhysFunc = void(*)(double, void**, uint32_t);
+using UpdateFunc = void(*)(double, void**, uint32_t);
 
 #define REGISTER_ENTITY_PREPHYS(Type, ClassID) \
     case ClassID: InvokePrePhysicsImpl<Type>(dt, fieldArrayTable, componentCount); break;
@@ -31,13 +29,11 @@ constexpr size_t MAX_ENTITY_VIEW_SIZE = 128;
 
 struct EntityMeta
 {
-    ViewFactory GetView = nullptr;
     size_t ViewSize = 0;
 
-    PhysFunc PrePhys = nullptr;
+    UpdateFunc PrePhys = nullptr;
     UpdateFunc PostPhys = nullptr;
     UpdateFunc Update = nullptr;
-    HydrateFunc Hydrate = nullptr;
 };
 
 template <typename T>
@@ -79,6 +75,86 @@ __forceinline void InvokePrePhysicsImpl(double dt, void** fieldArrayTable, uint3
     }
 }
 
+
+template <typename T>
+__forceinline void InvokeUpdateImpl(double dt, void** fieldArrayTable, uint32_t componentCount)
+{
+    alignas(16) T viewBatch[8];
+
+    constexpr uint32_t SIMD_BATCH = 8;
+    uint32_t simdCount = (componentCount / SIMD_BATCH) * SIMD_BATCH;
+
+    // Hydrate - compiler can unroll this
+#pragma loop(ivdep)
+    for (uint32_t j = 0; j < SIMD_BATCH; ++j)
+    {
+        viewBatch[j].Hydrate(fieldArrayTable, j);
+    }
+
+    // Process batches
+    for (uint32_t i = 0; i < simdCount; i += SIMD_BATCH)
+    {
+#pragma loop(ivdep)
+        for (uint32_t j = 0; j < SIMD_BATCH; ++j)
+        {
+            viewBatch[j].Update(dt);
+        }
+
+#pragma loop(ivdep)
+        for (uint32_t j = 0; j < SIMD_BATCH; ++j)
+        {
+            viewBatch[j].Advance(SIMD_BATCH);
+        }
+    }
+
+    // Tail
+    int j = 0;
+    for (uint32_t i = simdCount; i < componentCount; ++i)
+    {
+        viewBatch[j++].Update(dt);
+    }
+}
+
+
+template <typename T>
+__forceinline void InvokePostPhysicsImpl(double dt, void** fieldArrayTable, uint32_t componentCount)
+{
+    alignas(16) T viewBatch[8];
+
+    constexpr uint32_t SIMD_BATCH = 8;
+    uint32_t simdCount = (componentCount / SIMD_BATCH) * SIMD_BATCH;
+
+    // Hydrate - compiler can unroll this
+#pragma loop(ivdep)
+    for (uint32_t j = 0; j < SIMD_BATCH; ++j)
+    {
+        viewBatch[j].Hydrate(fieldArrayTable, j);
+    }
+
+    // Process batches
+    for (uint32_t i = 0; i < simdCount; i += SIMD_BATCH)
+    {
+#pragma loop(ivdep)
+        for (uint32_t j = 0; j < SIMD_BATCH; ++j)
+        {
+            viewBatch[j].PostPhysics(dt);
+        }
+
+#pragma loop(ivdep)
+        for (uint32_t j = 0; j < SIMD_BATCH; ++j)
+        {
+            viewBatch[j].Advance(SIMD_BATCH);
+        }
+    }
+
+    // Tail
+    int j = 0;
+    for (uint32_t i = simdCount; i < componentCount; ++i)
+    {
+        viewBatch[j++].PostPhysics(dt);
+    }
+}
+
 class MetaRegistry
 {
 public:
@@ -91,6 +167,7 @@ public:
     using ComponentDef = std::tuple<ComponentSignature, std::vector<ComponentMeta>>;
     std::unordered_map<ClassID, ComponentDef> ClassToArchetype;
     std::unordered_map<Signature, std::vector<ClassID>> ArchetypeToClass;
+    std::unordered_set<ComponentMeta> ReflectedComponents;
     EntityMeta EntityGetters[4096];
 
     template <typename T>
@@ -105,21 +182,15 @@ public:
 #endif
 
         const ClassID ID = T::StaticClassID();
-
-        EntityGetters[ID].GetView = [](Registry& reg, EntityID id, void* outStorage)
-        {
-            T* view = new(outStorage) T();
-            view->Reg = &reg;
-            view->ID = id;
-        };
         EntityGetters[ID].ViewSize = sizeof(T);
 
         if constexpr (HasUpdate<T>)
         {
-            EntityGetters[ID].Update = []([[maybe_unused]] double dt, [[maybe_unused]] void* storage)
+            // Then in RegisterEntity:
+            EntityGetters[ID].Update = [](double dt, void** fieldArrayTable,
+                                          uint32_t componentCount)
             {
-                T* view = static_cast<T*>(storage);
-                view->Update(dt);
+                InvokeUpdateImpl<T>(dt, fieldArrayTable, componentCount);
             };
         }
 
@@ -135,27 +206,30 @@ public:
 
         if constexpr (HasPostPhysics<T>)
         {
-            EntityGetters[ID].PostPhys = []([[maybe_unused]] double dt, [[maybe_unused]] void* storage)
+            // Then in RegisterEntity:
+            EntityGetters[ID].PostPhys = [](double dt, void** fieldArrayTable,
+                                            uint32_t componentCount)
             {
-                T* view = static_cast<T*>(storage);
-                view->PostPhysics(dt);
+                InvokePostPhysicsImpl<T>(dt, fieldArrayTable, componentCount);
             };
         }
-
-        EntityGetters[ID].Hydrate = [](void** componentArrays, uint32_t index, void* storage)
-        {
-            T* view = static_cast<T*>(storage);
-            view->Hydrate(componentArrays, index);
-        };
     }
 
     template <typename C, typename T>
     void RegisterPrefabComponent()
     {
+        bool bIsHot = false;
+        if constexpr (requires { T::bHotComp; })
+        {
+            bIsHot = T::bHotComp;
+        }
+
         const ClassID ID = C::StaticClassID();
-        ComponentDef& Meta = ClassToArchetype[ID];
-        std::get<ComponentSignature>(Meta).set(GetComponentTypeID<T>() - 1);
-        std::get<std::vector<ComponentMeta>>(Meta).push_back({GetComponentTypeID<T>(), sizeof(T), alignof(T), 0});
+        ComponentDef& Def = ClassToArchetype[ID];
+        std::get<ComponentSignature>(Def).set(GetComponentTypeID<T>() - 1);
+        ComponentMeta Meta = {GetComponentTypeID<T>(), sizeof(T), alignof(T), 0, bIsHot};
+        ReflectedComponents.insert(Meta);
+        std::get<std::vector<ComponentMeta>>(Def).push_back(Meta);
         LOG_INFO_F("RegisterPrefabComponent %s", typeid(T).name());
         LOG_INFO_F("Added %i to class %s ", GetComponentTypeID<T>(), typeid(C).name());
     }

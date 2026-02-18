@@ -67,6 +67,16 @@ struct ComponentMeta
     size_t Size; // sizeof(Component)
     size_t Alignment; // alignof(Component)
     size_t OffsetInChunk; // Where this component's array starts in the chunk
+    bool IsHot = false; // Should this component go in the Hot Sparse set.
+
+    bool operator==(const ComponentMeta& Other) const
+    {
+        return TypeID == Other.TypeID
+            && Size == Other.Size
+            && Alignment == Other.Alignment
+            && OffsetInChunk == Other.OffsetInChunk
+            && IsHot == Other.IsHot;
+    }
 };
 
 // Global counter (hidden in cpp)
@@ -98,16 +108,18 @@ union EntityID
         uint64_t Generation : 16; // 65k recycles (server-grade stability)
         uint64_t TypeID : 12; // 4k class types (function dispatch)
         uint64_t OwnerID : 8; // 256 owners (network routing)
-        uint64_t MetaFlags : 8; // Reserved for future use
+        uint64_t IsStatic : 1; // Static Entity Flag
+        uint64_t MetaFlags : 7; // Reserved for future use
     };
 
     // Required interface (for swappability)
-    inline uint32_t GetIndex() const { return static_cast<uint32_t>(Index); }
-    inline uint16_t GetGeneration() const { return static_cast<uint16_t>(Generation); }
-    inline uint16_t GetTypeID() const { return static_cast<uint16_t>(TypeID); }
-    inline uint8_t GetOwnerID() const { return static_cast<uint8_t>(OwnerID); }
+    uint32_t GetIndex() const { return static_cast<uint32_t>(Index); }
+    uint16_t GetGeneration() const { return static_cast<uint16_t>(Generation); }
+    uint16_t GetTypeID() const { return static_cast<uint16_t>(TypeID); }
+    uint8_t GetOwnerID() const { return static_cast<uint8_t>(OwnerID); }
+    bool GetIsStatic() const { return IsStatic; }
 
-    inline bool IsValid() const { return Value != 0; }
+    bool IsValid() const { return Value != 0; }
 
     static EntityID Invalid()
     {
@@ -117,12 +129,12 @@ union EntityID
     }
 
     // Comparison operators
-    inline bool operator==(const EntityID& Other) const { return Value == Other.Value; }
-    inline bool operator!=(const EntityID& Other) const { return Value != Other.Value; }
+    bool operator==(const EntityID& Other) const { return Value == Other.Value; }
+    bool operator!=(const EntityID& Other) const { return Value != Other.Value; }
 
     // Network/ownership helpers
-    inline bool IsServer() const { return OwnerID == 0; }
-    inline bool IsLocal(uint8_t LocalClientID) const { return OwnerID == LocalClientID; }
+    bool IsServer() const { return OwnerID == 0; }
+    bool IsLocal(uint8_t LocalClientID) const { return OwnerID == LocalClientID; }
 };
 
 #ifdef _MSC_VER
@@ -138,6 +150,19 @@ namespace std
         size_t operator()(const EntityID& Id) const noexcept
         {
             return hash<uint64_t>()(Id.Value);
+        }
+    };
+}
+
+// Hash specialization for std::unordered_set
+namespace std
+{
+    template <>
+    struct hash<ComponentMeta>
+    {
+        size_t operator()(const ComponentMeta& Meta) const noexcept
+        {
+            return hash<uint64_t>()(Meta.TypeID);
         }
     };
 }

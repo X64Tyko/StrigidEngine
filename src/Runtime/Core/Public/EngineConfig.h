@@ -16,6 +16,12 @@ struct EngineConfig
     // This controls how fast your main thread goes, higher = better input latency
     int InputPollHz = 1000;
 
+    // The max number of Dynamic entities in the world at one time.
+    int MaxDynamicEntities = 100000;
+
+    // Number of History buffer pages, min 8. Must be power of 2.
+    int HistoryBufferPages = 128; // 128 at 128 FixedHz 1 second history.
+
     // --- Helpers ---
     double GetTargetFrameTime() const
     {

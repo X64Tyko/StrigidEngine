@@ -10,13 +10,16 @@
 #include <cassert>
 
 #include "Schema.h"
+#include "TemporalComponentCache.h"
 
+struct EngineConfig;
 // Registry - Central entity management system
 // Handles entity creation, destruction, and component access
 class Registry
 {
 public:
     Registry();
+    Registry(const EngineConfig* Config);
     ~Registry();
 
     // Entity creation, Reflection allows this to be extremely quick
@@ -82,6 +85,8 @@ private:
 
     // Pending destructions (processed at end of frame)
     std::vector<EntityID> PendingDestructions;
+
+    TemporalComponentCache HistorySlab;
 
     // Allocate a new EntityID
     EntityID AllocateEntityID(uint16_t TypeID);
