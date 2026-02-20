@@ -1,5 +1,7 @@
 # StrigidEngine Build Options
 
+> **Navigation:** [← Back to README](../README.md) | [Schema Errors →](SCHEMA_ERROR_EXAMPLES.md)
+
 ## How to Toggle Options Without Editing CMakeLists.txt
 
 ### Method 1: Command Line (Recommended)
