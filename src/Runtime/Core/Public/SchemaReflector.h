@@ -1,27 +1,21 @@
 #pragma once
-#include "Ref.h"
-#include "Schema.h"
-#include "SchemaValidation.h"
-#include <bitset>
+#include <array>
 #include <tuple>
 #include <type_traits>
 
+#include "FieldMeta.h"
+#include "Schema.h"
+#include "SchemaValidation.h"
+
 // --- TYPE TRAITS ---
-// Strips Ref<T> down to T
 template <typename T>
-struct StripRef;
+struct StripClass;
 
-template <typename T>
-struct StripRef<SoARef<T>>
-{
-    using Type = T;
-};
-
-// Strips Ref<T> Class::* down to T
+// Strips T Class::* down to T
 template <typename C, typename M>
-struct StripRef<M C::*>
+struct StripClass<M C::*>
 {
-    using Type = StripRef<M>::Type;
+    using Type = M;
 };
 
 template <typename Class>
@@ -50,10 +44,11 @@ struct PrefabReflector
     template <typename T>
     static void ProcessSchemaItem(T Class::* memberPtr)
     {
-        // Register component members (Ref<T>)
+        // Register component members (T)
         if constexpr (std::is_member_object_pointer_v<decltype(memberPtr)>)
         {
-            using CompType = StripRef<decltype(memberPtr)>::Type;
+            using CompType = StripClass<decltype(memberPtr)>::Type;
+
 
             // Compile-time validation of component type
             VALIDATE_COMPONENT_IS_POD(CompType);
@@ -62,6 +57,93 @@ struct PrefabReflector
         }
     }
 };
+
+// Helper to register fields at runtime
+template <typename Derived, size_t... Is>
+static void RegisterFieldsImpl(std::index_sequence<Is...>)
+{
+    constexpr auto fields = Derived::DefineFields();
+    std::vector<FieldMeta> fieldMetas;
+    fieldMetas.reserve(sizeof...(Is));
+
+    // Extract field metadata for each member pointer
+    (..., fieldMetas.push_back(ExtractFieldMeta<Derived, Is>(std::get<Is>(fields))));
+
+    // Register with global registry
+    ComponentTypeID typeID = GetComponentTypeID<Derived>();
+    ComponentFieldRegistry::Get().RegisterFields(typeID, std::move(fieldMetas));
+}
+
+// Extract metadata from a member pointer
+template <typename Derived, size_t Index, template <typename...> class FieldType, typename Type>
+static FieldMeta ExtractFieldMeta(FieldType<Type> Derived::* member)
+{
+    // Create temporary to get offset
+    Derived temp{};
+    size_t offset = reinterpret_cast<size_t>(&(temp.*member)) - reinterpret_cast<size_t>(&temp);
+
+    const char* name = (Index < Derived::FieldNames.size()) ? Derived::FieldNames[Index] : "unknown";
+
+    return FieldMeta{
+        sizeof(Type),
+        alignof(Type),
+        offset,
+        0, // OffsetInChunk computed later by Archetype::BuildLayout
+        name
+    };
+}
+
+// Get compile-time field list
+template <typename Derived>
+static constexpr auto GetFieldPointers()
+{
+    return Derived::DefineFields();
+}
+
+// Get runtime field count
+template <typename Derived>
+static constexpr size_t GetFieldCount()
+{
+    return std::tuple_size_v<decltype(Derived::DefineFields())>;
+}
+
+// Static registration - called once during static initialization
+template <typename Derived>
+static bool RegisterFieldsStatic()
+{
+    RegisterFieldsImpl<Derived>(std::make_index_sequence<GetFieldCount<Derived>()>{});
+    return true;
+}
+
+// Extract metadata from a member pointer
+template <typename Derived, size_t Index, typename FieldType>
+static FieldMeta ExtractFieldMeta(FieldType Derived::* member)
+{
+    // Create temporary to get offset
+    Derived temp{};
+    size_t offset = reinterpret_cast<size_t>(&(temp.*member)) - reinterpret_cast<size_t>(&temp);
+
+    const char* name = (Index < Derived::FieldNames.size()) ? Derived::FieldNames[Index] : "unknown";
+
+    return FieldMeta{
+        sizeof(FieldType),
+        alignof(FieldType),
+        offset,
+        0, // OffsetInChunk computed later by Archetype::BuildLayout
+        name
+    };
+}
+
+// Helper: Apply function to each field
+template <typename T, typename Func>
+__forceinline void ForEachField(Func&& func)
+{
+    constexpr auto fields = T::DefineFields();
+    [&]<size_t... Is>(std::index_sequence<Is...>)
+    {
+        (func(std::get<Is>(fields), Is), ...);
+    }(std::make_index_sequence<std::tuple_size_v<decltype(fields)>>{});
+}
 
 // --- MACRO ---
 #define STRIGID_REGISTER_ENTITY(CLASS) \
@@ -72,3 +154,76 @@ struct PrefabReflector
             return true; \
         }(); \
     }
+
+#define STRIGID_REGISTER_SCHEMA(CLASS, SUPER, ...) \
+    static constexpr auto DefineSchema() \
+    { \
+        return SUPER::DefineSchema().Extend(__VA_OPT__(STRIGID_MAP_LIST(STRIGID_GET_PTR, CLASS, __VA_ARGS__))); \
+    }
+
+#define STRIGID_EXPAND(x) x
+#define STRIGID_GET_ARG_COUNT(...) STRIGID_EXPAND(STRIGID_INTERNAL_ARG_COUNT(__VA_ARGS__, 16, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1))
+#define STRIGID_INTERNAL_ARG_COUNT(_1,_2,_3,_4,_5,_6,_7,_8,_9,_10,_11,_12,_13,_14,_15,_16, count, ...) count
+
+// Mapping Dispatcher
+#define STRIGID_MAP_LIST(m, context, ...) STRIGID_EXPAND(STRIGID_CONCAT(STRIGID_MAP_, STRIGID_GET_ARG_COUNT(__VA_ARGS__))(m, context, __VA_ARGS__))
+#define STRIGID_CONCAT_INNER(a, b) a##b
+#define STRIGID_CONCAT(a, b) STRIGID_CONCAT_INNER(a, b)
+
+// Individual Expansion Steps (Supports up to 16 members per component)
+#define STRIGID_MAP_1(m, c, x)      m(c, x)
+#define STRIGID_MAP_2(m, c, x, ...) m(c, x), STRIGID_MAP_1(m, c, __VA_ARGS__)
+#define STRIGID_MAP_3(m, c, x, ...) m(c, x), STRIGID_MAP_2(m, c, __VA_ARGS__)
+#define STRIGID_MAP_4(m, c, x, ...) m(c, x), STRIGID_MAP_3(m, c, __VA_ARGS__)
+#define STRIGID_MAP_5(m, c, x, ...) m(c, x), STRIGID_MAP_4(m, c, __VA_ARGS__)
+#define STRIGID_MAP_6(m, c, x, ...) m(c, x), STRIGID_MAP_5(m, c, __VA_ARGS__)
+#define STRIGID_MAP_7(m, c, x, ...) m(c, x), STRIGID_MAP_6(m, c, __VA_ARGS__)
+#define STRIGID_MAP_8(m, c, x, ...) m(c, x), STRIGID_MAP_7(m, c, __VA_ARGS__)
+#define STRIGID_MAP_9(m, c, x, ...) m(c, x), STRIGID_MAP_8(m, c, __VA_ARGS__)
+#define STRIGID_MAP_10(m, c, x, ...) m(c, x), STRIGID_MAP_9(m, c, __VA_ARGS__)
+#define STRIGID_MAP_11(m, c, x, ...) m(c, x), STRIGID_MAP_10(m, c, __VA_ARGS__)
+#define STRIGID_MAP_12(m, c, x, ...) m(c, x), STRIGID_MAP_11(m, c, __VA_ARGS__)
+#define STRIGID_MAP_13(m, c, x, ...) m(c, x), STRIGID_MAP_12(m, c, __VA_ARGS__)
+#define STRIGID_MAP_14(m, c, x, ...) m(c, x), STRIGID_MAP_13(m, c, __VA_ARGS__)
+#define STRIGID_MAP_15(m, c, x, ...) m(c, x), STRIGID_MAP_14(m, c, __VA_ARGS__)
+#define STRIGID_MAP_16(m, c, x, ...) m(c, x), STRIGID_MAP_15(m, c, __VA_ARGS__)
+
+// Macro to auto-register fields during static initialization
+#define STRIGID_REGISTER_COMPONENT_FIELDS(ComponentType) \
+    namespace { \
+        static bool _##ComponentType##_FieldsRegistered = RegisterFieldsStatic<ComponentType>(); \
+    }
+
+// Helper to prefix the class name to the member pointer
+#define STRIGID_GET_PTR(Class, Member) &Class::Member
+
+// Helper to stringify the member name
+#define STRIGID_GET_NAME(Class, Member) #Member
+
+// Handles creating the field definition, debug field names, Bind function, and Registering the struct component
+#define STRIGID_REGISTER_FIELDS(ComponentType, ...) \
+    static constexpr auto DefineFields() \
+    { /* Use the map bindings and __VA_OPT__ to create our Field Definitions for each item passed to the macro */ \
+        return std::make_tuple(__VA_OPT__(STRIGID_MAP_LIST(STRIGID_GET_PTR, ComponentType, __VA_ARGS__))); \
+    } \
+    \
+    static constexpr auto FieldNames = std::array{ /* Same thing but for the names of the fields */ \
+        __VA_OPT__(STRIGID_MAP_LIST(STRIGID_GET_NAME, ComponentType, __VA_ARGS__)) \
+    }; \
+\
+    __forceinline void Bind(void** arrays, uint32_t* idx) \
+    { \
+        ForEachField<ComponentType>([&](auto field, size_t i) { \
+            if constexpr (requires { (this->*field).Bind(nullptr, 0); }) { \
+                (this->*field).Bind(arrays[i++], idx); \
+            } \
+        }); \
+    }
+
+#define STRIGID_REGISTER_COMPONENT(ComponentType) \
+    namespace { \
+        static bool _##ComponentType##_FieldsRegistered = RegisterFieldsStatic<ComponentType>(); \
+    }
+
+#define STRIGID_HOT_COMPONENT() \
+    alignas(4) static inline bool bHotComp = true;

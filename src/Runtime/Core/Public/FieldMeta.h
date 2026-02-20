@@ -1,5 +1,4 @@
 #pragma once
-#include <cstddef>
 #include <vector>
 #include "Types.h"
 
@@ -25,7 +24,7 @@ struct ComponentMetaEx
 };
 
 // Component field registry - static storage for field decomposition info
-// TODO: Should this stay separate or should it be roleld into the MetaRegistry?
+// TODO: Should this stay separate or should it be rolled into the MetaRegistry?
 // Also need to double check how the .data and compile times are looking with all this "Reflection"
 class ComponentFieldRegistry
 {

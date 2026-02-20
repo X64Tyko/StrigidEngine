@@ -160,12 +160,14 @@ public:
     }
 
     // Build field array table using pre-computed template
+    // TODO: Just return the offsets Once, that way we can do the math instead of rebuilding the array per chunk
     void BuildFieldArrayTable(Chunk* chunk, void** outFieldArrayTable)
     {
         auto chunkBase = chunk->Data;
 
-        // Simple loop with cached offsets - compiler can unroll this!
-        for (size_t i = 0; i < FieldArrayTemplateCache.size(); ++i)
+        size_t size = FieldArrayTemplateCache.size();
+#pragma loop(ivdep)
+        for (size_t i = 0; i < size; ++i)
         {
             outFieldArrayTable[i] = chunkBase + FieldArrayTemplateCache[i].offsetInChunk;
         }
@@ -258,7 +260,7 @@ struct ArchetypeKeyHash
         hash *= FNV_PRIME;
 
         // Process signature in 64-bit chunks
-        auto data = reinterpret_cast<const uint64_t*>(&key.Sig);
+        const uint64_t* data = reinterpret_cast<const uint64_t*>(&key.Sig);
         for (size_t i = 0; i < MAX_COMPONENTS / 64; ++i)
         {
             // 256 bits = 4 × 64-bit chunks

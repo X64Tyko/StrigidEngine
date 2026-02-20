@@ -137,6 +137,18 @@ union EntityID
     bool IsLocal(uint8_t LocalClientID) const { return OwnerID == LocalClientID; }
 };
 
+// Instance data format for GPU upload
+// Aligned to 16 bytes for SIMD vectorization and GPU alignment
+struct alignas(16) InstanceData
+{
+    float PositionX, PositionY, PositionZ, _pad0; // 16 bytes (was 12)
+    float RotationX, RotationY, RotationZ, _pad1; // 16 bytes (was 12)
+    float ScaleX, ScaleY, ScaleZ, _pad2; // 16 bytes (was 12)
+    float ColorR, ColorG, ColorB, ColorA; // 16 bytes (same)
+};
+
+static_assert(sizeof(InstanceData) == 64, "InstanceData must be 64 bytes for optimal vectorization");
+
 #ifdef _MSC_VER
 #pragma warning(pop)
 #endif

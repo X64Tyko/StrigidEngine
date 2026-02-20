@@ -1,9 +1,6 @@
 ﻿#pragma once
 
-#include "Profiler.h"
 #include "Registry.h"
-#include "SchemaReflector.h"
-#include "SoARef.h"
 #include "FieldMeta.h"
 
 // Global counter (hidden in cpp)
@@ -20,6 +17,7 @@ class EntityView
 public:
     Registry* Reg = nullptr;
     EntityID ID = {};
+    uint32_t ViewIndex = 0;
 
     static ClassID StaticClassID()
     {
@@ -51,30 +49,12 @@ public:
 
     __forceinline void Advance(uint32_t StepSize)
     {
-        constexpr auto schema = T::DefineSchema();
-
-        std::apply([&](auto&&... members)
-        {
-            // Correct fold expression: call lambda with each member
-            (void)((
-                [&](auto member)
-                {
-                    if constexpr (std::is_member_object_pointer_v<decltype(member)>)
-                    {
-                        using MemberType = std::remove_reference_t<decltype(static_cast<T*>(this)->*member)>;
-
-                        if constexpr (IsSoARef<MemberType>::value)
-                        {
-                            (static_cast<T*>(this)->*member).index += StepSize;
-                        }
-                    }
-                }(members), ...
-            ), 0);
-        }, schema.members);
+        ViewIndex += StepSize;
     }
 
     __forceinline void Hydrate(void** fieldArrayTable, uint32_t index)
     {
+        ViewIndex = index;
         constexpr auto schema = T::DefineSchema();
 
         size_t fieldArrayBaseIndex = 0;
@@ -86,37 +66,21 @@ public:
                 if constexpr (std::is_member_object_pointer_v<decltype(member)>)
                 {
                     using MemberType = std::remove_reference_t<decltype(static_cast<T*>(this)->*member)>;
-
-                    // Check if this is a SoARef
-                    if constexpr (IsSoARef<MemberType>::value)
+                    // Check if this is a FieldProxy<T>
+                    if constexpr (HasDefineFields<MemberType>)
                     {
-                        using ComponentType = MemberType::ComponentType;
-
-                        // Bind SoARef to field arrays
                         (static_cast<T*>(this)->*member).Bind(
                             &fieldArrayTable[fieldArrayBaseIndex],
-                            index
+                            &ViewIndex
                         );
 
                         // Advance by number of fields for this component
                         fieldArrayBaseIndex += ComponentFieldRegistry::Get()
-                            .GetFieldCount(GetComponentTypeID<ComponentType>());
+                            .GetFieldCount(GetComponentTypeID<MemberType>());
                     }
                     else
                     {
-                        // Legacy Ref<T> support (non-decomposed components)
-                        using CompType = std::remove_pointer_t<decltype((static_cast<T*>(this)->*member).ptr)>;
-
-                        CompType* TypeArr = static_cast<CompType*>(
-                            fieldArrayTable[fieldArrayBaseIndex]
-                        );
-
-                        if (TypeArr)
-                        {
-                            (static_cast<T*>(this)->*member) = TypeArr + index;
-                        }
-
-                        fieldArrayBaseIndex += 1; // Non-decomposed = 1 array
+                        // TODO: support non-FieldProxy<T> members?
                     }
                 }
             }(members));

@@ -1,20 +1,18 @@
 ﻿#include "RenderThread.h"
-#include "LogicThread.h"
-#include "FramePacket.h"
-#include "Registry.h"
-#include "EngineConfig.h"
-#include "RenderCommandBuffer.h" // For InstanceData definition
-#include "Profiler.h"
-#include "Logger.h"
+#include <iostream>
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_gpu.h>
-#include <cstring>
-#include <iostream>
 
 #include "ColorData.h"
-#include "CubeMesh.h"
-#include "Transform.h"
 #include "CompiledShaders.h"
+#include "CubeMesh.h"
+#include "EngineConfig.h"
+#include "FramePacket.h"
+#include "Logger.h"
+#include "LogicThread.h"
+#include "Profiler.h"
+#include "Registry.h"
+#include "Transform.h"
 
 void RenderThread::Initialize(Registry* registry, LogicThread* logic, const EngineConfig* config, SDL_GPUDevice* device,
                               SDL_Window* window)
@@ -64,7 +62,7 @@ void RenderThread::ProvideGPUResources(SDL_GPUCommandBuffer* cmd, SDL_GPUTexture
 {
     CmdBufferAtomic.store(cmd, std::memory_order_release);
     SwapchainTextureAtomic.store(swapchain, std::memory_order_release);
-    bNeedsGPUResources.store(false, std::memory_order_release);
+    GPUSync.bNeedsGPUResources.store(false, std::memory_order_release);
 
     LOG_TRACE("[RenderThread] GPU resources provided");
 }
@@ -72,7 +70,7 @@ void RenderThread::ProvideGPUResources(SDL_GPUCommandBuffer* cmd, SDL_GPUTexture
 SDL_GPUCommandBuffer* RenderThread::TakeCommandBuffer()
 {
     SDL_GPUCommandBuffer* cmd = CmdBufferAtomic.exchange(nullptr, std::memory_order_acq_rel);
-    bReadyToSubmit.store(false, std::memory_order_release);
+    GPUSync.bReadyToSubmit.store(false, std::memory_order_release);
 
     LOG_TRACE("[RenderThread] Command buffer taken for submission");
     return cmd;
@@ -117,11 +115,11 @@ void RenderThread::ThreadMain()
         }
 
         // Don't start another frame if the previous one hasn't been submitted
-        while (!bFrameSubmitted.load(std::memory_order_acquire) && bIsRunning.load(std::memory_order_acquire))
+        while (!GPUSync.bFrameSubmitted.load(std::memory_order_acquire) && bIsRunning.load(std::memory_order_acquire))
         {
             std::this_thread::yield();
         }
-        bFrameSubmitted.store(false, std::memory_order_release);
+        GPUSync.bFrameSubmitted.store(false, std::memory_order_release);
 
         // Poll mailbox for new frame - exchange our visualPacket with LogicThread's mailbox
         std::shared_ptr<FramePacket> newPacket = LogicPtr->ExchangeMailbox(visualPacket);
@@ -139,7 +137,7 @@ void RenderThread::ThreadMain()
         // TODO: temp safety until snapshot interp is a bit smarter.
         if (SnapshotCurrent.size() == 0)
         {
-            bFrameSubmitted.store(true, std::memory_order_release);
+            GPUSync.bFrameSubmitted.store(true, std::memory_order_release);
             continue;
         }
 
@@ -241,9 +239,14 @@ void RenderThread::SnapshotSparseArrays(std::shared_ptr<FramePacket> packet)
 
     size_t writeIdx = 0;
     constexpr size_t MAX_FIELD_ARRAYS = 256;
+    void* fieldArrayTable[MAX_FIELD_ARRAYS];
 
     for (Archetype* arch : archetypes)
     {
+        // They're placed in the array in order, the first null means we're done.
+        if (!arch) [[unlikely]]
+            break;
+
         for (size_t chunkIdx = 0; chunkIdx < arch->Chunks.size(); ++chunkIdx)
         {
             Chunk* chunk = arch->Chunks[chunkIdx];
@@ -253,25 +256,29 @@ void RenderThread::SnapshotSparseArrays(std::shared_ptr<FramePacket> packet)
                 continue;
 
             // Build field array table
-            void* fieldArrayTable[MAX_FIELD_ARRAYS];
             arch->BuildFieldArrayTable(chunk, fieldArrayTable);
 
             // Get Transform field arrays (indices 0-11)
             auto posXArray = static_cast<float*>(fieldArrayTable[0]);
             auto posYArray = static_cast<float*>(fieldArrayTable[1]);
             auto posZArray = static_cast<float*>(fieldArrayTable[2]);
-            auto rotXArray = static_cast<float*>(fieldArrayTable[4]);
-            auto rotYArray = static_cast<float*>(fieldArrayTable[5]);
-            auto rotZArray = static_cast<float*>(fieldArrayTable[6]);
-            auto scaleXArray = static_cast<float*>(fieldArrayTable[8]);
-            auto scaleYArray = static_cast<float*>(fieldArrayTable[9]);
-            auto scaleZArray = static_cast<float*>(fieldArrayTable[10]);
-
+            auto rotXArray = static_cast<float*>(fieldArrayTable[3]);
+            auto rotYArray = static_cast<float*>(fieldArrayTable[4]);
+            auto rotZArray = static_cast<float*>(fieldArrayTable[5]);
+            auto scaleXArray = static_cast<float*>(fieldArrayTable[6]);
+            auto scaleYArray = static_cast<float*>(fieldArrayTable[7]);
+            auto scaleZArray = static_cast<float*>(fieldArrayTable[8]);
+/*
             // Get ColorData field arrays (starts at index 12 for CubeEntity)
             auto rArray = static_cast<float*>(fieldArrayTable[12]);
             auto gArray = static_cast<float*>(fieldArrayTable[13]);
             auto bArray = static_cast<float*>(fieldArrayTable[14]);
             auto aArray = static_cast<float*>(fieldArrayTable[15]);
+            */
+            auto rArray = static_cast<float*>(fieldArrayTable[9]);
+            auto gArray = static_cast<float*>(fieldArrayTable[10]);
+            auto bArray = static_cast<float*>(fieldArrayTable[11]);
+            auto aArray = static_cast<float*>(fieldArrayTable[12]);
 
             // Copy data to snapshot
             for (uint32_t i = 0; i < chunkEntityCount; ++i)
@@ -301,7 +308,7 @@ void RenderThread::SnapshotSparseArrays(std::shared_ptr<FramePacket> packet)
 
 void RenderThread::RequestGPUResources()
 {
-    bNeedsGPUResources.store(true, std::memory_order_release);
+    GPUSync.bNeedsGPUResources.store(true, std::memory_order_release);
 }
 
 void RenderThread::WaitForGPUResources()
@@ -519,7 +526,7 @@ void RenderThread::SignalReadyToSubmit()
 {
     // Store command buffer back in atomic for main thread to retrieve
     // (already stored, just signal)
-    bReadyToSubmit.store(true, std::memory_order_release);
+    GPUSync.bReadyToSubmit.store(true, std::memory_order_release);
 
     LOG_TRACE("[RenderThread] Signaled ready to submit");
 }

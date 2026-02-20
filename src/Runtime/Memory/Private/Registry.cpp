@@ -1,8 +1,7 @@
-#include "../Public/Registry.h"
+#include "Registry.h"
 #include "Profiler.h"
 #include <cassert>
 
-#include "EntityView.h"
 #include "SchemaReflector.h"
 
 Registry::Registry()
@@ -168,100 +167,19 @@ void Registry::InitializeArchetypes()
     }
 }
 
-void Registry::InvokeUpdate(double dt)
+void Registry::ResetRegistry()
 {
-    STRIGID_ZONE_C(STRIGID_COLOR_LOGIC);
-
-    constexpr size_t MAX_FIELD_ARRAYS = 64; // Max total fields across all components in archetype
-
-    for (auto& [sig, arch] : Archetypes)
+    for (auto& Entity : EntityIndex)
     {
-        UpdateFunc Update = MetaRegistry::Get().EntityGetters[sig.ID].Update;
-        if (!Update)
-            continue;
-
-        for (size_t chunkIdx = 0; chunkIdx < arch->Chunks.size(); ++chunkIdx)
-        {
-            STRIGID_ZONE_N("Update Chunk Process");
-            Chunk* chunk = arch->Chunks[chunkIdx];
-            uint32_t entityCount = arch->GetChunkCount(chunkIdx);
-
-            if (entityCount == 0)
-                continue;
-
-            // Build field array table on stack (fast!)
-            // For CubeEntity (Transform + Velocity): 12 + 4 = 16 entries
-            void* fieldArrayTable[MAX_FIELD_ARRAYS];
-            arch->BuildFieldArrayTable(chunk, fieldArrayTable);
-
-            // Invoke batch processor with field array table
-            Update(dt, fieldArrayTable, entityCount);
-        }
+        Entity.Arch = nullptr;
     }
-}
-
-void Registry::InvokePrePhys(double dt)
-{
-    STRIGID_ZONE_C(STRIGID_COLOR_LOGIC);
-
-    constexpr size_t MAX_FIELD_ARRAYS = 64; // Max total fields across all components in archetype
-
-    for (auto& [sig, arch] : Archetypes)
+    EntityIndex.clear();
+    while (!FreeIndices.empty())
     {
-        UpdateFunc prePhys = MetaRegistry::Get().EntityGetters[sig.ID].PrePhys;
-        if (!prePhys)
-            continue;
-
-        for (size_t chunkIdx = 0; chunkIdx < arch->Chunks.size(); ++chunkIdx)
-        {
-            STRIGID_ZONE_N("PrePhys Chunk Process");
-            Chunk* chunk = arch->Chunks[chunkIdx];
-            uint32_t entityCount = arch->GetChunkCount(chunkIdx);
-
-            if (entityCount == 0)
-                continue;
-
-            // Build field array table on stack (fast!)
-            // For CubeEntity (Transform + Velocity): 12 + 4 = 16 entries
-            void* fieldArrayTable[MAX_FIELD_ARRAYS];
-            arch->BuildFieldArrayTable(chunk, fieldArrayTable);
-
-            // Invoke batch processor with field array table
-            prePhys(dt, fieldArrayTable, entityCount);
-        }
+        FreeIndices.pop();
     }
-}
-
-void Registry::InvokePostPhys(double dt)
-{
-    STRIGID_ZONE_C(STRIGID_COLOR_LOGIC);
-
-    constexpr size_t MAX_FIELD_ARRAYS = 64; // Max total fields across all components in archetype
-
-    for (auto& [sig, arch] : Archetypes)
-    {
-        UpdateFunc PostPhys = MetaRegistry::Get().EntityGetters[sig.ID].PostPhys;
-        if (!PostPhys)
-            continue;
-
-        for (size_t chunkIdx = 0; chunkIdx < arch->Chunks.size(); ++chunkIdx)
-        {
-            STRIGID_ZONE_N("PostPhys Chunk Process");
-            Chunk* chunk = arch->Chunks[chunkIdx];
-            uint32_t entityCount = arch->GetChunkCount(chunkIdx);
-
-            if (entityCount == 0)
-                continue;
-
-            // Build field array table on stack (fast!)
-            // For CubeEntity (Transform + Velocity): 12 + 4 = 16 entries
-            void* fieldArrayTable[MAX_FIELD_ARRAYS];
-            arch->BuildFieldArrayTable(chunk, fieldArrayTable);
-
-            // Invoke batch processor with field array table
-            PostPhys(dt, fieldArrayTable, entityCount);
-        }
-    }
+    PendingDestructions.clear();
+    NextEntityIndex = 1;
 }
 
 uint32_t Registry::GetTotalChunkCount() const

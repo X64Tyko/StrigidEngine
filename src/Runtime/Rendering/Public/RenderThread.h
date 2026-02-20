@@ -47,8 +47,8 @@ public:
     void Join();
 
     // Signals for main thread to poll
-    bool NeedsGPUResources() const { return bNeedsGPUResources.load(std::memory_order_acquire); }
-    bool ReadyToSubmit() const { return bReadyToSubmit.load(std::memory_order_acquire); }
+    bool NeedsGPUResources() const { return GPUSync.bNeedsGPUResources.load(std::memory_order_acquire); }
+    bool ReadyToSubmit() const { return GPUSync.bReadyToSubmit.load(std::memory_order_acquire); }
 
     // Main thread provides resources
     void ProvideGPUResources(SDL_GPUCommandBuffer* cmd, SDL_GPUTexture* swapchain);
@@ -57,7 +57,7 @@ public:
     SDL_GPUCommandBuffer* TakeCommandBuffer();
 
     // In public interface:
-    void NotifyFrameSubmitted() { bFrameSubmitted.store(true, std::memory_order_release); }
+    void NotifyFrameSubmitted() { GPUSync.bFrameSubmitted.store(true, std::memory_order_release); }
 
 private:
     void ThreadMain(); // Thread entry point
@@ -111,10 +111,14 @@ private:
     size_t TransferBufferCapacity = 0;
     size_t InstanceBufferCapacity = 0;
 
-    // Signals to main thread
-    std::atomic<bool> bNeedsGPUResources{false};
-    std::atomic<bool> bReadyToSubmit{false};
-    std::atomic<bool> bFrameSubmitted{true}; // Start true so first frame can begin
+    // Pack atomics to share cache line (64 bytes)
+    alignas(64) struct GPUSyncAtomics
+    {
+        std::atomic<bool> bNeedsGPUResources{false};
+        std::atomic<bool> bReadyToSubmit{false};
+        std::atomic<bool> bFrameSubmitted{true};
+        char padding[64 - 3*sizeof(std::atomic<bool>)]; // Prevent false sharing with next data
+    } GPUSync;
 
     // FPS tracking
     uint32_t FpsFrameCount = 0;

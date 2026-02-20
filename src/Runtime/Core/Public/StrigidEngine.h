@@ -1,6 +1,6 @@
 ﻿#pragma once
-#include <memory>
 #include <atomic>
+#include <memory>
 #include <SDL3/SDL_gpu.h>
 
 #include "EngineConfig.h"
@@ -56,6 +56,9 @@ public:
         static StrigidEngine instance;
         return instance;
     }
+
+    // Get registry for external initialization (e.g., testbed)
+    Registry* GetRegistry() const { return RegistryPtr.get(); }
 
 private:
     // Sentinel Tasks (Main Thread)

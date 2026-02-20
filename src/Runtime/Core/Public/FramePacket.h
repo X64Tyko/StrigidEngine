@@ -26,7 +26,7 @@ struct SceneState
  * Logic Thread produces these at FixedUpdateHz
  * Render Thread consumes via triple-buffer mailbox
  */
-struct FramePacket
+struct alignas(64) FramePacket
 {
     ViewState View;
     SceneState Scene;

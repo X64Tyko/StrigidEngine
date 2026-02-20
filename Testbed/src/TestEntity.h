@@ -12,9 +12,8 @@ STRIGID_REGISTER_ENTITY(TestEntity);
 
 class TestEntity : public EntityView<TestEntity>
 {
-    SoARef<Transform> Transform;
-    SoARef<Velocity> Velocity;
-    SoARef<ColorData> Color;
+    Transform Transform;
+    Velocity Velocity;
 
     // Reflection - register components and lifecycle functions
 public:
@@ -22,8 +21,7 @@ public:
     {
         return Schema::Create(
             &TestEntity::Transform,
-            &TestEntity::Velocity,
-            &TestEntity::Color
+            &TestEntity::Velocity
         );
     }
 

@@ -1,18 +1,13 @@
 #include "StrigidEngine.h"
-
 #include <iostream>
-
-#include "LogicThread.h"
-#include "RenderThread.h"
-#include "Window.h"
-#include "Registry.h"
-#include "EngineConfig.h"
-#include "CubeEntity.h"
-#include "Profiler.h"
-#include "Logger.h"
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_gpu.h>
-#include <random>
+#include "EngineConfig.h"
+#include "Logger.h"
+#include "LogicThread.h"
+#include "Profiler.h"
+#include "Registry.h"
+#include "RenderThread.h"
 
 // Define global component counter (declared in SchemaReflector.h)
 namespace Internal
@@ -87,83 +82,6 @@ bool StrigidEngine::Initialize(const char* title, int width, int height)
     RegistryPtr = std::make_unique<Registry>(&Config);
     Pacer.Initialize(GpuDevice);
 
-    // Create 100k test entities (same as old code)
-    std::random_device rd;
-    std::mt19937 gen(rd());
-    std::uniform_real_distribution<float> posX(-30.0f, 30.0f);
-    std::uniform_real_distribution<float> posY(-30.0f, 30.0f);
-    std::uniform_real_distribution<float> posZ(-500.0f, -200.0f);
-    std::uniform_real_distribution<float> color(0.2f, 1.0f);
-
-    static int32_t EntityCount = 1000000;
-
-    // Step 1: Create all entities first
-    std::vector<EntityID> entityIDs;
-    entityIDs.reserve(EntityCount);
-    for (int i = 0; i < EntityCount; ++i)
-    {
-        EntityID id = RegistryPtr->Create<CubeEntity>();
-        entityIDs.push_back(id);
-    }
-
-    LOG_ALWAYS_F("Created %i test entities", EntityCount);
-
-    // Step 2: Initialize by iterating through archetypes/chunks
-    Archetype* cubeArch = RegistryPtr->GetOrCreateArchetype(
-        std::get<ComponentSignature>(MetaRegistry::Get().ClassToArchetype[CubeEntity::StaticClassID()]),
-        CubeEntity::StaticClassID());
-    if (cubeArch)
-    {
-        constexpr size_t MAX_FIELD_ARRAYS = 256;
-
-        for (size_t chunkIdx = 0; chunkIdx < cubeArch->Chunks.size(); ++chunkIdx)
-        {
-            Chunk* chunk = cubeArch->Chunks[chunkIdx];
-            uint32_t entityCount = cubeArch->GetChunkCount(chunkIdx);
-
-            // Build field array table
-            void* fieldArrayTable[MAX_FIELD_ARRAYS];
-            cubeArch->BuildFieldArrayTable(chunk, fieldArrayTable);
-
-            // Get field arrays for Transform (component ID 1)
-            // Transform has 12 fields: PositionX, PositionY, PositionZ, pad, RotX, RotY, RotZ, pad, ScaleX, ScaleY, ScaleZ, pad
-            auto posXArray = static_cast<float*>(fieldArrayTable[0]);
-            auto posYArray = static_cast<float*>(fieldArrayTable[1]);
-            auto posZArray = static_cast<float*>(fieldArrayTable[2]);
-            auto rotXArray = static_cast<float*>(fieldArrayTable[4]);
-            auto rotYArray = static_cast<float*>(fieldArrayTable[5]);
-            auto rotZArray = static_cast<float*>(fieldArrayTable[6]);
-            auto scaleXArray = static_cast<float*>(fieldArrayTable[8]);
-            auto scaleYArray = static_cast<float*>(fieldArrayTable[9]);
-            auto scaleZArray = static_cast<float*>(fieldArrayTable[10]);
-
-            // ColorData starts after Transform (12 fields), so index 12-15
-            auto rArray = static_cast<float*>(fieldArrayTable[12]);
-            auto gArray = static_cast<float*>(fieldArrayTable[13]);
-            auto bArray = static_cast<float*>(fieldArrayTable[14]);
-            auto aArray = static_cast<float*>(fieldArrayTable[15]);
-
-            // Initialize all entities in this chunk
-            for (uint32_t i = 0; i < entityCount; ++i)
-            {
-                posXArray[i] = posX(gen);
-                posYArray[i] = posY(gen);
-                posZArray[i] = posZ(gen);
-                rotXArray[i] = 0.0f;
-                rotYArray[i] = 0.0f;
-                rotZArray[i] = 0.0f;
-                scaleXArray[i] = 1.0f;
-                scaleYArray[i] = 1.0f;
-                scaleZArray[i] = 1.0f;
-
-                rArray[i] = color(gen);
-                gArray[i] = color(gen);
-                bArray[i] = color(gen);
-                aArray[i] = color(gen);
-            }
-        }
-    }
-
     // Create threads
     Logic = std::make_unique<LogicThread>();
     Render = std::make_unique<RenderThread>();
@@ -174,17 +92,15 @@ bool StrigidEngine::Initialize(const char* title, int width, int height)
     // TODO: Get GPU device from Window
     // For now, pass nullptr - this will need to be fixed
     Render->Initialize(RegistryPtr.get(), Logic.get(), &Config, GpuDevice, EngineWindow);
-
-    // Start threads
-    Logic->Start();
-    Render->Start();
-
-    bIsRunning = true;
     return true;
 }
 
 void StrigidEngine::Run()
 {
+    // Start threads
+    Logic->Start();
+    Render->Start();
+
     bIsRunning = true;
 
     const uint64_t perfFrequency = SDL_GetPerformanceFrequency();
@@ -321,7 +237,7 @@ void StrigidEngine::CalculateFPS()
     FpsTimer += currentTime - LastFPSCheck;
     LastFPSCheck = currentTime;
 
-    if (FpsTimer >= 1.0)
+    if (FpsTimer >= 1.0) [[unlikely]]
     {
         double fps = FrameCount / FpsTimer;
         double ms = (FpsTimer / FrameCount) * 1000.0;

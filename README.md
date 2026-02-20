@@ -19,7 +19,7 @@ triple-buffering) that are too risky to implement directly into a live commercia
 
 ## TL;DR Current Metrics
 
-- 1M entities ~3.5ms PrePhysics call. Just transform updates.
+- 1M entities ~3ms PrePhysics call. Just transform updates.
 - Rendering 1M at 51FPS, no culling, depth, etc..
 - Trinity split:
     - Main: Input polling and window management 1KHz
@@ -27,7 +27,7 @@ triple-buffering) that are too risky to implement directly into a live commercia
     - Render: Requests resources from Main, builds PRU commands
 - Proper SoA with component decomposition, ready for sparse sets for 128(variable) history buffers and true SIMD phys
   rendering.
-- OOP facade remains in tact, though at the moment creating new components requires significant boilerplate.
+- OOP facade remains intact, though at the moment creating new components requires significant boilerplate.
 
 ---
 

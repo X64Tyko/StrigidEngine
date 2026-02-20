@@ -1,12 +1,12 @@
 #pragma once
-#include <tuple>
-#include <unordered_set>
 #include <functional>
 #include <Logger.h>
-#include "Types.h"
-#include "Signature.h"
+#include <tuple>
+#include <unordered_set>
 
 #include "Profiler.h"
+#include "Signature.h"
+#include "Types.h"
 
 
 // Helper concept to detect if T has a specific method
@@ -19,13 +19,12 @@ template <typename T> concept HasOnActivate = requires(T t) { t.OnActivate(); };
 template <typename T> concept HasOnDeactivate = requires(T t) { t.OnDeactivate(); };
 template <typename T> concept HasOnCollide = requires(T t) { t.OnCollide(); };
 template <typename T> concept HasDefineSchema = requires(T t) { t.DefineSchema(); };
+template <typename T> concept HasDefineFields = requires(T t) { t.DefineFields(); };
 
 using UpdateFunc = void(*)(double, void**, uint32_t);
 
 #define REGISTER_ENTITY_PREPHYS(Type, ClassID) \
     case ClassID: InvokePrePhysicsImpl<Type>(dt, fieldArrayTable, componentCount); break;
-
-constexpr size_t MAX_ENTITY_VIEW_SIZE = 128;
 
 struct EntityMeta
 {
@@ -34,124 +33,69 @@ struct EntityMeta
     UpdateFunc PrePhys = nullptr;
     UpdateFunc PostPhys = nullptr;
     UpdateFunc Update = nullptr;
+
+    EntityMeta(){}
+    EntityMeta(const size_t inViewSize, const UpdateFunc prePhys, const UpdateFunc postPhys, const UpdateFunc update)
+        : ViewSize(inViewSize)
+        , PrePhys(prePhys)
+        , PostPhys(postPhys)
+        , Update(update)
+    {}
+
+    EntityMeta(const EntityMeta& rhs)
+        : ViewSize(rhs.ViewSize)
+        , PrePhys(rhs.PrePhys)
+        , PostPhys(rhs.PostPhys)
+        , Update(rhs.Update)
+    {}
+
+    EntityMeta& operator=(EntityMeta&& rhs) noexcept
+    {
+        std::memcpy(this, &rhs, sizeof(EntityMeta));
+        return *this;
+    }
 };
+
 
 template <typename T>
 __forceinline void InvokePrePhysicsImpl(double dt, void** fieldArrayTable, uint32_t componentCount)
 {
-    alignas(16) T viewBatch[8];
-
-    constexpr uint32_t SIMD_BATCH = 8;
-    uint32_t simdCount = (componentCount / SIMD_BATCH) * SIMD_BATCH;
-
-    // Hydrate - compiler can unroll this
-#pragma loop(ivdep)
-    for (uint32_t j = 0; j < SIMD_BATCH; ++j)
-    {
-        viewBatch[j].Hydrate(fieldArrayTable, j);
-    }
-
-    // Process batches
-    for (uint32_t i = 0; i < simdCount; i += SIMD_BATCH)
-    {
-#pragma loop(ivdep)
-        for (uint32_t j = 0; j < SIMD_BATCH; ++j)
-        {
-            viewBatch[j].PrePhysics(dt);
-        }
+    alignas(16) T EntityView;
+    EntityView.Hydrate(fieldArrayTable, 0);
 
 #pragma loop(ivdep)
-        for (uint32_t j = 0; j < SIMD_BATCH; ++j)
-        {
-            viewBatch[j].Advance(SIMD_BATCH);
-        }
-    }
-
-    // Tail
-    int j = 0;
-    for (uint32_t i = simdCount; i < componentCount; ++i)
+    for (uint32_t i = 0; i < componentCount; ++i)
     {
-        viewBatch[j++].PrePhysics(dt);
+        EntityView.PrePhysics(dt);
+        EntityView.Advance(1);
     }
 }
-
-
-template <typename T>
-__forceinline void InvokeUpdateImpl(double dt, void** fieldArrayTable, uint32_t componentCount)
-{
-    alignas(16) T viewBatch[8];
-
-    constexpr uint32_t SIMD_BATCH = 8;
-    uint32_t simdCount = (componentCount / SIMD_BATCH) * SIMD_BATCH;
-
-    // Hydrate - compiler can unroll this
-#pragma loop(ivdep)
-    for (uint32_t j = 0; j < SIMD_BATCH; ++j)
-    {
-        viewBatch[j].Hydrate(fieldArrayTable, j);
-    }
-
-    // Process batches
-    for (uint32_t i = 0; i < simdCount; i += SIMD_BATCH)
-    {
-#pragma loop(ivdep)
-        for (uint32_t j = 0; j < SIMD_BATCH; ++j)
-        {
-            viewBatch[j].Update(dt);
-        }
-
-#pragma loop(ivdep)
-        for (uint32_t j = 0; j < SIMD_BATCH; ++j)
-        {
-            viewBatch[j].Advance(SIMD_BATCH);
-        }
-    }
-
-    // Tail
-    int j = 0;
-    for (uint32_t i = simdCount; i < componentCount; ++i)
-    {
-        viewBatch[j++].Update(dt);
-    }
-}
-
 
 template <typename T>
 __forceinline void InvokePostPhysicsImpl(double dt, void** fieldArrayTable, uint32_t componentCount)
 {
-    alignas(16) T viewBatch[8];
+    alignas(16) T EntityView;
+    EntityView.Hydrate(fieldArrayTable, 0);
 
-    constexpr uint32_t SIMD_BATCH = 8;
-    uint32_t simdCount = (componentCount / SIMD_BATCH) * SIMD_BATCH;
-
-    // Hydrate - compiler can unroll this
 #pragma loop(ivdep)
-    for (uint32_t j = 0; j < SIMD_BATCH; ++j)
+    for (uint32_t i = 0; i < componentCount; ++i)
     {
-        viewBatch[j].Hydrate(fieldArrayTable, j);
+        EntityView.PostPhysics(dt);
+        EntityView.Advance(1);
     }
+}
 
-    // Process batches
-    for (uint32_t i = 0; i < simdCount; i += SIMD_BATCH)
-    {
-#pragma loop(ivdep)
-        for (uint32_t j = 0; j < SIMD_BATCH; ++j)
-        {
-            viewBatch[j].PostPhysics(dt);
-        }
+template <typename T>
+__forceinline void InvokeUpdateImpl(double dt, void** fieldArrayTable, uint32_t componentCount)
+{
+    alignas(16) T EntityView;
+    EntityView.Hydrate(fieldArrayTable, 0);
 
 #pragma loop(ivdep)
-        for (uint32_t j = 0; j < SIMD_BATCH; ++j)
-        {
-            viewBatch[j].Advance(SIMD_BATCH);
-        }
-    }
-
-    // Tail
-    int j = 0;
-    for (uint32_t i = simdCount; i < componentCount; ++i)
+    for (uint32_t i = 0; i < componentCount; ++i)
     {
-        viewBatch[j++].PostPhysics(dt);
+        EntityView.Update(dt);
+        EntityView.Advance(1);
     }
 }
 
@@ -173,45 +117,25 @@ public:
     template <typename T>
     void RegisterPrefab()
     {
-#ifdef _DEBUG
-        if constexpr (sizeof(T) > MAX_ENTITY_VIEW_SIZE)
-        {
-            LOG_ERROR_F("Entity view size %zu exceeds maximum %zu",
-                        sizeof(T), MAX_ENTITY_VIEW_SIZE);
-        }
-#endif
-
         const ClassID ID = T::StaticClassID();
         EntityGetters[ID].ViewSize = sizeof(T);
 
         if constexpr (HasUpdate<T>)
         {
             // Then in RegisterEntity:
-            EntityGetters[ID].Update = [](double dt, void** fieldArrayTable,
-                                          uint32_t componentCount)
-            {
-                InvokeUpdateImpl<T>(dt, fieldArrayTable, componentCount);
-            };
+            EntityGetters[ID].Update = InvokeUpdateImpl<T>;
         }
 
         if constexpr (HasPrePhysics<T>)
         {
             // Then in RegisterEntity:
-            EntityGetters[ID].PrePhys = [](double dt, void** fieldArrayTable,
-                                           uint32_t componentCount)
-            {
-                InvokePrePhysicsImpl<T>(dt, fieldArrayTable, componentCount);
-            };
+            EntityGetters[ID].PrePhys = InvokePrePhysicsImpl<T>;
         }
 
         if constexpr (HasPostPhysics<T>)
         {
             // Then in RegisterEntity:
-            EntityGetters[ID].PostPhys = [](double dt, void** fieldArrayTable,
-                                            uint32_t componentCount)
-            {
-                InvokePostPhysicsImpl<T>(dt, fieldArrayTable, componentCount);
-            };
+            EntityGetters[ID].PostPhys = InvokePostPhysicsImpl<T>;
         }
     }
 

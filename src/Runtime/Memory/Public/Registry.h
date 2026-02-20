@@ -1,16 +1,13 @@
 #pragma once
-#include "Types.h"
-#include "Signature.h"
+#include <queue>
+#include <unordered_map>
+#include <vector>
 #include "Archetype.h"
 #include "EntityRecord.h"
-#include "SoARef.h"
-#include <vector>
-#include <unordered_map>
-#include <queue>
-#include <cassert>
-
 #include "Schema.h"
+#include "Signature.h"
 #include "TemporalComponentCache.h"
+#include "Types.h"
 
 struct EngineConfig;
 // Registry - Central entity management system
@@ -34,10 +31,6 @@ public:
     template <typename T>
     T* GetComponent(EntityID Id);
 
-    // Get SoA component reference from entity
-    template <typename T>
-    SoARef<T> GetComponentSoA(EntityID Id);
-
     // Check if entity has component
     template <typename T>
     bool HasComponent(EntityID Id);
@@ -60,12 +53,9 @@ public:
     uint32_t GetTotalChunkCount() const;
     uint32_t GetTotalEntityCount() const;
 
-    // Singleton access
-    static Registry& Get()
-    {
-        static Registry Instance;
-        return Instance;
-    }
+    // Resets the registry to default, useful after tests.
+    // TODO: this needs to not be public.
+    void ResetRegistry();
 
 private:
     // Initialize archetypes with data from MetaRegistry
@@ -192,39 +182,6 @@ T* Registry::GetComponent(EntityID Id)
 }
 
 template <typename T>
-SoARef<T> Registry::GetComponentSoA(EntityID Id)
-{
-    SoARef<T> ref;
-
-    if (!Id.IsValid())
-        return ref;
-
-    uint32_t Index = Id.GetIndex();
-    if (Index >= EntityIndex.size())
-        return ref;
-
-    EntityRecord& Record = EntityIndex[Index];
-
-    // Validate generation (detect use-after-free)
-    if (Record.Generation != Id.GetGeneration())
-        return ref;
-
-    if (!Record.IsValid())
-        return ref;
-
-    ComponentTypeID TypeID = GetComponentTypeID<T>();
-
-    // Get field arrays from archetype
-    std::vector<void*> fieldArrays = Record.Arch->GetFieldArrays(Record.TargetChunk, TypeID);
-    if (fieldArrays.empty())
-        return ref;
-
-    // Bind SoARef to field arrays
-    ref.Bind(fieldArrays.data(), Record.Index);
-    return ref;
-}
-
-template <typename T>
 bool Registry::HasComponent(EntityID Id)
 {
     return GetComponent<T>(Id) != nullptr;
@@ -242,15 +199,115 @@ Signature Registry::BuildSignature()
 template <typename... Components>
 std::vector<Archetype*> Registry::ComponentQuery()
 {
-    std::vector<Archetype*> Results;
+    std::vector<Archetype*> Results(Archetypes.size());
+    Archetype** ArchPtr = &Results[0];
+    bool Valid = false;
     Signature Sig = BuildSignature<Components...>();
     for (auto Arch : Archetypes)
     {
-        if (Arch.first.Sig.Contains(Sig))
-        {
-            Results.push_back(Arch.second);
-        }
+        Valid = Arch.first.Sig.Contains(Sig);
+        *ArchPtr = Arch.second;
+        ArchPtr += !!Valid;
     }
 
     return Results;
+}
+
+inline void Registry::InvokeUpdate(double dt)
+{
+    STRIGID_ZONE_C(STRIGID_COLOR_LOGIC);
+
+    constexpr size_t MAX_FIELD_ARRAYS = 64; // Max total fields across all components in archetype
+    void* fieldArrayTable[MAX_FIELD_ARRAYS];
+
+    for (auto& [sig, arch] : Archetypes)
+    {
+        UpdateFunc Update = MetaRegistry::Get().EntityGetters[sig.ID].Update;
+        if (!Update)
+            continue;
+
+        size_t size = arch->Chunks.size();
+        for (size_t chunkIdx = 0; chunkIdx < size; ++chunkIdx)
+        {
+            STRIGID_ZONE_N("Update Chunk Process");
+            Chunk* chunk = arch->Chunks[chunkIdx];
+            uint32_t entityCount = arch->GetChunkCount(chunkIdx);
+
+            if (entityCount == 0)
+                continue;
+
+            // Build field array table on stack (fast!)
+            // For CubeEntity (Transform + Velocity): 12 + 4 = 16 entries
+            arch->BuildFieldArrayTable(chunk, fieldArrayTable);
+
+            // Invoke batch processor with field array table
+            Update(dt, fieldArrayTable, entityCount);
+        }
+    }
+}
+
+inline void Registry::InvokePrePhys(double dt)
+{
+    STRIGID_ZONE_C(STRIGID_COLOR_LOGIC);
+
+    constexpr size_t MAX_FIELD_ARRAYS = 64; // Max total fields across all components in archetype
+    void* fieldArrayTable[MAX_FIELD_ARRAYS];
+
+    for (auto& [sig, arch] : Archetypes)
+    {
+        UpdateFunc prePhys = MetaRegistry::Get().EntityGetters[sig.ID].PrePhys;
+        if (!prePhys)
+            continue;
+
+        size_t size = arch->Chunks.size();
+        for (size_t chunkIdx = 0; chunkIdx < size; ++chunkIdx)
+        {
+            STRIGID_ZONE_N("PrePhys Chunk Process");
+            Chunk* chunk = arch->Chunks[chunkIdx];
+            uint32_t entityCount = arch->GetChunkCount(chunkIdx);
+
+            if (entityCount == 0)
+                continue;
+
+            // Build field array table on stack (fast!)
+            // For CubeEntity (Transform + Velocity): 12 + 4 = 16 entries
+            arch->BuildFieldArrayTable(chunk, fieldArrayTable);
+
+            // Invoke batch processor with field array table
+            prePhys(dt, fieldArrayTable, entityCount);
+        }
+    }
+}
+
+inline void Registry::InvokePostPhys(double dt)
+{
+    STRIGID_ZONE_C(STRIGID_COLOR_LOGIC);
+
+    constexpr size_t MAX_FIELD_ARRAYS = 64; // Max total fields across all components in archetype
+    void* fieldArrayTable[MAX_FIELD_ARRAYS];
+
+    for (auto& [sig, arch] : Archetypes)
+    {
+        UpdateFunc PostPhys = MetaRegistry::Get().EntityGetters[sig.ID].PostPhys;
+        if (!PostPhys)
+            continue;
+
+        size_t size = arch->Chunks.size();
+        for (size_t chunkIdx = 0; chunkIdx < size; ++chunkIdx)
+        {
+            STRIGID_ZONE_N("PostPhys Chunk Process");
+            Chunk* chunk = arch->Chunks[chunkIdx];
+            uint32_t entityCount = arch->GetChunkCount(chunkIdx);
+
+            if (entityCount == 0)
+                continue;
+
+            // Build field array table on stack (fast!)
+            // For CubeEntity (Transform + Velocity): 12 + 4 = 16 entries
+            arch->BuildFieldArrayTable(chunk, fieldArrayTable);
+
+            // Invoke batch processor with field array table
+            PostPhys(dt, fieldArrayTable, entityCount);
+        }
+    }
 }
