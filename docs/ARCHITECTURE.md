@@ -4,6 +4,88 @@
 
 ---
 
+# Threading Model: The Strigid Trinity
+
+## Overview
+
+StrigidEngine uses a **three-thread architecture** with job-based parallelism:
+
+1. **Sentinel (Main Thread):** 1000Hz input polling, GPU resource management, frame pacing
+2. **Brain (Logic Thread):** 512Hz fixed timestep coordinator + job distribution
+3. **Encoder (Render Thread):** Variable-rate render coordinator + job distribution
+
+**Key Design:** Brain and Encoder are **coordinators**, not workers. They initialize frames, distribute work to the job system, and act as workers themselves while jobs are pending.
+
+## Job System Architecture
+
+### Core Count Distribution (8-core example)
+
+- **Sentinel Thread:** 1 dedicated core (input + GPU resource management)
+- **Encoder Thread:** 1 dedicated core (render coordination + render worker)
+- **Brain Thread:** 1 dedicated core (logic coordination + logic worker)
+- **Workers:** 5 cores (process tasks from all queues)
+
+### Worker Pool
+
+The job system maintains a shared pool of worker threads with queue affinity rules:
+
+```cpp
+// Simplified job system structure
+struct JobSystem {
+    static constexpr int WorkerCount = 6;  // Hardware threads - 2 (Sentinel + Encoder)
+
+    // Separate queues for Logic and Render jobs
+    MPMCQueue<Job> LogicQueue;
+    MPMCQueue<Job> RenderQueue;
+
+    std::thread Workers[WorkerCount];
+    std::atomic<bool> IsRunning;
+};
+```
+
+**Queue Affinity Rules:**
+- **Brain Thread:** Only pulls from `LogicQueue` (when acting as worker)
+- **Encoder Thread:** Only pulls from `RenderQueue` (when acting as worker)
+- **Generic Workers (5 threads):** Pull from both `LogicQueue` and `RenderQueue` (work-stealing)
+
+This design prevents the Brain from accidentally processing render jobs and vice versa, while allowing generic workers to balance load across both queues.
+
+### Job Types
+
+**Logic Jobs:**
+- PrePhysics updates (per-archetype chunk)
+- Physics simulation (per-chunk or per-rigid-body-group)
+- PostPhysics updates (per-archetype chunk)
+
+**Render Jobs:**
+- Interpolation (per-entity-range)
+- Frustum culling (per-chunk)
+- Sort key generation (per-visible-entity)
+- GPU command encoding (per-material/mesh batch)
+
+### Performance Impact
+
+**Example: 100k entities @ 128Hz on 8-core CPU**
+
+Single-threaded Brain: ~3.0ms per frame
+- PrePhysics: ~1.0ms
+- Physics: ~1.5ms
+- PostPhysics: ~0.5ms
+
+Multi-threaded (6 workers @ 80% efficiency):
+- PrePhysics: ~0.25ms (4x speedup)
+- Physics: ~0.37ms (4x speedup)
+- PostPhysics: ~0.13ms (4x speedup)
+- **Total: ~0.75ms** (well within 1.95ms budget)
+
+**Efficiency factors:**
+- Job submission overhead (~5%)
+- Cache coherency between cores (~10%)
+- Load balancing variance (~5%)
+- **Realistic efficiency: 75-85%**
+
+---
+
 # Memory Model: History Slab Architecture
 
 ## Overview: The History Slab
@@ -116,7 +198,14 @@ void Archetype::BuildFieldArrayTable(uint32_t frameNum, void** fieldArrayTable)
 
 ## Thread Access Pattern
 
-### Logic Thread (Brain)
+### Logic Thread (Brain) - Job Coordinator
+
+The Brain thread acts as a **job coordinator** rather than doing all work itself. On an 8-core system:
+- **Sentinel Thread:** Input polling and GPU resource management (1 core)
+- **Encoder Thread:** Render job coordination (1 core)
+- **Brain Thread + Workers:** Logic coordination + work distribution (6 cores)
+
+The Brain thread initializes the frame, distributes work to the job system, and acts as a worker itself while jobs are pending.
 
 ```cpp
 void LogicThread::FixedUpdate()
@@ -136,14 +225,25 @@ void LogicThread::FixedUpdate()
     // Mark as writing
     writeSection->SetOwnership(LOGIC_WRITING);
 
-    // Read from current frame, write to next frame
+    // Build field array tables for all archetypes
     void* readFieldArrays[64];
     void* writeFieldArrays[64];
     archetype->BuildFieldArrayTable(readFrame, readFieldArrays);
     archetype->BuildFieldArrayTable(writeFrame, writeFieldArrays);
 
-    // PrePhysics, Update, PostPhysics all use writeFieldArrays
-    Registry->InvokePrePhys(dt, writeFieldArrays);
+    // Distribute work across job system (Brain becomes a worker during this phase)
+    JobSystem::SubmitLogicJobs(
+        LogicJobType::PrePhysics,
+        archetypes,
+        writeFieldArrays,
+        dt
+    );
+
+    // Brain thread acts as worker while jobs pending
+    JobSystem::ProcessLogicQueueAsWorker();
+
+    // Wait for all PrePhysics jobs to complete
+    JobSystem::WaitForLogicJobs();
 
     // Write frame-specific data to section header
     writeSection->Header.FrameNumber = currentFrame + 1;
@@ -158,12 +258,23 @@ void LogicThread::FixedUpdate()
 }
 ```
 
+**Performance Impact (8-core example):**
+- Single-threaded Logic: ~3.0ms per frame
+- Multi-threaded (6 workers @ 80% efficiency): ~0.75ms per frame
+- **Scalability:** 4x speedup with 6 worker threads
+
 **Ownership Rules:**
 - Logic reads from `Section[Frame % N]`
 - Logic writes to `Section[(Frame+1) % N]`
 - Logic NEVER touches `Section[(Frame-1) % N]` (owned by Render)
 
-### Render Thread (Encoder)
+### Render Thread (Encoder) - Job Coordinator
+
+The Encoder thread acts as a **job coordinator** for rendering work:
+- Initializes the frame and reads History Slab sections
+- Distributes interpolation, culling, and sorting work to the job system
+- Acts as a worker while jobs are pending
+- On an 8-core system, Encoder + workers can parallelize sorting, culling, and GPU command encoding
 
 ```cpp
 void RenderThread::ProcessFrame()
@@ -185,46 +296,37 @@ void RenderThread::ProcessFrame()
     // Calculate interpolation alpha
     float alpha = CalculateAlpha();
 
-    // Build InterpBuffer directly from History Slab pages
-    InterpBuffer.clear();
-    InterpBuffer.reserve(currSection->Header.ActiveEntityCount);
+    // Distribute work to job system (interpolation, culling, sort key generation)
+    JobSystem::SubmitRenderJobs(
+        RenderJobType::InterpolateAndCull,
+        currSection,
+        prevSection,
+        alpha,
+        camera
+    );
 
-    for (uint32_t i = 0; i < entityCount; ++i)
-    {
-        // Access fields directly from sections (zero-copy)
-        float* currPosX = currSection->GetFieldArray<float>(transformOffset + posXOffset);
-        float* prevPosX = prevSection->GetFieldArray<float>(transformOffset + posXOffset);
+    // Encoder thread acts as worker while jobs pending
+    JobSystem::ProcessRenderQueueAsWorker();
 
-        if (IsInactive(currPosX[i])) continue;  // Dead entity
-
-        Vector3 interpPos = Lerp(
-            Vector3(prevPosX[i], prevPosY[i], prevPosZ[i]),
-            Vector3(currPosX[i], currPosY[i], currPosZ[i]),
-            alpha
-        );
-
-        if (!camera.IsVisible(interpPos)) continue;  // Frustum cull
-
-        // Only visible entities reach InterpBuffer
-        InterpBuffer.push_back({
-            sortKey: ComputeSortKey(interpPos, materialID, meshID),
-            position: interpPos,
-            rotation: ...,
-            scale: ...,
-            color: ...
-        });
-    }
+    // Wait for all jobs to complete
+    JobSystem::WaitForRenderJobs();
 
     // Release ownership
     currSection->ClearOwnership(RENDER_READING);
     prevSection->ClearOwnership(RENDER_READING);
 
-    // Sort and upload (job system handles this)
-    SubmitRenderJobs(InterpBuffer);
+    // Submit final GPU commands
+    SubmitGPUCommands();
 
     lastRenderedFrame = latestFrame;
 }
 ```
+
+**Job System Benefits:**
+- **Parallel Interpolation:** Split entity ranges across workers
+- **Parallel Culling:** Frustum culling per chunk
+- **Parallel Sort:** Sort visible entities by 64-bit keys in parallel
+- **Scalability:** Multi-core systems see significant speedup
 
 **Ownership Rules:**
 - Render reads from `Section[(Frame-1) % N]` and `Section[Frame % N]`

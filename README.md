@@ -42,11 +42,14 @@ and lock-free communication) that are too risky to implement directly into a liv
 
 ## Core Features
 
-### The Strigid Trinity (Three-Thread Architecture)
+### The Strigid Trinity (Three-Thread Architecture + Job System)
 
 - **Sentinel (Main Thread):** 1000Hz input polling, GPU resource management, frame pacing
-- **Brain (Logic Thread):** 512Hz fixed timestep simulation, deterministic physics
-- **Encoder (Render Thread):** Variable-rate rendering, interpolation, GPU command encoding
+- **Brain (Logic Thread):** 512Hz fixed timestep coordinator + job distribution
+- **Encoder (Render Thread):** Variable-rate render coordinator + job distribution
+- **Worker Threads:** Shared pool for parallel entity updates, physics, rendering (5 cores on 8-core CPU)
+
+Brain and Encoder act as coordinators that distribute work across the job system, then act as workers themselves. On an 8-core system, this enables ~4x speedup (80% efficiency) for both logic and render passes.
 
 ### Memory Model: History Slab
 
@@ -119,6 +122,7 @@ These rules drive all design decisions:
 
 ### Key Concepts
 - **History Slab:** Multi-frame arena allocator for zero-copy rendering and netcode
+- **Job System:** Work-stealing scheduler for parallel entity updates and rendering
 - **FieldProxy:** Zero-overhead indirection for SoA component access
 - **EntityView:** CRTP-style entity base with compile-time hydration
 - **Triple-Buffer Mailbox:** Lock-free communication between Logic and Render threads
