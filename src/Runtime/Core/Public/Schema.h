@@ -48,55 +48,81 @@ struct EntityMeta
         , PostPhys(rhs.PostPhys)
         , Update(rhs.Update)
     {}
-
-    EntityMeta& operator=(EntityMeta&& rhs) noexcept
-    {
-        std::memcpy(this, &rhs, sizeof(EntityMeta));
-        return *this;
-    }
 };
-
 
 template <typename T>
 __forceinline void InvokePrePhysicsImpl(double dt, void** fieldArrayTable, uint32_t componentCount)
 {
-    alignas(16) T EntityView;
-    EntityView.Hydrate(fieldArrayTable, 0);
+    alignas(32) T viewBatch;
 
-#pragma loop(ivdep)
-    for (uint32_t i = 0; i < componentCount; ++i)
+    constexpr uint32_t SIMD_BATCH = 8;
+    const uint32_t batchCount = componentCount / SIMD_BATCH;
+
+    viewBatch.Hydrate(fieldArrayTable);
+
+    // Process batches
+    for (uint32_t i = 0; i < batchCount; i++)
     {
-        EntityView.PrePhysics(dt);
-        EntityView.Advance(1);
+        viewBatch.PrePhysics(dt);
+        viewBatch.Advance(SIMD_BATCH);
     }
-}
 
-template <typename T>
-__forceinline void InvokePostPhysicsImpl(double dt, void** fieldArrayTable, uint32_t componentCount)
-{
-    alignas(16) T EntityView;
-    EntityView.Hydrate(fieldArrayTable, 0);
-
-#pragma loop(ivdep)
-    for (uint32_t i = 0; i < componentCount; ++i)
-    {
-        EntityView.PostPhysics(dt);
-        EntityView.Advance(1);
-    }
+    // perform the last batch with a mask.
+    alignas(32) typename T::MaskedType tailBatch;
+    // Handle the tail with a mask
+    tailBatch.Hydrate(fieldArrayTable, SIMD_BATCH * batchCount, componentCount % SIMD_BATCH);
+    tailBatch.PrePhysics(dt);
+    
 }
 
 template <typename T>
 __forceinline void InvokeUpdateImpl(double dt, void** fieldArrayTable, uint32_t componentCount)
 {
-    alignas(16) T EntityView;
-    EntityView.Hydrate(fieldArrayTable, 0);
+    alignas(32) T viewBatch;
 
-#pragma loop(ivdep)
-    for (uint32_t i = 0; i < componentCount; ++i)
+    constexpr uint32_t SIMD_BATCH = 8;
+    const uint32_t batchCount = componentCount / SIMD_BATCH;
+
+    viewBatch.Hydrate(fieldArrayTable);
+
+    // Process batches
+    for (uint32_t i = 0; i < batchCount; i++)
     {
-        EntityView.Update(dt);
-        EntityView.Advance(1);
+        viewBatch.Update(dt);
+        viewBatch.Advance(SIMD_BATCH);
     }
+
+    STRIGID_ZONE_FINE_N("Tail Batch")
+    // perform the last batch with a mask.
+    alignas(32) typename T::MaskedType tailBatch;
+    // Handle the tail with a mask
+    tailBatch.Hydrate(fieldArrayTable, SIMD_BATCH * batchCount, componentCount % SIMD_BATCH);
+    tailBatch.Update(dt);
+}
+
+template <typename T>
+__forceinline void InvokePostPhysicsImpl(double dt, void** fieldArrayTable, uint32_t componentCount)
+{
+    alignas(32) T viewBatch;
+
+    constexpr uint32_t SIMD_BATCH = 8;
+    const uint32_t batchCount = componentCount / SIMD_BATCH;
+
+    viewBatch.Hydrate(fieldArrayTable);
+
+    // Process batches
+    for (uint32_t i = 0; i < batchCount; i++)
+    {
+        viewBatch.PostPhysics(dt);
+        viewBatch.Advance(SIMD_BATCH);
+    }
+
+    STRIGID_ZONE_FINE_N("Tail Batch")
+    // perform the last batch with a mask.
+    alignas(32) typename T::MaskedType tailBatch;
+    // Handle the tail with a mask
+    tailBatch.Hydrate(fieldArrayTable, SIMD_BATCH * batchCount, componentCount % SIMD_BATCH);
+    tailBatch.PostPhysics(dt);
 }
 
 class MetaRegistry
@@ -108,10 +134,9 @@ public:
         return instance;
     }
 
-    using ComponentDef = std::tuple<ComponentSignature, std::vector<ComponentMeta>>;
-    std::unordered_map<ClassID, ComponentDef> ClassToArchetype;
+    std::unordered_map<ClassID, ComponentSignature> ClassToArchetype;
+    std::unordered_map<ClassID, std::vector<ComponentTypeID>> ClassToComponentList;
     std::unordered_map<Signature, std::vector<ClassID>> ArchetypeToClass;
-    std::unordered_set<ComponentMeta> ReflectedComponents;
     EntityMeta EntityGetters[4096];
 
     template <typename T>
@@ -142,20 +167,12 @@ public:
     template <typename C, typename T>
     void RegisterPrefabComponent()
     {
-        bool bIsHot = false;
-        if constexpr (requires { T::bHotComp; })
-        {
-            bIsHot = T::bHotComp;
-        }
-
         const ClassID ID = C::StaticClassID();
-        ComponentDef& Def = ClassToArchetype[ID];
-        std::get<ComponentSignature>(Def).set(GetComponentTypeID<T>() - 1);
-        ComponentMeta Meta = {GetComponentTypeID<T>(), sizeof(T), alignof(T), 0, bIsHot};
-        ReflectedComponents.insert(Meta);
-        std::get<std::vector<ComponentMeta>>(Def).push_back(Meta);
-        LOG_INFO_F("RegisterPrefabComponent %s", typeid(T).name());
-        LOG_INFO_F("Added %i to class %s ", GetComponentTypeID<T>(), typeid(C).name());
+        const ComponentTypeID TypeID = GetComponentTypeID<T>();
+        ComponentSignature& Def = ClassToArchetype[ID];
+        Def |= 1 << (TypeID - 1);
+        
+        ClassToComponentList[ID].push_back(TypeID);
     }
 };
 

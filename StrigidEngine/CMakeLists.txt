@@ -17,6 +17,7 @@ add_library(${PROJECT_NAME} STATIC
     ${ENGINE_SOURCES}
     ${ENGINE_HEADERS}
     ${TRACY_SOURCES}
+        ../src/Runtime/Core/Public/ComponentView.h
 )
 
 # -----------------------------------------------------------------------------

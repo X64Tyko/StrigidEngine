@@ -20,6 +20,7 @@ struct ComponentMetaEx
     size_t Alignment; // alignof(Component)
     size_t OffsetInChunk; // Where this component's data starts in the chunk
     bool IsFieldDecomposed; // True if stored as field arrays (SoA)
+    bool IsHot; // True if this component should live in Sparse Data
     std::vector<FieldMeta> Fields; // Field layout if decomposed
 };
 
@@ -36,31 +37,55 @@ public:
     }
 
     // Register field decomposition for a component type
-    void RegisterFields(ComponentTypeID typeID, std::vector<FieldMeta>&& fields)
+    void RegisterFields(ComponentTypeID typeID, std::vector<FieldMeta>&& fields, bool bIsHot)
     {
-        FieldData[typeID] = std::move(fields);
+        ComponentMetaEx& meta = ComponentData[typeID];
+        if (meta.Fields.size() != 0)
+            return;
+        
+        meta.TypeID = typeID;
+        meta.IsFieldDecomposed = true;
+        meta.IsHot = bIsHot;
+        meta.Fields = std::move(fields);
+        for (const auto& field : meta.Fields) meta.Size += field.Size;
     }
 
     // Get field layout for a component
-    const std::vector<FieldMeta>* GetFields(ComponentTypeID typeID) const
+    [[nodiscard]] const std::vector<FieldMeta>* GetFields(ComponentTypeID typeID) const
     {
-        auto it = FieldData.find(typeID);
-        return it != FieldData.end() ? &it->second : nullptr;
+        auto it = ComponentData.find(typeID);
+        return it != ComponentData.end() ? &it->second.Fields : nullptr;
     }
 
     // Check if component has field decomposition
-    bool IsDecomposed(ComponentTypeID typeID) const
+    [[nodiscard]] bool IsDecomposed(ComponentTypeID typeID) const
     {
-        return FieldData.contains(typeID);
+        return ComponentData.contains(typeID);
     }
 
     // Get field count
-    size_t GetFieldCount(ComponentTypeID typeID) const
+    [[nodiscard]] size_t GetFieldCount(ComponentTypeID typeID) const
     {
-        auto it = FieldData.find(typeID);
-        return it != FieldData.end() ? it->second.size() : 0;
+        auto it = ComponentData.find(typeID);
+        return it != ComponentData.end() ? it->second.Fields.size() : 0;
     }
+    
+    const std::unordered_map<ComponentTypeID, ComponentMetaEx>& GetAllComponents() const { return ComponentData; }
+    const ComponentMetaEx& GetComponentMeta(ComponentTypeID typeID) const { return ComponentData.at(typeID); }
 
 private:
-    std::unordered_map<ComponentTypeID, std::vector<FieldMeta>> FieldData;
+    std::unordered_map<ComponentTypeID, ComponentMetaEx> ComponentData;
 };
+
+// Hash specialization for std::unordered_set
+namespace std
+{
+    template <>
+    struct hash<ComponentMetaEx>
+    {
+        size_t operator()(const ComponentMetaEx& Meta) const noexcept
+        {
+            return hash<uint64_t>()(Meta.TypeID);
+        }
+    };
+}

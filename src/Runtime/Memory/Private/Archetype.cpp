@@ -29,7 +29,7 @@ Archetype::~Archetype()
     Chunks.clear();
 }
 
-void Archetype::BuildLayout(const std::vector<ComponentMeta>& Components)
+void Archetype::BuildLayout(const std::vector<ComponentMetaEx>& Components)
 {
     if (Components.empty())
     {
@@ -44,7 +44,7 @@ void Archetype::BuildLayout(const std::vector<ComponentMeta>& Components)
     // Calculate total stride (sum of all component sizes)
     size_t TotalStride = 0;
 
-    for (const ComponentMeta& Meta : Components)
+    for (const ComponentMetaEx& Meta : Components)
     {
         TotalStride += Meta.Size;
     }
@@ -124,7 +124,7 @@ void Archetype::BuildLayout(const std::vector<ComponentMeta>& Components)
 
             currentOffset = AlignOffset(currentOffset, comp.Alignment);
 
-            ComponentLayout[typeID] = ComponentMeta{
+            ComponentLayout[typeID] = ComponentMetaEx{
                 typeID,
                 comp.Size,
                 comp.Alignment,
@@ -244,7 +244,7 @@ std::vector<void*> Archetype::GetFieldArrays(Chunk* TargetChunk, ComponentTypeID
     if (It == ComponentLayout.end())
         return {};
 
-    const ComponentMeta& Meta = It->second;
+    const ComponentMetaEx& Meta = It->second;
     return {TargetChunk->GetBuffer(static_cast<uint32_t>(Meta.OffsetInChunk))};
 }
 

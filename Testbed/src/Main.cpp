@@ -18,7 +18,7 @@ TEST(Registry_CreateEntities)
 
     for (int i = 0; i < 100; ++i)
     {
-        EntityID Id = Reg->Create<TestEntity>();
+        EntityID Id = Reg->Create<TestEntity<>>();
         Entities.push_back(Id);
     }
 
@@ -34,7 +34,7 @@ TEST(Registry_ValidEntityIDs)
 
     for (int i = 0; i < 100; ++i)
     {
-        Entities.push_back(Reg->Create<TestEntity>());
+        Entities.push_back(Reg->Create<TestEntity<>>());
     }
 
     for (EntityID Id : Entities)
@@ -51,7 +51,7 @@ TEST(Registry_DestroyAndReuse)
 
     for (int i = 0; i < 10; ++i)
     {
-        Entities.push_back(Reg->Create<TestEntity>());
+        Entities.push_back(Reg->Create<TestEntity<>>());
     }
 
     uint32_t firstIndex = Entities[0].GetIndex();
@@ -60,7 +60,7 @@ TEST(Registry_DestroyAndReuse)
     Reg->Destroy(Entities[0]);
     Reg->ProcessDeferredDestructions();
 
-    EntityID NewId = Reg->Create<TestEntity>();
+    EntityID NewId = Reg->Create<TestEntity<>>();
     ASSERT_EQ(NewId.GetIndex(), firstIndex);
     ASSERT(NewId.GetGeneration() > firstGeneration);
 
@@ -85,7 +85,7 @@ TEST(InitializeTestEntities)
     entityIDs.reserve(EntityCount);
     for (int i = 0; i < EntityCount; ++i)
     {
-        EntityID id = Reg->Create<CubeEntity>();
+        EntityID id = Reg->Create<CubeEntity<>>();
         entityIDs.push_back(id);
     }
 
@@ -93,8 +93,8 @@ TEST(InitializeTestEntities)
 
     // Step 2: Initialize by iterating through archetypes/chunks
     Archetype* cubeArch = Reg->GetOrCreateArchetype(
-        std::get<ComponentSignature>(MetaRegistry::Get().ClassToArchetype[CubeEntity::StaticClassID()]),
-        CubeEntity::StaticClassID());
+        MetaRegistry::Get().ClassToArchetype[CubeEntity<>::StaticClassID()],
+        CubeEntity<>::StaticClassID());
     if (cubeArch)
     {
         constexpr size_t MAX_FIELD_ARRAYS = 256;

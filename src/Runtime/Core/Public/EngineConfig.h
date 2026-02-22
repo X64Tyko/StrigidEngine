@@ -6,7 +6,7 @@ struct EngineConfig
     int TargetFPS = 0; // 0 = Uncapped
 
     // Physics/Simulation (Fixed High) - e.g., 60Hz or 128Hz
-    int FixedUpdateHz = 128;
+    int FixedUpdateHz = 60;
 
     // Networking (Fixed Low/Med) - e.g., 20Hz or 30Hz
     // This is your "Tick Rate". Lower = Less Bandwidth, Higher = More Precision.

@@ -48,7 +48,7 @@ Archetype* Registry::GetOrCreateArchetype(const Signature& Sig, const ClassID& I
 
     // TODO: In Week 5, we'll build component layout from signature
     // For now, create empty archetype
-    std::vector<ComponentMeta> Components;
+    std::vector<ComponentMetaEx> Components;
     NewArchetype->BuildLayout(Components);
 
     Archetypes[key] = NewArchetype;
@@ -153,16 +153,22 @@ void Registry::ProcessDeferredDestructions()
 void Registry::InitializeArchetypes()
 {
     MetaRegistry& MR = MetaRegistry::Get();
+    ComponentFieldRegistry& CFR = ComponentFieldRegistry::Get();
     // need to combine classes in the meta registry that have the same TypeID.
 
-    for (auto Arch : MR.ClassToArchetype)
+    for (auto& Arch : MR.ClassToArchetype)
     {
-        auto key = Archetype::ArchetypeKey(std::get<ComponentSignature>(Arch.second), Arch.first);
+        auto key = Archetype::ArchetypeKey(Arch.second, Arch.first);
         Archetype*& NewArch = Archetypes[key];
         if (!NewArch)
         {
             NewArch = new Archetype(key);
-            NewArch->BuildLayout(std::get<std::vector<ComponentMeta>>(Arch.second));
+            std::vector<ComponentMetaEx> Components;
+            for (auto& CompID : MR.ClassToComponentList[Arch.first])
+            {
+                Components.push_back(CFR.GetComponentMeta(CompID));
+            }
+            NewArch->BuildLayout(Components);
         }
     }
 }

@@ -174,7 +174,7 @@
 #endif
 
 #define ZoneScoped SuppressVarShadowWarning( ZoneNamed( ___tracy_scoped_zone, true ) )
-#define ZoneScopedN( name ) SuppressVarShadowWarning( ZoneNamedN( ___tracy_scoped_zone, name, true ) )
+#define ZoneScopedN( name ) SuppressVarShadowWarning( ZoneNamedN( _tracy_scoped_zone, name, true ) )
 #define ZoneScopedC( color ) SuppressVarShadowWarning( ZoneNamedC( ___tracy_scoped_zone, color, true ) )
 #define ZoneScopedNC( name, color ) SuppressVarShadowWarning( ZoneNamedNC( ___tracy_scoped_zone, name, color, true ) )
 

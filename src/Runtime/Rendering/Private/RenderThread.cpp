@@ -84,7 +84,7 @@ void RenderThread::ThreadMain()
     // TODO: Cache sparse array pointers (once they exist)
     // TransformArrayPtr = RegistryPtr->GetSparseArray<Transform>();
     // ColorArrayPtr = RegistryPtr->GetSparseArray<ColorData>();
-
+    
     while (bIsRunning.load(std::memory_order_acquire))
     {
         STRIGID_ZONE_C(STRIGID_COLOR_RENDERING);
@@ -235,7 +235,7 @@ void RenderThread::SnapshotSparseArrays(std::shared_ptr<FramePacket> packet)
     uint32_t entityCount = packet->ActiveEntityCount;
     // Resize snapshot buffer
     SnapshotCurrent.resize(entityCount);
-    std::vector<Archetype*> archetypes = RegistryPtr->ComponentQuery<Transform, ColorData>();
+    std::vector<Archetype*> archetypes = RegistryPtr->ComponentQuery<Transform<>, ColorData<>>();
 
     size_t writeIdx = 0;
     constexpr size_t MAX_FIELD_ARRAYS = 256;

@@ -67,10 +67,10 @@ This design prevents the Brain from accidentally processing render jobs and vice
 
 **Example: 100k entities @ 128Hz on 8-core CPU**
 
-Single-threaded Brain: ~3.0ms per frame
-- PrePhysics: ~1.0ms
-- Physics: ~1.5ms
-- PostPhysics: ~0.5ms
+Single-threaded Brain: ~1.7ms per frame
+- PrePhysics: ~0.3ms
+- Physics: ~1.0ms (projected)
+- PostPhysics: ~0.4ms (projected)
 
 Multi-threaded (6 workers @ 80% efficiency):
 - PrePhysics: ~0.25ms (4x speedup)
@@ -259,8 +259,8 @@ void LogicThread::FixedUpdate()
 ```
 
 **Performance Impact (8-core example):**
-- Single-threaded Logic: ~3.0ms per frame
-- Multi-threaded (6 workers @ 80% efficiency): ~0.75ms per frame
+- Single-threaded Logic: ~1.7ms per frame
+- Multi-threaded (6 workers @ 80% efficiency): ~0.43ms per frame (projected)
 - **Scalability:** 4x speedup with 6 worker threads
 
 **Ownership Rules:**

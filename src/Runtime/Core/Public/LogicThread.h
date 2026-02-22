@@ -2,6 +2,8 @@
 #include <thread>
 #include <atomic>
 
+#include "Registry.h"
+
 // Forward declarations
 class Registry;
 struct EngineConfig;
@@ -81,3 +83,12 @@ private:
     uint32_t FpsFixedCount = 0;
     double FpsFixedTimer = 0.0;
 };
+
+inline void LogicThread::PrePhysics(double dt)
+{
+    STRIGID_ZONE_N("Logic_FixedUpdate");
+
+    RegistryPtr->InvokePrePhys(dt);
+
+    SimulationTime += dt;
+}

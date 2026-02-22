@@ -6,6 +6,7 @@
 #include <unordered_map>
 #include <unordered_set>
 
+#include "FieldMeta.h"
 #include "Schema.h"
 
 // Archetype - manages storage for entities with a specific component signature
@@ -45,7 +46,7 @@ public:
     std::vector<Chunk*> Chunks;
 
     // Component layout information
-    std::unordered_map<ComponentTypeID, ComponentMeta> ComponentLayout;
+    std::unordered_map<ComponentTypeID, ComponentMetaEx> ComponentLayout;
 
     // Cached component iteration data (built once in BuildLayout)
     struct ComponentCacheEntry
@@ -81,7 +82,7 @@ public:
         if (It == ComponentLayout.end())
             return nullptr;
 
-        const ComponentMeta& Meta = It->second;
+        const ComponentMetaEx& Meta = It->second;
         return reinterpret_cast<T*>(TargetChunk->GetBuffer(static_cast<uint32_t>(Meta.OffsetInChunk)));
     }
 
@@ -96,7 +97,7 @@ public:
     std::vector<void*> GetFieldArrays(Chunk* TargetChunk, ComponentTypeID TypeID);
 
     // Build the internal SoA layout from component list
-    void BuildLayout(const std::vector<ComponentMeta>& Components);
+    void BuildLayout(const std::vector<ComponentMetaEx>& Components);
 
     // Edge graph for archetype transitions (future optimization)
     std::unordered_map<ComponentTypeID, Archetype*> AddEdges; // Add component X -> go to archetype Y

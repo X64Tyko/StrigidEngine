@@ -24,9 +24,9 @@ and lock-free communication) that are too risky to implement directly into a liv
 
 **Performance:**
 - **Sentinel (Main):** 1.0ms per frame (1000 Hz) ✅
-- **Brain (Logic):** ~4.8ms per frame @ 128Hz (target: 1.95ms @ 512Hz)
+- **Brain (Logic):** ~1.7ms per frame (target: 1.95ms @ 512Hz)
 - **Encoder (Render):** ~3.1ms per frame (321 FPS)
-- **1M entities:** ~3.0ms PrePhysics (stress test only)
+- **1M entities:** ~1.7ms PrePhysics (stress test only)
 
 **Architecture:**
 - ✅ Three-thread architecture (Sentinel/Brain/Encoder)

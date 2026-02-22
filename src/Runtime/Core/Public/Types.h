@@ -60,25 +60,6 @@ static constexpr size_t MAX_COMPONENTS = 256;
 using ComponentSignature = std::bitset<MAX_COMPONENTS>;
 using ClassID = uint16_t;
 
-// Component metadata - describes how a component is laid out in memory
-struct ComponentMeta
-{
-    ComponentTypeID TypeID; // Numeric ID (0-255) for this component type
-    size_t Size; // sizeof(Component)
-    size_t Alignment; // alignof(Component)
-    size_t OffsetInChunk; // Where this component's array starts in the chunk
-    bool IsHot = false; // Should this component go in the Hot Sparse set.
-
-    bool operator==(const ComponentMeta& Other) const
-    {
-        return TypeID == Other.TypeID
-            && Size == Other.Size
-            && Alignment == Other.Alignment
-            && OffsetInChunk == Other.OffsetInChunk
-            && IsHot == Other.IsHot;
-    }
-};
-
 // Global counter (hidden in cpp)
 namespace Internal
 {
@@ -162,19 +143,6 @@ namespace std
         size_t operator()(const EntityID& Id) const noexcept
         {
             return hash<uint64_t>()(Id.Value);
-        }
-    };
-}
-
-// Hash specialization for std::unordered_set
-namespace std
-{
-    template <>
-    struct hash<ComponentMeta>
-    {
-        size_t operator()(const ComponentMeta& Meta) const noexcept
-        {
-            return hash<uint64_t>()(Meta.TypeID);
         }
     };
 }

@@ -161,15 +161,6 @@ void LogicThread::Update(double dt)
     RegistryPtr->InvokeUpdate(dt);
 }
 
-void LogicThread::PrePhysics(double dt)
-{
-    STRIGID_ZONE_N("Logic_FixedUpdate");
-
-    RegistryPtr->InvokePrePhys(dt);
-
-    SimulationTime += dt;
-}
-
 void LogicThread::PostPhysics(double dt)
 {
     STRIGID_ZONE_N("Logic_FixedUpdate");

@@ -1,16 +1,17 @@
 #pragma once
 #include <FieldProxy.h>
+#include "ComponentView.h"
 #include "SchemaReflector.h"
 
 // Velocity Component - Linear velocity for movement
 // Aligned to 16 bytes for SIMD operations
-struct alignas(16) Velocity
+template<bool MASK = false>
+struct Velocity : public ComponentView<Velocity<MASK>, MASK>
 {
-    FieldProxy<float> vX;
-    FieldProxy<float> vY;
-    FieldProxy<float> vZ;
+    Velocity::FloatProxy vX;
+    Velocity::FloatProxy vY;
+    Velocity::FloatProxy vZ;
 
     STRIGID_REGISTER_FIELDS(Velocity, vX, vY, vZ)
 };
 STRIGID_REGISTER_COMPONENT(Velocity)
-static_assert(alignof(Velocity) == 16, "Velocity must be 16-byte aligned");

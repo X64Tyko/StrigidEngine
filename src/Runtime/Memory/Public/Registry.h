@@ -4,6 +4,7 @@
 #include <vector>
 #include "Archetype.h"
 #include "EntityRecord.h"
+#include "FieldMeta.h"
 #include "Schema.h"
 #include "Signature.h"
 #include "TemporalComponentCache.h"
@@ -101,11 +102,11 @@ EntityID Registry::Create()
     if (!Initialized)
     {
         ClassID classID = T::StaticClassID();
-        auto& metaComponents = MetaRegistry::Get().ClassToArchetype;
+        MetaRegistry& MR = MetaRegistry::Get();
 
 #ifdef _DEBUG // || _WITH_EDITOR
         // Runtime guard: Check if entity type was registered with STRIGID_REGISTER_ENTITY
-        if (metaComponents.find(classID) == metaComponents.end())
+        if (MR.ClassToArchetype.find(classID) == MR.ClassToArchetype.end())
         {
             // FATAL: Entity type not registered
             const char* typeName = typeid(T).name();
@@ -122,7 +123,7 @@ EntityID Registry::Create()
         }
 #endif
 
-        Signature Sig = std::get<ComponentSignature>(metaComponents[classID]);
+        Signature Sig = MR.ClassToArchetype[classID];
 
         CachedArchetype = GetOrCreateArchetype(Sig, classID);
         Initialized = true;
@@ -229,7 +230,6 @@ inline void Registry::InvokeUpdate(double dt)
         size_t size = arch->Chunks.size();
         for (size_t chunkIdx = 0; chunkIdx < size; ++chunkIdx)
         {
-            STRIGID_ZONE_N("Update Chunk Process");
             Chunk* chunk = arch->Chunks[chunkIdx];
             uint32_t entityCount = arch->GetChunkCount(chunkIdx);
 
@@ -262,7 +262,6 @@ inline void Registry::InvokePrePhys(double dt)
         size_t size = arch->Chunks.size();
         for (size_t chunkIdx = 0; chunkIdx < size; ++chunkIdx)
         {
-            STRIGID_ZONE_N("PrePhys Chunk Process");
             Chunk* chunk = arch->Chunks[chunkIdx];
             uint32_t entityCount = arch->GetChunkCount(chunkIdx);
 
@@ -295,7 +294,6 @@ inline void Registry::InvokePostPhys(double dt)
         size_t size = arch->Chunks.size();
         for (size_t chunkIdx = 0; chunkIdx < size; ++chunkIdx)
         {
-            STRIGID_ZONE_N("PostPhys Chunk Process");
             Chunk* chunk = arch->Chunks[chunkIdx];
             uint32_t entityCount = arch->GetChunkCount(chunkIdx);
 

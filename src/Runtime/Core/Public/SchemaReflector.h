@@ -71,12 +71,17 @@ static void RegisterFieldsImpl(std::index_sequence<Is...>)
 
     // Register with global registry
     ComponentTypeID typeID = GetComponentTypeID<Derived>();
-    ComponentFieldRegistry::Get().RegisterFields(typeID, std::move(fieldMetas));
+    bool bIsHot = false;
+    if constexpr (requires { Derived::bHotComp; })
+    {
+        bIsHot = Derived::bHotComp;
+    }
+    ComponentFieldRegistry::Get().RegisterFields(typeID, std::move(fieldMetas), bIsHot);
 }
 
 // Extract metadata from a member pointer
-template <typename Derived, size_t Index, template <typename...> class FieldType, typename Type>
-static FieldMeta ExtractFieldMeta(FieldType<Type> Derived::* member)
+template <typename Derived, size_t Index, template <typename, bool> class FieldType, typename Type, bool MASK>
+static FieldMeta ExtractFieldMeta(FieldType<Type, MASK> Derived::* member)
 {
     // Create temporary to get offset
     Derived temp{};
@@ -147,18 +152,25 @@ __forceinline void ForEachField(Func&& func)
 
 // --- MACRO ---
 #define STRIGID_REGISTER_ENTITY(CLASS) \
+    template <bool MASK> \
     class CLASS; \
     namespace { \
         static const bool g_Reflect_##CLASS = []() { \
-            PrefabReflector<CLASS>::Register(); \
+            PrefabReflector<CLASS<>>::Register(); \
             return true; \
         }(); \
-    }
+    } \
 
 #define STRIGID_REGISTER_SCHEMA(CLASS, SUPER, ...) \
     static constexpr auto DefineSchema() \
     { \
         return SUPER::DefineSchema().Extend(__VA_OPT__(STRIGID_MAP_LIST(STRIGID_GET_PTR, CLASS, __VA_ARGS__))); \
+    } \
+    \
+    __forceinline void Advance(uint32_t step) \
+    { \
+        SUPER::Advance(step); \
+        __VA_OPT__(STRIGID_MAPF_LIST(STRIGID_BIND_ADVANCE, CLASS, __VA_ARGS__)) \
     }
 
 #define STRIGID_EXPAND(x) x
@@ -167,6 +179,7 @@ __forceinline void ForEachField(Func&& func)
 
 // Mapping Dispatcher
 #define STRIGID_MAP_LIST(m, context, ...) STRIGID_EXPAND(STRIGID_CONCAT(STRIGID_MAP_, STRIGID_GET_ARG_COUNT(__VA_ARGS__))(m, context, __VA_ARGS__))
+#define STRIGID_MAPF_LIST(m, context, ...) STRIGID_EXPAND(STRIGID_CONCAT(STRIGID_MAPF_, STRIGID_GET_ARG_COUNT(__VA_ARGS__))(m, context, __VA_ARGS__))
 #define STRIGID_CONCAT_INNER(a, b) a##b
 #define STRIGID_CONCAT(a, b) STRIGID_CONCAT_INNER(a, b)
 
@@ -188,6 +201,22 @@ __forceinline void ForEachField(Func&& func)
 #define STRIGID_MAP_15(m, c, x, ...) m(c, x), STRIGID_MAP_14(m, c, __VA_ARGS__)
 #define STRIGID_MAP_16(m, c, x, ...) m(c, x), STRIGID_MAP_15(m, c, __VA_ARGS__)
 
+#define STRIGID_MAPF_2(m, c, x, ...) m(c, x) STRIGID_MAP_1(m, c, __VA_ARGS__)
+#define STRIGID_MAPF_3(m, c, x, ...) m(c, x) STRIGID_MAPF_2(m, c, __VA_ARGS__)
+#define STRIGID_MAPF_4(m, c, x, ...) m(c, x) STRIGID_MAPF_3(m, c, __VA_ARGS__)
+#define STRIGID_MAPF_5(m, c, x, ...) m(c, x) STRIGID_MAPF_4(m, c, __VA_ARGS__)
+#define STRIGID_MAPF_6(m, c, x, ...) m(c, x) STRIGID_MAPF_5(m, c, __VA_ARGS__)
+#define STRIGID_MAPF_7(m, c, x, ...) m(c, x) STRIGID_MAPF_6(m, c, __VA_ARGS__)
+#define STRIGID_MAPF_8(m, c, x, ...) m(c, x) STRIGID_MAPF_7(m, c, __VA_ARGS__)
+#define STRIGID_MAPF_9(m, c, x, ...) m(c, x) STRIGID_MAPF_8(m, c, __VA_ARGS__)
+#define STRIGID_MAPF_10(m, c, x, ...) m(c, x) STRIGID_MAPF_9(m, c, __VA_ARGS__)
+#define STRIGID_MAPF_11(m, c, x, ...) m(c, x) STRIGID_MAPF_10(m, c, __VA_ARGS__)
+#define STRIGID_MAPF_12(m, c, x, ...) m(c, x) STRIGID_MAPF_11(m, c, __VA_ARGS__)
+#define STRIGID_MAPF_13(m, c, x, ...) m(c, x) STRIGID_MAPF_12(m, c, __VA_ARGS__)
+#define STRIGID_MAPF_14(m, c, x, ...) m(c, x) STRIGID_MAPF_13(m, c, __VA_ARGS__)
+#define STRIGID_MAPF_15(m, c, x, ...) m(c, x) STRIGID_MAPF_14(m, c, __VA_ARGS__)
+#define STRIGID_MAPF_16(m, c, x, ...) m(c, x) STRIGID_MAPF_15(m, c, __VA_ARGS__)
+
 // Macro to auto-register fields during static initialization
 #define STRIGID_REGISTER_COMPONENT_FIELDS(ComponentType) \
     namespace { \
@@ -200,6 +229,12 @@ __forceinline void ForEachField(Func&& func)
 // Helper to stringify the member name
 #define STRIGID_GET_NAME(Class, Member) #Member
 
+#define STRIGID_BIND_ADVANCE(ComponentType, Member, ...) Member.Advance(step);
+
+#define STRIGID_BIND_FINAL(ComponentType, Member, ...) Member.MaskFinal(count);
+
+#define STRIGID_BIND_BIND(ComponentType, Member, ...) Member.Bind(arrays[arrayIndex++], startIndex, count);
+
 // Handles creating the field definition, debug field names, Bind function, and Registering the struct component
 #define STRIGID_REGISTER_FIELDS(ComponentType, ...) \
     static constexpr auto DefineFields() \
@@ -211,18 +246,20 @@ __forceinline void ForEachField(Func&& func)
         __VA_OPT__(STRIGID_MAP_LIST(STRIGID_GET_NAME, ComponentType, __VA_ARGS__)) \
     }; \
 \
-    __forceinline void Bind(void** arrays, uint32_t* idx) \
+    __forceinline void Advance(uint32_t step) \
     { \
-        ForEachField<ComponentType>([&](auto field, size_t i) { \
-            if constexpr (requires { (this->*field).Bind(nullptr, 0); }) { \
-                (this->*field).Bind(arrays[i++], idx); \
-            } \
-        }); \
+        __VA_OPT__(STRIGID_MAPF_LIST(STRIGID_BIND_ADVANCE, ComponentType, __VA_ARGS__)) \
+    } \
+\
+    __forceinline void Bind(void** arrays, uint32_t startIndex = 0, int32_t count = -1) \
+    { \
+        int32_t arrayIndex = 0; \
+        __VA_OPT__(STRIGID_MAPF_LIST(STRIGID_BIND_BIND, ComponentType, __VA_ARGS__)) \
     }
 
 #define STRIGID_REGISTER_COMPONENT(ComponentType) \
     namespace { \
-        static bool _##ComponentType##_FieldsRegistered = RegisterFieldsStatic<ComponentType>(); \
+        static bool _##ComponentType##_FieldsRegistered = RegisterFieldsStatic<ComponentType<>>(); \
     }
 
 #define STRIGID_HOT_COMPONENT() \
