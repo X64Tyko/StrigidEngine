@@ -262,7 +262,7 @@ TEST(NetDelta_InvokeCustom_CallsCustomImpl)
 TEST(NetDelta_Registry_TemporalComponentsPresent)
 {
     // All components tagged TNX_NET_TEMPORAL must be findable by type ID.
-    const auto check = [](ComponentTypeID id, const char* name)
+    const auto check = [](ComponentTypeID id,[[maybe_unused]] const char* name)
     {
         const ComponentDeltaFns* fns = ComponentDeltaRegistry::Get().Find(id);
         if (!fns || !fns->IsValid())
