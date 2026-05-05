@@ -1142,32 +1142,82 @@ void OwnerNet::ExecuteInputSend()
 
 		// Peek up to MaxWindowFrames unacked entries.  Frame numbers are client-local —
 		// the server translates to server-frame space via PlayerInputLog::FrameOffset.
-		InputWindowPacket wirePayload{};
-		const uint32_t count = static_cast<uint32_t>(
+		const uint32_t frameCount = static_cast<uint32_t>(
 			std::min(consumer->Size(), static_cast<size_t>(MaxWindowFrames)));
+		if (frameCount == 0) continue;
 
-		for (uint32_t i = 0; i < count; ++i)
+		NetInputFrame base;
+		if (!consumer->TryPeekAt(0, base)) continue;
+
+		// Delta-encode into a stack buffer.
+		// Max per delta: Frame(4)+Flags(1)+KeyState(64)+MouseDX(4)+MouseDY(4)+MouseButtons(1)+EventCount(1)+Events(64)
+		static constexpr size_t kMaxDeltaFrame =
+			4 + 1 + 64 + 4 + 4 + 1 + 1 + 8 * sizeof(NetInputEvent);
+		static constexpr size_t kMaxPayload =
+			sizeof(InputDeltaPacketHeader) + sizeof(NetInputFrame) + (MaxWindowFrames - 1) * kMaxDeltaFrame;
+		uint8_t encodedBuf[kMaxPayload];
+		uint8_t* p = encodedBuf;
+
+		auto* deltaHdr       = reinterpret_cast<InputDeltaPacketHeader*>(p);
+		deltaHdr->FirstFrame = base.Frame;
+		deltaHdr->FrameCount = frameCount;
+		p += sizeof(InputDeltaPacketHeader);
+
+		// Base frame — always full.
+		std::memcpy(p, &base, sizeof(NetInputFrame));
+		p += sizeof(NetInputFrame);
+
+		// Delta frames — peek two adjacent entries at a time to avoid storing the whole window.
+		NetInputFrame prev = base;
+		uint32_t actualCount = 1;
+		for (uint32_t i = 1; i < frameCount; ++i)
 		{
-			NetInputFrame frame;
-			if (!consumer->TryPeekAt(i, frame)) break;
-			wirePayload.Frames[i]  = frame;
-			wirePayload.FrameCount = i + 1;
+			NetInputFrame cur;
+			if (!consumer->TryPeekAt(i, cur)) break;
+
+			const bool hasKeyState = (std::memcmp(cur.State.KeyState, prev.State.KeyState, 64) != 0);
+			const bool hasDX       = (cur.State.MouseDX != SimFloat(0.f));
+			const bool hasDY       = (cur.State.MouseDY != SimFloat(0.f));
+			const bool hasButtons  = (cur.State.MouseButtons != prev.State.MouseButtons);
+			const bool hasEvents   = (cur.EventCount > 0);
+
+			uint8_t flags = 0;
+			if (hasKeyState) flags |= InputDeltaFlags::HasKeyState;
+			if (hasDX)       flags |= InputDeltaFlags::HasMouseDX;
+			if (hasDY)       flags |= InputDeltaFlags::HasMouseDY;
+			if (hasButtons)  flags |= InputDeltaFlags::HasMouseButtons;
+			if (hasEvents)   flags |= InputDeltaFlags::HasEvents;
+
+			std::memcpy(p, &cur.Frame, 4); p += 4;
+			*p++ = flags;
+
+			if (hasKeyState) { std::memcpy(p, cur.State.KeyState, 64);    p += 64; }
+			if (hasDX)       { std::memcpy(p, &cur.State.MouseDX, 4);     p += 4;  }
+			if (hasDY)       { std::memcpy(p, &cur.State.MouseDY, 4);     p += 4;  }
+			if (hasButtons)  { *p++ = cur.State.MouseButtons; }
+			if (hasEvents)
+			{
+				*p++ = cur.EventCount;
+				std::memcpy(p, cur.Events, cur.EventCount * sizeof(NetInputEvent));
+				p += cur.EventCount * sizeof(NetInputEvent);
+			}
+
+			prev = cur;
+			++actualCount;
 		}
 
-		if (wirePayload.FrameCount == 0) continue;
+		// Patch FrameCount in case TryPeekAt terminated early.
+		deltaHdr->FrameCount = actualCount;
 
-		wirePayload.FirstFrame         = wirePayload.Frames[0].Frame;
-		const uint32_t lastClientFrame = wirePayload.Frames[wirePayload.FrameCount - 1].Frame;
-
-		//LOG_ENG_INFO_F("[ClientNet] Sending %u input frames (first=%u, last=%u)", wirePayload.FrameCount, wirePayload.FirstFrame, lastClientFrame);
+		const auto encodedSize     = static_cast<uint16_t>(p - encodedBuf);
+		const uint32_t lastClientFrame = prev.Frame;
 
 		PacketHeader header{};
-		header.Type        = static_cast<uint8_t>(NetMessageType::InputFrame);
+		header.Type        = static_cast<uint8_t>(NetMessageType::InputFrameDelta);
 		header.Flags       = PacketFlag::DefaultFlags;
-		header.PayloadSize = sizeof(InputWindowPacket);
+		header.PayloadSize = encodedSize;
 		header.FrameNumber = lastClientFrame; // client-local; server translates via FrameOffset
 		header.SenderID    = ci->OwnerID;
-		ConnectionMgr->Send(handle, header,
-							reinterpret_cast<const uint8_t*>(&wirePayload), false, /*noNagle=*/true);
+		ConnectionMgr->Send(handle, header, encodedBuf, false, /*noNagle=*/true);
 	}
 }

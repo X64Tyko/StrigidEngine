@@ -250,6 +250,103 @@ NetChannel(ci, ConnectionMgr).SendHeaderOnly(NetMessageType::InputFrame, /*relia
 break;
 }
 
+case NetMessageType::InputFrameDelta:
+{
+	if (msg.Payload.size() < sizeof(InputDeltaPacketHeader) + sizeof(NetInputFrame))
+	{
+		LOG_ENG_WARN_F("[ServerNet] InputFrameDelta payload too small (%zu)", msg.Payload.size());
+		break;
+	}
+	const uint8_t ownerID = msg.Header.SenderID;
+	PlayerInputLog* log = GetInputLog(ownerID);
+	if (!log)
+	{
+		LOG_ENG_WARN_F("[ServerNet] InputFrameDelta from OwnerID %u — no log (not connected?)", ownerID);
+		break;
+	}
+
+	const uint8_t* p   = msg.Payload.data();
+	const uint8_t* end = p + msg.Payload.size();
+
+	const auto* deltaHdr  = reinterpret_cast<const InputDeltaPacketHeader*>(p);
+	p += sizeof(InputDeltaPacketHeader);
+	const uint32_t frameCount = deltaHdr->FrameCount;
+	if (frameCount == 0 || frameCount > MaxWindowFrames) break;
+
+	InputWindowPacket reconstructed{};
+	reconstructed.FirstFrame = deltaHdr->FirstFrame;
+	reconstructed.FrameCount = frameCount;
+
+	// Base frame — full NetInputFrame.
+	std::memcpy(&reconstructed.Frames[0], p, sizeof(NetInputFrame));
+	p += sizeof(NetInputFrame);
+
+	// Delta frames.
+	bool parseOk = true;
+	for (uint32_t i = 1; i < frameCount && parseOk; ++i)
+	{
+		if (p + 5 > end) { parseOk = false; break; } // Frame(4) + Flags(1)
+
+		const NetInputFrame& prev = reconstructed.Frames[i - 1];
+		NetInputFrame& cur        = reconstructed.Frames[i];
+
+		// Inherit persistent state; zero per-frame analogs.
+		cur.State           = prev.State;
+		cur.State.MouseDX   = SimFloat(0.f);
+		cur.State.MouseDY   = SimFloat(0.f);
+		cur.EventCount      = 0;
+
+		std::memcpy(&cur.Frame, p, 4); p += 4;
+		const uint8_t flags = *p++;
+
+		if (flags & InputDeltaFlags::HasKeyState)
+		{
+			if (p + 64 > end) { parseOk = false; break; }
+			std::memcpy(cur.State.KeyState, p, 64); p += 64;
+		}
+		if (flags & InputDeltaFlags::HasMouseDX)
+		{
+			if (p + 4 > end) { parseOk = false; break; }
+			std::memcpy(&cur.State.MouseDX, p, 4); p += 4;
+		}
+		if (flags & InputDeltaFlags::HasMouseDY)
+		{
+			if (p + 4 > end) { parseOk = false; break; }
+			std::memcpy(&cur.State.MouseDY, p, 4); p += 4;
+		}
+		if (flags & InputDeltaFlags::HasMouseButtons)
+		{
+			if (p + 1 > end) { parseOk = false; break; }
+			cur.State.MouseButtons = *p++;
+		}
+		if (flags & InputDeltaFlags::HasEvents)
+		{
+			if (p + 1 > end) { parseOk = false; break; }
+			cur.EventCount = *p++;
+			if (cur.EventCount > 8) cur.EventCount = 8;
+			const size_t evBytes = cur.EventCount * sizeof(NetInputEvent);
+			if (p + evBytes > end) { parseOk = false; break; }
+			std::memcpy(cur.Events, p, evBytes);
+			p += evBytes;
+		}
+	}
+
+	if (!parseOk)
+	{
+		LOG_ENG_WARN_F("[ServerNet] InputFrameDelta truncated (ownerID=%u)", ownerID);
+		break;
+	}
+
+	log->Store(reconstructed);
+
+	if (ConnectionInfo* ci = ConnectionMgr->FindConnection(msg.Connection))
+	{
+		ci->LastAckedClientFrame = static_cast<uint32_t>(static_cast<int64_t>(log->LastReceivedFrame) - log->FrameOffset);
+		NetChannel(ci, ConnectionMgr).SendHeaderOnly(NetMessageType::InputFrame, /*reliable=*/false);
+	}
+	break;
+}
+
 case NetMessageType::Ping:
 {
 ConnectionInfo* ci = ConnectionMgr->FindConnection(msg.Connection);

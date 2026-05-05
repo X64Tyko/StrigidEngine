@@ -32,8 +32,9 @@ enum class NetMessageType : uint8_t
 	ConstructSpawn      = 17, // Server->Client: new Construct creation command (header + trailing EntityNetHandle[])
 	ConstructDestroy    = 18, // Server->Client: Construct destruction command (N × uint32_t ConstructNetHandle values, count = PayloadSize / 4)
 	EntityDelta         = 19, // Server->Client: per-component delta corrections for dirty entities (variable-length)
-	Custom              = 20, // Game-defined: first slot for user-extended message types
-	Unknown             = 21, // Sentinel: unrecognised message type — receiver must drop
+	InputFrameDelta     = 20, // Client->Server: delta-compressed input window (variable-length)
+	Custom              = 21, // Game-defined: first slot for user-extended message types
+	Unknown             = 22, // Sentinel: unrecognised message type — receiver must drop
 	Count
 };
 
@@ -44,9 +45,9 @@ inline const char* NetMessageTypeName(uint8_t type)
 		"EntityDestroy", "Ping", "Pong", "FlowEvent",
 		"PlayerBeginRequest", "PlayerBeginConfirm", "PlayerBeginReject", "ClockSync",
 		"TravelNotify", "LevelReady", "GameModeManifest", "ClientModeManifest",
-		"SoulRPC", "ConstructSpawn", "ConstructDestroy", "EntityDelta", "Custom", "Unknown",
+		"SoulRPC", "ConstructSpawn", "ConstructDestroy", "EntityDelta", "InputFrameDelta", "Custom", "Unknown",
 	};
-	static_assert(static_cast<size_t>(NetMessageType::Count) == 22,
+	static_assert(static_cast<size_t>(NetMessageType::Count) == 23,
 				  "NetMessageTypeName table out of sync with NetMessageType enum");
 	return type < static_cast<uint8_t>(NetMessageType::Count) ? kNames[type] : "???";
 }
@@ -647,6 +648,39 @@ struct NetInputFrame
 };
 
 static_assert(sizeof(NetInputFrame) == 4 + 76 + 4 + 64, "NetInputFrame size mismatch");
+
+// ---------------------------------------------------------------------------
+// InputDeltaFlags — bitmask in each delta frame's Flags byte.
+//
+// Delta frame wire layout (each frame after the base):
+//   [Frame:        4 bytes]
+//   [Flags:        1 byte]   InputDeltaFlags bitmask
+//   [KeyState:    64 bytes]  if HasKeyState  — held-key bitfield (changed from prev frame)
+//   [MouseDX:      4 bytes]  if HasMouseDX
+//   [MouseDY:      4 bytes]  if HasMouseDY
+//   [MouseButtons: 1 byte]   if HasMouseButtons — changed from prev frame
+//   [EventCount:   1 byte]   if HasEvents
+//   [Events: EventCount*8]   if HasEvents
+// ---------------------------------------------------------------------------
+namespace InputDeltaFlags
+{
+	static constexpr uint8_t HasKeyState     = 1 << 0; // KeyState changed from previous frame
+	static constexpr uint8_t HasMouseDX      = 1 << 1; // MouseDX is non-zero this frame
+	static constexpr uint8_t HasMouseDY      = 1 << 2; // MouseDY is non-zero this frame
+	static constexpr uint8_t HasMouseButtons = 1 << 3; // MouseButtons changed from previous frame
+	static constexpr uint8_t HasEvents       = 1 << 4; // discrete events present
+}
+
+// Header for InputFrameDelta payload (NetMessageType::InputFrameDelta).
+// Wire layout after this header:
+//   [NetInputFrame base: sizeof(NetInputFrame) bytes]  full first frame in the window
+//   [DeltaFrame[1..FrameCount-1]: variable]            one per remaining frame
+struct InputDeltaPacketHeader
+{
+	uint32_t FirstFrame;  // absolute frame number of Frames[0]
+	uint32_t FrameCount;  // total frames in this window (base + deltas)
+};
+static_assert(sizeof(InputDeltaPacketHeader) == 8, "InputDeltaPacketHeader must be 8 bytes");
 
 // Wire payload: a sliding window of per-frame snapshots, oldest→newest.
 // Snapped at ProcessSimInput time so frame numbers are exact — no extrapolation math needed.
