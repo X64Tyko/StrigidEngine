@@ -1,6 +1,7 @@
 #pragma once
 #include "ComponentView.h"
 #include "SchemaReflector.h"
+#include "NetDelta.h"
 
 // RigidBody component — linear and angular velocity for physics simulation.
 // Temporal: stored in N-frame rollback ring buffer. Required for deterministic
@@ -20,3 +21,4 @@ struct CRigidBody : ComponentView<CRigidBody, WIDTH>
 };
 
 TNX_REGISTER_COMPONENT(CRigidBody)
+TNX_NET_TEMPORAL(CRigidBody)

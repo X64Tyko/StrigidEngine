@@ -149,6 +149,14 @@ public:
 	{
 		return static_cast<uint8_t*>(frame0Base) + LastWrittenFrame * GetFrameStride();
 	}
+	// Advance a frame-0 base pointer to the ring buffer slot that holds a specific
+	// simulation frame number. The caller is responsible for ensuring absoluteSimFrame
+	// is within the live ring window (i.e. not overwritten by newer frames).
+	FORCE_INLINE void* GetFramePtrAtAbsoluteFrame(void* frame0Base, uint32_t absoluteSimFrame) const
+	{
+		uint32_t slot = absoluteSimFrame % static_cast<uint32_t>(TemporalFrameCount);
+		return static_cast<uint8_t*>(frame0Base) + slot * GetFrameStride();
+	}
 
 	// Copy field data from fromFrame into toFrame before dispatch.
 	// Called once per logic tick so all FieldProxy writes start from the previous frame's state.

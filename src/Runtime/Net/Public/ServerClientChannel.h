@@ -74,8 +74,9 @@ struct ServerClientChannel
 	std::vector<bool>    Replicated;
 	NetChannel           Channel;
 	PendingPacketQueue   SendQueue;
-	ConnectionInfo*      CI      = nullptr;
-	uint8_t              OwnerID = 0;
+	ConnectionInfo*      CI                = nullptr;
+	uint8_t              OwnerID           = 0;
+	uint32_t             LastAckedSimFrame = 0; // Last sim frame this client confirmed receiving
 
 	void Open(uint8_t ownerID, uint32_t logDepth, ConnectionInfo* ci,
 	          NetConnectionManager* mgr, uint32_t entityCapacity = 0);

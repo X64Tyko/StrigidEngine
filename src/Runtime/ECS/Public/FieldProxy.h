@@ -28,9 +28,10 @@ struct FieldProxyMask<FieldWidth::Scalar>
 template <typename FieldType, FieldWidth WIDTH>
 struct FieldProxy : private FieldProxyMask<WIDTH>
 {
-	using Traits  = SIMDTraits<FieldType, WIDTH>;
-	using VecType = typename Traits::VecType;
-	using VecMask = FieldMask<FieldType, VecType, WIDTH>;
+	using ValueType = FieldType;
+	using Traits    = SIMDTraits<FieldType, WIDTH>;
+	using VecType   = typename Traits::VecType;
+	using VecMask   = FieldMask<FieldType, VecType, WIDTH>;
 
 	FieldType* __restrict WriteArray = nullptr;
 	int32_t* __restrict FlagsArray   = nullptr; // CacheSlotMeta::Flags — dirty bits at 30 (accumulate) and 29 (per-frame)

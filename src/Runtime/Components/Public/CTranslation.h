@@ -2,6 +2,7 @@
 #include <FieldProxy.h>
 #include "ComponentView.h"
 #include "SchemaReflector.h"
+#include "NetDelta.h"
 #include "VecMath.h"
 
 // Translation Component — position only.
@@ -20,3 +21,4 @@ struct CTranslation : ComponentView<CTranslation, WIDTH>
 };
 
 TNX_REGISTER_COMPONENT(CTranslation)
+TNX_NET_TEMPORAL(CTranslation)

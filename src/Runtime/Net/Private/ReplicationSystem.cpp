@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include "Archetype.h"
+#include "NetDelta.h"
 #include "CacheSlotMeta.h"
 #include "CColor.h"
 #include "ConstructRegistry.h"
@@ -78,10 +79,17 @@ void ReplicationSystem::DispatchFrameJobs()
 	const uint32_t published = logic->GetLastCompletedFrame();
 	if (published == LastDispatchedFrame) return;
 
+	Stats.Reset();
+
 	DispatchSpawnJobs(published);
 	DispatchConstructSpawnJobs(published);
 	DispatchConstructDestroyJobs(published);
 	DispatchCorrectionJobs(published);
+	DispatchDeltaCorrectionJobs(published);
+
+	Stats.ActiveChannelCount = static_cast<uint32_t>(ActiveOwnerIDs.size());
+	Stats.DirtyEntityCount   = static_cast<uint32_t>(DirtyCache.size());
+	Stats.Commit(published);
 
 	LastDispatchedFrame = published;
 }
@@ -644,6 +652,7 @@ void ReplicationSystem::DispatchCorrectionJobs(uint32_t frameNumber)
 		const SimFloat* rotQz;
 		const SimFloat* rotQw;
 		uint32_t frameNumber;
+		NetFrameStats* Stats;
 	};
 
 	for (uint8_t oid : ActiveOwnerIDs)
@@ -661,7 +670,7 @@ void ReplicationSystem::DispatchCorrectionJobs(uint32_t frameNumber)
 
 		auto* cap = new CorrectionCapture{
 			ch, hdr, dirtyPtr, dirtyCount, resimPtr,
-			posX, posY, posZ, rotQx, rotQy, rotQz, rotQw, clientFrame
+			posX, posY, posZ, rotQx, rotQy, rotQz, rotQw, clientFrame, &Stats
 		};
 
 		TrinyxJobs::Dispatch([cap, lastAcked, bClientHasResim, oid](uint32_t)
@@ -719,6 +728,203 @@ void ReplicationSystem::DispatchCorrectionJobs(uint32_t frameNumber)
 			std::memcpy(pkt.Payload.data(), batch.data(), pkt.Payload.size());
 			pkt.Reliable = false;
 			cap->Channel->SendQueue.Push(std::move(pkt));
+			cap->Stats->StateCorrectionBytes.fetch_add(pkt.Header.PayloadSize, std::memory_order_relaxed);
+			delete cap;
+		}, &BuildCounter, TrinyxJobs::Queue::General);
+	}
+}
+
+// ---------------------------------------------------------------------------
+// DispatchDeltaCorrectionJobs — per-component delta corrections for dirty entities.
+//
+// Wire format (NetMessageType::EntityDelta, unreliable):
+//   uint16_t EntityCount
+//   For each entity:
+//     uint32_t NetHandle
+//     uint8_t  ComponentCount   — how many components follow
+//     For each changed component:
+//       uint8_t  CacheSlot      — StaticTemporalIndex() of the component
+//       uint8_t  DeltaLen       — byte count of the delta payload
+//       [DeltaLen bytes]        — mask + changed field values from DeltaSerialize
+//
+// Baseline frame: ch->LastAckedSimFrame.  Current frame: frameNumber (published).
+// Components with no changed fields (zero mask) are omitted from the packet.
+// Entities with no changed components are omitted from the packet.
+//
+// Must be called AFTER DispatchCorrectionJobs so DirtyCache is populated.
+// ---------------------------------------------------------------------------
+
+void ReplicationSystem::DispatchDeltaCorrectionJobs(uint32_t frameNumber)
+{
+	if (!TrinyxJobs::IsRunning()) return;
+	if (DirtyCache.empty()) return;
+
+	Registry* reg = AuthorityWorld->GetRegistry();
+	ComponentCacheBase* temporalCache = reg->GetTemporalCache();
+	const uint32_t ringSize = temporalCache->GetTotalFrameCount();
+
+	TemporalFrameHeader* currentHdr =
+		temporalCache->GetFrameHeader(temporalCache->GetActiveReadFrame());
+	if (!currentHdr) return;
+
+	// Snapshot registered delta components once on Sentinel; jobs are read-only.
+	struct ComponentInfo
+	{
+		ComponentDeltaFns Fns;
+	};
+
+	std::vector<ComponentInfo> components;
+	ComponentDeltaRegistry::Get().ForEach([&](ComponentTypeID, const ComponentDeltaFns& fns)
+	{
+		if (fns.IsValid())
+			components.push_back({fns});
+	});
+
+	if (components.empty()) return;
+
+	const DirtyEntityInfo* dirtyPtr = DirtyCache.data();
+	const uint32_t dirtyCount       = static_cast<uint32_t>(DirtyCache.size());
+
+	for (uint8_t oid : ActiveOwnerIDs)
+	{
+		ServerClientChannel* ch = GetChannelIfActive(oid);
+		if (!ch || !ch->CI) continue;
+		if (!ch->CI->bConnected || !ch->CI->bAuthoritySide) continue;
+
+		const uint32_t baselineSlot = ch->LastAckedSimFrame % ringSize;
+		TemporalFrameHeader* baselineHdr = temporalCache->GetFrameHeader(baselineSlot);
+		if (!baselineHdr) continue;
+
+		const uint32_t clientFrame = ch->CI->ToClientFrame(frameNumber);
+		PacketHeader hdr = ch->Channel.PrepareHeader(
+			NetMessageType::EntityDelta, 0, clientFrame);
+
+		struct DeltaCapture
+		{
+			ServerClientChannel*     Channel;
+			PacketHeader             Header;
+			const DirtyEntityInfo*   Dirty;
+			uint32_t                 DirtyCount;
+			ComponentCacheBase*      Cache;
+			TemporalFrameHeader*     CurrentHdr;
+			TemporalFrameHeader*     BaselineHdr;
+			std::vector<ComponentInfo> Components;
+			NetFrameStats*           Stats;
+		};
+
+		auto* cap = new DeltaCapture{
+			ch, hdr, dirtyPtr, dirtyCount,
+			temporalCache, currentHdr, baselineHdr,
+			components, &Stats
+		};
+
+		TrinyxJobs::Dispatch([cap](uint32_t)
+		{
+			// Build variable-length delta payload.
+			std::vector<uint8_t> payload;
+			payload.reserve(cap->DirtyCount * 12);
+
+			// Reserve 2 bytes for entity count — filled at the end.
+			payload.push_back(0);
+			payload.push_back(0);
+			uint16_t entityCount = 0;
+
+			constexpr size_t MaxFields = 32;
+
+			for (uint32_t d = 0; d < cap->DirtyCount; ++d)
+			{
+				const DirtyEntityInfo& de = cap->Dirty[d];
+				const uint32_t idx        = de.slabIndex;
+
+				if (!cap->Channel->IsReplicated(idx)) continue;
+
+				const size_t entityHeaderPos = payload.size();
+
+				// Reserve: NetHandle (4 bytes) + ComponentCount (1 byte)
+				payload.resize(entityHeaderPos + 5);
+				uint8_t componentCount = 0;
+
+				for (const ComponentInfo& comp : cap->Components)
+				{
+					// Probe field arrays — GetFieldData returns nullptr for unregistered fields.
+					void* curPtrs[MaxFields];
+					void* basePtrs[MaxFields];
+					size_t fieldCount = 0;
+
+					for (size_t fi = 0; fi < MaxFields; ++fi)
+					{
+						void* cur  = cap->Cache->GetFieldData(cap->CurrentHdr,  comp.Fns.CacheSlot, fi);
+						void* base = cap->Cache->GetFieldData(cap->BaselineHdr, comp.Fns.CacheSlot, fi);
+						if (!cur || !base) break;
+						curPtrs[fi]  = cur;
+						basePtrs[fi] = base;
+						++fieldCount;
+					}
+
+					if (fieldCount == 0) continue;
+
+					ComponentDeltaCtx ctx{ curPtrs, basePtrs, idx };
+
+					uint8_t compBuf[256];
+					NetDeltaWriter w{ compBuf, 0, sizeof(compBuf) };
+					comp.Fns.Serialize(ctx, w);
+
+					if (!w.IsOk() || w.BytesWritten() == 0) continue;
+
+					// Detect zero mask: if only mask bytes written and they're all zero, nothing changed.
+					const uint32_t maskBytes = (fieldCount <= 8) ? 1u : (fieldCount <= 16) ? 2u : 4u;
+					if (w.BytesWritten() <= maskBytes)
+					{
+						uint32_t maskVal = 0;
+						std::memcpy(&maskVal, compBuf, w.BytesWritten());
+						if (maskVal == 0) continue;
+					}
+
+					// Clamp to uint8_t — components are asserted N <= 32 fields (max ~132 bytes).
+					const uint8_t deltaLen = static_cast<uint8_t>(
+						w.BytesWritten() > 255 ? 255 : w.BytesWritten());
+
+					payload.push_back(comp.Fns.CacheSlot);
+					payload.push_back(deltaLen);
+					for (uint8_t b = 0; b < deltaLen; ++b)
+						payload.push_back(compBuf[b]);
+
+					++componentCount;
+				}
+
+				if (componentCount == 0)
+				{
+					// No changed components — discard entity header reservation.
+					payload.resize(entityHeaderPos);
+					continue;
+				}
+
+				// Patch entity header in place.
+				std::memcpy(payload.data() + entityHeaderPos,     &de.netHandleValue, 4);
+				payload[entityHeaderPos + 4] = componentCount;
+				++entityCount;
+			}
+
+			if (entityCount == 0)
+			{
+				delete cap;
+				return;
+			}
+
+			// Patch entity count at payload start.
+			std::memcpy(payload.data(), &entityCount, 2);
+
+			const uint32_t payloadSize = static_cast<uint32_t>(payload.size());
+			PendingPacket pkt;
+			pkt.Header             = cap->Header;
+			pkt.Header.PayloadSize = static_cast<uint16_t>(payloadSize > 65535 ? 65535 : payloadSize);
+			pkt.Payload            = std::move(payload);
+			pkt.Reliable           = false;
+			cap->Channel->SendQueue.Push(std::move(pkt));
+			cap->Stats->EntityDeltaBytes.fetch_add(pkt.Header.PayloadSize, std::memory_order_relaxed);
+			cap->Stats->EntityDeltaEntityCount.fetch_add(entityCount, std::memory_order_relaxed);
+
+			LOG_NET_DEBUG_F(nullptr, "[Replication] EntityDelta: %u entities queued", entityCount);
 			delete cap;
 		}, &BuildCounter, TrinyxJobs::Queue::General);
 	}

@@ -43,6 +43,7 @@
 #include "Panels/ContentBrowserPanel.h"
 #include "Panels/NodeScriptPanel.h"
 #include "Panels/ComponentGeneratorPanel.h"
+#include "Panels/DebuggerPanel.h"
 
 EditorContext::EditorContext() = default;
 
@@ -101,6 +102,7 @@ void EditorContext::Initialize(TrinyxEngine* engine, LogicThreadBase* logic, Mes
 	AddPanel<ContentBrowserPanel>();
 	AddPanel<NodeScriptPanel>();
 	AddPanel<ComponentGeneratorPanel>();
+	AddPanel<DebuggerPanel>();
 
 	LOG_ENG_INFO_F("[Editor] Initialized with %zu panels", Panels.size());
 }
@@ -480,6 +482,12 @@ void EditorContext::BuildFrame()
 {
 	BuildDockspace();
 
+	// Refresh replication system pointer — valid only during PIE, null otherwise.
+	{
+		WorldBase* serverWorld = (bPIEActive && ServerFlow) ? ServerFlow->GetWorld() : nullptr;
+		State.ReplicatorPtr = serverWorld ? serverWorld->GetReplicationSystem() : nullptr;
+	}
+
 	// Consume GPU pick results and update selection
 	ConsumePick();
 
@@ -528,7 +536,7 @@ void EditorContext::BuildFrame()
 	// Tell Sentinel whether the engine should own input.
 	// Engine gets input when: right-click held in viewport, or Play is running.
 	bool rightClickInViewport = ImGui::IsMouseDown(ImGuiMouseButton_Right) && ViewportPanelHovered;
-	bool playing              = (LogicPtr && !LogicPtr->IsSimPaused() && bHasSnapshot) || bPIEActive;
+	bool playing              = (LogicPtr && !LogicPtr->IsSimPaused() && bHasSnapshot) || (bPIEActive && !bPIEPaused);
 	// Escape requests PIE stop — deferred to after the ImGui frame completes
 	// so we don't free GPU resources (descriptor sets, images) mid-frame.
 	if (bPIEActive && ImGui::IsKeyPressed(ImGuiKey_Escape)) bPIEStopRequested = true;
@@ -643,12 +651,13 @@ void EditorContext::ApplyDefaultLayout(unsigned int dockspaceID)
 	ImGui::DockBuilderDockWindow("Viewport", center);
 	ImGui::DockBuilderDockWindow("Details", right);
 
-	// Bottom: tabbed — Content Browser, Log, Engine Stats, Node Script, Component Generator
+	// Bottom: tabbed — Content Browser, Log, Engine Stats, Node Script, Component Generator, Debugger
 	ImGui::DockBuilderDockWindow("Content Browser", bottom);
 	ImGui::DockBuilderDockWindow("Log", bottom);
 	ImGui::DockBuilderDockWindow("Engine Stats", bottom);
 	ImGui::DockBuilderDockWindow("Node Script", bottom);
 	ImGui::DockBuilderDockWindow("Component Generator", bottom);
+	ImGui::DockBuilderDockWindow("Debugger", bottom);
 
 	ImGui::DockBuilderFinish(dockspaceID);
 }
@@ -867,6 +876,17 @@ void EditorContext::BuildMenuBar()
 		if (ImGui::MenuItem("Stop PIE", nullptr, false, bPIEActive))
 		{
 			StopPIE();
+		}
+		if (ImGui::MenuItem(bPIEPaused ? "Resume PIE" : "Pause PIE", nullptr, false, bPIEActive))
+		{
+			bPIEPaused = !bPIEPaused;
+			auto applyPause = [&](FlowManagerBase* flow) {
+				if (!flow) return;
+				WorldBase* w = flow->GetWorld();
+				if (w && w->GetLogicThread()) w->GetLogicThread()->SetSimPaused(bPIEPaused);
+			};
+			applyPause(ServerFlow.get());
+			for (auto& c : PIEClients) applyPause(c.Flow.get());
 		}
 
 		ImGui::EndMenu();
@@ -1792,6 +1812,7 @@ void EditorContext::StartPIE()
 	bPrePIESimWasPaused = !LogicPtr || LogicPtr->IsSimPaused();
 	if (LogicPtr) LogicPtr->SetSimPaused(true);
 
+	bPIEPaused = false;
 	bPIEActive = true;
 	State.ClearSelection();
 	LOG_ENG_INFO_F("[PIE] Started: 1 server%s + %zu client(s), port %u",
@@ -1864,13 +1885,33 @@ void EditorContext::StopPIE()
 		renderer->FreeViewportResources(ServerViewport.get());
 	}
 
-	// 4. Shutdown and destroy worlds (FlowManager destructors handle World shutdown)
+	// 4. Drain in-flight replication build jobs before destroying anything they point to.
+	// DispatchFrameJobs() dispatches worker-pool jobs that capture raw pointers into
+	// the ReplicationSystem (channels, Stats) and world slab data. Freeing those objects
+	// while jobs are still running causes use-after-free writes that corrupt Jolt's
+	// internal memory, producing the Jolt BodyID crash at teardown.
+	if (Replicator) Replicator->WaitForBuildJobs();
+
+	// 5. Resume any paused PIE logic threads so they can exit their fixed loop cleanly.
+	if (bPIEPaused)
+	{
+		auto resume = [](FlowManagerBase* flow) {
+			if (!flow) return;
+			WorldBase* w = flow->GetWorld();
+			if (w && w->GetLogicThread()) w->GetLogicThread()->SetSimPaused(false);
+		};
+		resume(ServerFlow.get());
+		for (auto& c : PIEClients) resume(c.Flow.get());
+		bPIEPaused = false;
+	}
+
+	// 6. Shutdown and destroy worlds (FlowManager destructors handle World shutdown)
 	PIEClients.clear();
 	Replicator.reset();
 	ServerViewport.reset();
 	ServerFlow.reset();
 
-	// 5. Restore editor world to its pre-PIE sim state
+	// 7. Restore editor world to its pre-PIE sim state
 	if (LogicPtr) LogicPtr->SetSimPaused(bPrePIESimWasPaused);
 
 	bPIEActive = false;

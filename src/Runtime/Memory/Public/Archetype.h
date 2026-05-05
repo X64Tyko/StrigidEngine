@@ -169,6 +169,25 @@ public:
 
 	size_t GetFieldArrayCount() const { return ArchetypeFieldLayout.count(); }
 
+	// Fill outSlots[0..N-1] with the flat field-table slot indices (into the array produced by
+	// BuildFieldArrayTable) for all fields of typeID, in DefineFields() order.
+	// Returns the field count, or 0 if the component is not in this archetype.
+	// outSlots must have room for at least maxSlots entries (use MAX_TEMPORAL_FIELDS_PER_COMPONENT).
+	uint32_t GetComponentFieldSlotIndices(ComponentTypeID typeID, uint8_t* outSlots, uint32_t maxSlots) const
+	{
+		uint8_t cacheSlot = ReflectionRegistry::Get().GetCacheSlotIndex(typeID);
+		uint32_t count = 0;
+		for (uint32_t fi = 0; fi < maxSlots; ++fi)
+		{
+			FieldKey key{ typeID, cacheSlot, fi };
+			const FieldDescriptor* desc = ArchetypeFieldLayout.find(key);
+			if (!desc) break;
+			outSlots[fi] = desc->fieldSlotIndex;
+			++count;
+		}
+		return count;
+	}
+
 private:
 	friend class Registry;
 

@@ -23,6 +23,7 @@ DEFINE_MULTICAST_CALLBACK(OnHitCB, PhysicsOnHitData)
 DEFINE_MULTICAST_CALLBACK(OnOverlapBeginCB, PhysicsOverlapData)
 DEFINE_MULTICAST_CALLBACK(OnOverlapEndCB, PhysicsOverlapData)
 
+class JoltCharacter;
 class JoltContactListener;
 class JoltJobSystemAdapter;
 struct EngineConfig;
@@ -86,6 +87,12 @@ public:
 	void RegisterBody(JPH::BodyID id, EntityCacheHandle owner);
 	void UnregisterBody(JPH::BodyID id);
 	EntityCacheHandle GetBodyOwner(JPH::BodyID id) const;
+
+	// --- JoltCharacter lifetime tracking ---
+	// Shutdown() iterates these and calls ch->Shutdown() before PhysSystem.reset(),
+	// ensuring CharacterVirtual::~CharacterVirtual() never touches a dead mSystem.
+	void RegisterCharacter(JoltCharacter* ch);
+	void UnregisterCharacter(JoltCharacter* ch);
 
 	// --- Accessors ---
 
@@ -182,6 +189,10 @@ private:
 	}
 
 	static constexpr uint32_t InvalidEntityIndex = UINT32_MAX;
+
+	// All JoltCharacter objects currently initialized against this physics system.
+	// Drained in Shutdown() before PhysSystem is destroyed.
+	std::vector<JoltCharacter*> ActiveCharacters;
 
 	const EngineConfig* ConfigPtr = nullptr;
 	std::vector<uint64_t> LiveEntityBits; // Bitplane: 1 bit per entity index, reused across FlushPendingBodies calls

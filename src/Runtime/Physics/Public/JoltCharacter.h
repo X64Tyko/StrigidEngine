@@ -2,7 +2,8 @@
 
 #include <Jolt/Jolt.h>
 #include <Jolt/Physics/Character/CharacterVirtual.h>
-#include "RegistryTypes.h"
+
+#include "SimFloat.h"
 
 class JoltPhysics;
 
@@ -11,7 +12,7 @@ class JoltCharacter
 public:
 	~JoltCharacter();
 
-	void Initialize(JoltPhysics* physics, EntityCacheHandle entityIndex, JPH::RVec3 position,
+	void Initialize(JoltPhysics* physics, JPH::RVec3 position,
 					float capsuleRadius, float capsuleHalfHeight);
 
 	void Shutdown();

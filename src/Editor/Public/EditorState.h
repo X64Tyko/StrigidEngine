@@ -12,6 +12,7 @@ class EditorContext;
 class MeshManager;
 class Registry;
 class LogicThreadBase;
+class ReplicationSystem;
 class TrinyxEngine;
 struct Chunk;
 struct EngineConfig;
@@ -70,6 +71,9 @@ struct EditorState
 
 	// --- Engine access (for Spawn handshake, scene load, etc.) ---
 	TrinyxEngine* EnginePtr = nullptr;
+
+	// --- Networking (null when PIE is not active) ---
+	ReplicationSystem* ReplicatorPtr = nullptr;
 
 	// --- Asset database (editor only, set by EditorContext) ---
 	AssetDatabase* AssetDB   = nullptr;

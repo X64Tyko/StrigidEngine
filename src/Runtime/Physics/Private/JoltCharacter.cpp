@@ -9,7 +9,7 @@ JoltCharacter::~JoltCharacter()
 	Shutdown();
 }
 
-void JoltCharacter::Initialize(JoltPhysics* physics, EntityCacheHandle entityIndex, JPH::RVec3 position,
+void JoltCharacter::Initialize(JoltPhysics* physics, JPH::RVec3 position,
 							   float capsuleRadius, float capsuleHalfHeight)
 {
 	Physics = physics;
@@ -27,24 +27,19 @@ void JoltCharacter::Initialize(JoltPhysics* physics, EntityCacheHandle entityInd
 	Character = new JPH::CharacterVirtual(
 		&settings, position, JPH::Quat::sIdentity(), 0, Physics->GetPhysicsSystem());
 
-	if (!Character->GetInnerBodyID().IsInvalid())
-	{
-		Physics->RegisterBody(Character->GetInnerBodyID(), entityIndex);
-	}
+	Physics->RegisterCharacter(this);
 }
 
 void JoltCharacter::Shutdown()
 {
-	if (Character && Physics && Physics->GetIsActive())
+	if (!Character) { Physics = nullptr; return; }
+
+	if (Physics)
 	{
-		// Unregister our owner mapping before the body goes away.
-		if (!Character->GetInnerBodyID().IsInvalid())
-		{
-			Physics->UnregisterBody(Character->GetInnerBodyID());
-		}
-		
-		Character = nullptr;
+		Physics->UnregisterCharacter(this);
 	}
+
+	Character = nullptr; // triggers CharacterVirtual::~CharacterVirtual() while PhysSystem is still alive
 	Physics = nullptr;
 }
 

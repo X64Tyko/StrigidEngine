@@ -159,6 +159,46 @@ public:
 
 	uint32_t GetCommittedFrameHorizon() const { return CommittedFrameHorizon; }
 
+	// ---------------------------------------------------------------------------
+	// Per-frame diagnostics — reset at the start of each DispatchFrameJobs,
+	// accumulated from Sentinel and worker threads. Read by the editor debugger panel.
+	// ---------------------------------------------------------------------------
+	struct NetFrameStats
+	{
+		std::atomic<uint32_t> StateCorrectionBytes{0};
+		std::atomic<uint32_t> EntityDeltaBytes{0};
+		std::atomic<uint32_t> EntityDeltaEntityCount{0};
+		uint32_t              DirtyEntityCount   = 0; // Sentinel-only
+		uint32_t              ActiveChannelCount  = 0; // Sentinel-only
+		// Stamped by Sentinel via Commit() at the END of DispatchFrameJobs, after all
+		// jobs are dispatched. Panel skips sampling if this hasn't changed since last read,
+		// preventing duplicate ring-buffer entries when render ticks faster than Sentinel.
+		std::atomic<uint32_t> FrameNumber{0};
+
+		void Reset()
+		{
+			StateCorrectionBytes.store(0, std::memory_order_relaxed);
+			EntityDeltaBytes.store(0, std::memory_order_relaxed);
+			EntityDeltaEntityCount.store(0, std::memory_order_relaxed);
+			DirtyEntityCount   = 0;
+			ActiveChannelCount = 0;
+		}
+
+		// Call after all dispatch methods complete. Release ordering ensures all
+		// accumulated byte counts are visible to the panel when FrameNumber is read.
+		void Commit(uint32_t frame)
+		{
+			FrameNumber.store(frame, std::memory_order_release);
+		}
+	};
+
+	const NetFrameStats& GetStats() const { return Stats; }
+
+	/// Block until all in-flight build jobs from the last DispatchFrameJobs() have
+	/// completed. Must be called before destroying the ReplicationSystem or any world
+	/// data those jobs point to (channels, slab headers, Stats).
+	void WaitForBuildJobs() { TrinyxJobs::WaitForCounter(&BuildCounter); }
+
 	/// Ordered list of owner IDs with live channels — used by AuthoritySim to
 	/// iterate only connected players rather than the full MaxOwnerIDs range.
 	const std::vector<uint8_t>& GetActiveOwnerIDs() const { return ActiveOwnerIDs; }
@@ -168,6 +208,7 @@ private:
 	void DispatchConstructSpawnJobs(uint32_t frameNumber);
 	void DispatchConstructDestroyJobs(uint32_t frameNumber);
 	void DispatchCorrectionJobs(uint32_t frameNumber);
+	void DispatchDeltaCorrectionJobs(uint32_t frameNumber);
 	void FlushSendQueues(NetConnectionManager* connMgr);
 
 	/// Assign an EntityNetHandle to a server entity that hasn't been replicated yet.
@@ -287,4 +328,7 @@ private:
 	// Last frame number for which spawn/correction jobs were dispatched.
 	// Sentinel-only — no atomics needed.
 	uint32_t LastDispatchedFrame = 0;
+
+	// Per-frame diagnostics collected during each DispatchFrameJobs pass.
+	NetFrameStats Stats;
 };

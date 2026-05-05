@@ -2,6 +2,7 @@
 #include <FieldProxy.h>
 #include "ComponentView.h"
 #include "SchemaReflector.h"
+#include "NetDelta.h"
 #include "VecMath.h"
 
 // Velocity Component — Linear velocity for movement.
@@ -18,3 +19,4 @@ struct CVelocity : ComponentView<CVelocity, WIDTH>
 };
 
 TNX_REGISTER_COMPONENT(CVelocity)
+TNX_NET_TEMPORAL(CVelocity)

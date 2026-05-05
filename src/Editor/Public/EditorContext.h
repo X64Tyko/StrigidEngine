@@ -161,6 +161,7 @@ private:
 	EngineConfig ServerConfig; // Server-mode config (game config + Mode=Server/Host)
 	std::vector<PIEClient> PIEClients;
 	bool bPIEActive          = false;
+	bool bPIEPaused          = false;
 	bool bPrePIESimWasPaused = true; // Editor sim paused state before PIE — restored on StopPIE
 	bool bServerVisible = true; // false = headless server (no viewport)
 	int PIEClientCount  = 1;    // Number of client worlds to spawn in PIE

@@ -87,11 +87,9 @@ public:
 		Body.SetPosition(spawnPos);
 		Body.VisTransform.VisBlend = SimFloat(0.6f);
 
-		auto* phys          = GetWorld()->GetPhysics();
-		EntityRecord Record = GetWorld()->GetRegistry()->GetRecord(Body.GetEntityHandle());
+		auto* phys = GetWorld()->GetPhysics();
 		CharacterController.Initialize(
 			phys,
-			Record.CacheEntityIndex,
 			JPH::RVec3(SpawnPosX.ToFloat(), SpawnPosY.ToFloat(), SpawnPosZ.ToFloat()),
 			0.3f,
 			0.7f);

@@ -1,4 +1,5 @@
 #include "JoltPhysics.h"
+#include "JoltCharacter.h"
 #include "JoltJobSystemAdapter.h"
 #include "CacheSlotMeta.h"
 #include "EngineConfig.h"
@@ -264,12 +265,33 @@ bool JoltPhysics::Initialize(const EngineConfig* config)
 	return true;
 }
 
+void JoltPhysics::RegisterCharacter(JoltCharacter* ch)
+{
+	ActiveCharacters.push_back(ch);
+}
+
+void JoltPhysics::UnregisterCharacter(JoltCharacter* ch)
+{
+	ActiveCharacters.erase(std::remove(ActiveCharacters.begin(), ActiveCharacters.end(), ch),
+	                       ActiveCharacters.end());
+}
+
 void JoltPhysics::Shutdown()
 {
 	if (!PhysSystem) return;
 
+	// Shut down all tracked JoltCharacter objects while PhysSystem is still alive.
+	// CharacterVirtual::~CharacterVirtual() accesses mSystem (a raw PhysicsSystem*)
+	// to remove its inner body. If PhysSystem is destroyed first, that dereference
+	// crashes. Draining here ensures the destructor runs against a valid system.
+	{
+		std::vector<JoltCharacter*> chars = std::move(ActiveCharacters);
+		for (JoltCharacter* ch : chars)
+			ch->Shutdown();
+	}
+
 	bActive.store(false, std::memory_order_release);
-	
+
 	// Unregister listener before destroying PhysSystem
 	ContactListener.reset();
 	PhysSystem.reset();
