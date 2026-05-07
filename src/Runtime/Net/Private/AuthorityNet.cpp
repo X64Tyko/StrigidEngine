@@ -5,6 +5,7 @@
 #include "LogicThread.h"
 #include "NetChannel.h"
 #include "NetConnectionManager.h"
+#include "NetTypes.h"
 #include "RPC.h"
 #include "ReplicationSystem.h"
 #include "WorldBase.h"
@@ -494,6 +495,24 @@ LOG_NET_INFO_F(soul, "[ServerNet] LevelReady received — client LevelLoaded (ow
 break;
 }
 
+case NetMessageType::StreamReady:
+{
+	if (msg.Payload.size() < sizeof(StreamReadyPayload)) break;
+	const auto* pl = reinterpret_cast<const StreamReadyPayload*>(msg.Payload.data());
+
+	ConnectionInfo* ci = ConnectionMgr->FindConnection(msg.Connection);
+	if (!ci) break;
+
+	Soul* soul = (AuthorityWorld && AuthorityWorld->GetFlowManager())
+		? AuthorityWorld->GetFlowManager()->GetSoul(ci->OwnerID) : nullptr;
+	LOG_NET_INFO_F(soul, "[ServerNet] StreamReady (assetID=%lld, inst=%u, ownerID=%u) — call SendChunkActivate when ready",
+				   pl->AssetID, static_cast<unsigned>(pl->InstanceIndex), ci->OwnerID);
+
+	if (AuthorityWorld && AuthorityWorld->GetFlowManager())
+		AuthorityWorld->GetFlowManager()->OnStreamReady(pl->AssetID, pl->InstanceIndex, ci->OwnerID);
+	break;
+}
+
 case NetMessageType::EntityDestroy:
 // TODO
 break;
@@ -555,4 +574,35 @@ default:
 LOG_ENG_WARN_F("[ServerNet] Unhandled message type %u", msg.Header.Type);
 break;
 }
+}
+
+void AuthorityNet::SendStreamLoad(uint8_t ownerID, int64_t assetIDRaw, uint16_t instanceIndex, bool bAutoActivate)
+{
+	if (!ConnectionMgr) return;
+	ConnectionInfo* ci = ConnectionMgr->FindConnectionByOwnerID(ownerID, /*requireServerSide=*/true);
+	if (!ci) return;
+
+	StreamLoadPayload pl{};
+	pl.AssetID       = assetIDRaw;
+	pl.InstanceIndex = instanceIndex;
+	pl.bAutoActivate = bAutoActivate ? 1u : 0u;
+
+	const uint32_t frame = AuthorityWorld && AuthorityWorld->GetLogicThread()
+		? AuthorityWorld->GetLogicThread()->GetLastCompletedFrame() : 0;
+	NetChannel(ci, ConnectionMgr).Send(NetMessageType::StreamLoad, pl, /*reliable=*/true, frame);
+}
+
+void AuthorityNet::SendChunkActivate(uint8_t ownerID, int64_t assetIDRaw, uint16_t instanceIndex)
+{
+	if (!ConnectionMgr) return;
+	ConnectionInfo* ci = ConnectionMgr->FindConnectionByOwnerID(ownerID, /*requireServerSide=*/true);
+	if (!ci) return;
+
+	ChunkActivatePayload pl{};
+	pl.AssetID       = assetIDRaw;
+	pl.InstanceIndex = instanceIndex;
+
+	const uint32_t frame = AuthorityWorld && AuthorityWorld->GetLogicThread()
+		? AuthorityWorld->GetLogicThread()->GetLastCompletedFrame() : 0;
+	NetChannel(ci, ConnectionMgr).Send(NetMessageType::ChunkActivate, pl, /*reliable=*/true, frame);
 }

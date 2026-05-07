@@ -24,20 +24,14 @@ class NetConnectionManager;
 union EntityHandle;
 union GlobalEntityHandle;
 
-// ---------------------------------------------------------------------------
-// ReplicationSystem — server-side entity and Construct replication.
+// Server-side entity and Construct replication. Each network tick:
+//   1. EntitySpawn (reliable) for entities not yet replicated per channel.
+//   2. ConstructSpawn (reliable) for Constructs registered since last tick.
+//   3. StateCorrection (unreliable) heartbeat + resim corrections.
+//   4. EntityDelta (unreliable) per-component delta for all dirty entities.
 //
-// Walks the server world's Registry each network tick and:
-//   1. Sends EntitySpawn (reliable) for any entity not yet replicated.
-//   2. Sends ConstructSpawn (reliable) for any registered Construct not yet sent.
-//   3. Sends batched StateCorrection (unreliable) with authoritative transforms.
-//
-// Designed for PIE loopback — one server world, N client connections.
-// Not optimized: full-state send every tick, no delta compression.
-//
-// Friend of Registry — uses internal APIs: AllocateNetIndex, GlobalEntityRegistry,
-// CreateInternal. All entity references are GlobalEntityHandle, not EntityHandle.
-// ---------------------------------------------------------------------------
+// Uses Registry internal APIs (AllocateNetIndex, GlobalEntityRegistry).
+// All entity references are GlobalEntityHandle, not EntityHandle.
 class ReplicationSystem
 {
 public:
@@ -63,15 +57,9 @@ public:
 	/// Call within a Spawn() lambda on the server world.
 	void RegisterEntity(Registry* reg, EntityHandle localHandle, uint8_t ownerID);
 
-	/// Register a Construct for replication. Allocates a ConstructNetHandle, wires
-	/// ConstructRegistry Records/NetToRecord, and queues a ConstructSpawn payload
-	/// (pre-built with EntityNetHandles resolved immediately) to be sent on the next Tick.
-	///
-	/// The typed template lets us call CollectViewHandles directly — no fn pointer stored
-	/// in ConstructRecord, no deferred collection. EntityNetHandles are resolved against
-	/// the server Registry at registration time.
-	///
-	/// Returns a valid ConstructRef immediately — safe to pass to Soul::ClaimBody.
+	/// Register a Construct for replication. Allocates a ConstructNetHandle, resolves its
+	/// view EntityNetHandles, pre-builds the ConstructSpawn payload, and queues it for
+	/// the next DispatchFrameJobs. Returns a valid ConstructRef — safe to pass to Soul::ClaimBody.
 	template <typename T>
 	ConstructRef RegisterConstruct(ConstructRegistry* reg, T* ptr, uint8_t ownerID,
 								   uint16_t typeHash, int64_t prefabIDRaw)
@@ -86,15 +74,12 @@ public:
 
 		ConstructRef ref = reg->AllocateNetRef(ptr, ownerID, manifest, typeHash, prefabIDRaw, spawnFrame);
 
-		// Collect view handles from the typed Construct immediately — typed pointer is in scope.
 		constexpr size_t MaxViews = 8;
 		EntityHandle viewHandles[MaxViews]{};
 		uint8_t viewCount = 0;
 		ptr->CollectViewHandles(viewHandles, viewCount);
 
-		// Resolve local EntityHandles → EntityNetHandles against the server Registry.
-		// If an entity doesn't have a net handle yet, assign one now so the client
-		// can look it up after receiving the EntitySpawn for this entity.
+		// Assign net handles for any view entity that doesn't have one yet.
 		Registry* entityReg = AuthorityWorld ? AuthorityWorld->GetRegistry() : nullptr;
 		uint32_t netHandleValues[MaxViews]{};
 		if (entityReg)
@@ -110,7 +95,6 @@ public:
 			}
 		}
 
-		// Pre-build the ConstructSpawnPayload and append to the pending queue.
 		const size_t payloadSize = sizeof(ConstructSpawnPayload) + viewCount * sizeof(uint32_t);
 		std::vector<uint8_t> buf(payloadSize, 0);
 		auto* payload       = reinterpret_cast<ConstructSpawnPayload*>(buf.data());
@@ -123,9 +107,6 @@ public:
 
 		PendingConstructSpawns.push_back(std::move(buf));
 
-		// Install the net destroy hook so the ConstructRegistry fires us when this
-		// Construct is destroyed (any lifetime bucket). We queue a ConstructDestroy
-		// to all connected Owners on the next DispatchFrameJobs.
 		reg->SetNetDestroyHook(ptr, ref.Handle, &ReplicationSystem::OnConstructDestroyed, this);
 		ConstructReg = reg;
 
@@ -165,11 +146,12 @@ public:
 	// ---------------------------------------------------------------------------
 	struct NetFrameStats
 	{
-		std::atomic<uint32_t> StateCorrectionBytes{0};
+		std::atomic<uint32_t> StateCorrectionBytes{0}; // heartbeat + resim corrections only
 		std::atomic<uint32_t> EntityDeltaBytes{0};
 		std::atomic<uint32_t> EntityDeltaEntityCount{0};
 		uint32_t              DirtyEntityCount   = 0; // Sentinel-only
 		uint32_t              ActiveChannelCount  = 0; // Sentinel-only
+		bool                  bHeartbeatFired    = false; // Sentinel-only
 		// Stamped by Sentinel via Commit() at the END of DispatchFrameJobs, after all
 		// jobs are dispatched. Panel skips sampling if this hasn't changed since last read,
 		// preventing duplicate ring-buffer entries when render ticks faster than Sentinel.
@@ -182,6 +164,7 @@ public:
 			EntityDeltaEntityCount.store(0, std::memory_order_relaxed);
 			DirtyEntityCount   = 0;
 			ActiveChannelCount = 0;
+			bHeartbeatFired    = false;
 		}
 
 		// Call after all dispatch methods complete. Release ordering ensures all
@@ -205,6 +188,7 @@ public:
 
 private:
 	void DispatchSpawnJobs(uint32_t frameNumber);
+	void DispatchActivateJobs(uint32_t frameNumber);
 	void DispatchConstructSpawnJobs(uint32_t frameNumber);
 	void DispatchConstructDestroyJobs(uint32_t frameNumber);
 	void DispatchCorrectionJobs(uint32_t frameNumber);
@@ -215,19 +199,13 @@ private:
 	/// Allocates a NetIndex, wires NetToRecord, sets the record's NetworkID.
 	EntityNetHandle AssignNetHandle(Registry* reg, GlobalEntityHandle gHandle, uint8_t ownerID = 0);
 
-	/// Static hook registered with ConstructRegistry::SetNetDestroyHook.
-	/// Fires on the Logic thread when a Construct is destroyed. Pushes the handle
-	/// into PendingConstructDestroys for Sentinel to drain on the next DispatchFrameJobs.
 	static void OnConstructDestroyed(void* ctx, ConstructNetHandle handle)
 	{
 		auto* self = static_cast<ReplicationSystem*>(ctx);
 		self->PendingConstructDestroys.Push(handle.Value);
 	}
 
-	// ---------------------------------------------------------------------------
-	// Minimal MPSC queue for ConstructNetHandle.Value (uint32_t).
 	// Logic thread pushes; Sentinel drains in DispatchFrameJobs.
-	// ---------------------------------------------------------------------------
 	struct ConstructDestroyQueue
 	{
 		struct Node
@@ -244,7 +222,6 @@ private:
 																		 std::memory_order_release, std::memory_order_relaxed));
 		}
 
-		// Drain into out (caller owns the values). Returns the count drained.
 		uint32_t Drain(std::vector<uint32_t>& out)
 		{
 			Node* list     = Head.exchange(nullptr, std::memory_order_acquire);
@@ -276,9 +253,7 @@ private:
 	WorldBase* AuthorityWorld       = nullptr;
 	ConstructRegistry* ConstructReg = nullptr; // Non-owning; set in RegisterConstruct, cleared in destructor
 
-	// The most recently published frame whose inputs are fully committed (no more rollback possible).
-	// Advanced by AuthoritySim::OnFramePublished each fixed tick.
-	// Step 7 (networked despawn) reads this to gate phase-1 graduation.
+	// Most recent frame with all player inputs committed — gates phase-1 networked despawn.
 	uint32_t CommittedFrameHorizon = 0;
 
 	// Per-Owner channels — created on connect, destroyed on disconnect.
@@ -291,7 +266,6 @@ private:
 	// Built at RegisterConstruct time with resolved EntityNetHandles.
 	std::vector<std::vector<uint8_t>> PendingConstructSpawns;
 
-	// Dirty entity cache — rebuilt on Sentinel each DispatchFrameJobs(), read-only by correction build jobs.
 	struct DirtyEntityInfo
 	{
 		uint32_t slabIndex;
@@ -301,7 +275,6 @@ private:
 
 	std::vector<DirtyEntityInfo> DirtyCache;
 
-	// Per-ownerID resim frame snapshot — rebuilt on Sentinel each DispatchFrameJobs(), read-only by correction build jobs.
 	struct ResimSnapshot
 	{
 		const SimFloat* posX  = nullptr;
@@ -328,6 +301,13 @@ private:
 	// Last frame number for which spawn/correction jobs were dispatched.
 	// Sentinel-only — no atomics needed.
 	uint32_t LastDispatchedFrame = 0;
+
+	// StateCorrection is sent only when a per-client resim is pending OR on a slow
+	// heartbeat to recover from any EntityDelta loss. EntityDelta covers per-frame
+	// state sync; the heartbeat is a consistency backstop, not the primary path.
+	// Default: 512 frames = 1 seconds at 512Hz. Tune per game.
+	uint32_t CorrectionHeartbeatFrames = 512;
+	uint32_t LastCorrectionHeartbeat   = 0; // Sentinel-only
 
 	// Per-frame diagnostics collected during each DispatchFrameJobs pass.
 	NetFrameStats Stats;

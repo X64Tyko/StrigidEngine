@@ -113,17 +113,14 @@ Archetype* Registry::GetOrCreateArchetype(const Signature& sig, const ClassID& i
 	TNX_ZONE_C(TNX_COLOR_MEMORY);
 	auto key = Archetype::ArchetypeKey(sig, id);
 
-	// Check if archetype already exists
 	auto It = Archetypes.find(key);
 	if (It)
 	{
 		return *It;
 	}
 
-	// Create new archetype
 	auto NewArchetype = new Archetype(sig, id);
 
-	// Set DebugName from the registered class name in ReflectionRegistry
 	{
 		const auto& cfr              = ReflectionRegistry::Get();
 		const std::string* debugName = nullptr;
@@ -138,7 +135,6 @@ Archetype* Registry::GetOrCreateArchetype(const Signature& sig, const ClassID& i
 		if (debugName) NewArchetype->DebugName = debugName->c_str();
 	}
 
-	// Build component layout from class ID
 	std::vector<ComponentMetaEx> Components;
 	auto& MR = ReflectionRegistry::Get();
 
@@ -225,7 +221,6 @@ void Registry::FreeGlobalHandle(GlobalEntityHandle gHandle)
 		return;
 	}
 
-	// Clear Tombstone flag if still set
 	ComponentCacheBase* cache  = GetTemporalCache();
 	TemporalFrameHeader* hdr   = cache->GetFrameHeader();
 	const ComponentTypeID slot = CacheSlotMeta<>::StaticTemporalIndex();
@@ -273,7 +268,6 @@ void Registry::ConfirmLocalRecycles()
 
 void Registry::ConfirmTombstone(uint32_t recordIndex)
 {
-	// Find the recordIndex in TombstoneRecordIndices and move it to PendingConfirmedDestructions
 	auto it = std::find(TombstoneRecordIndices.begin(), TombstoneRecordIndices.end(), recordIndex);
 	if (it == TombstoneRecordIndices.end())
 	{
@@ -281,7 +275,6 @@ void Registry::ConfirmTombstone(uint32_t recordIndex)
 		return;
 	}
 
-	// Build a GlobalEntityHandle from the record
 	EntityRecord* record = GlobalEntityRegistry.Records[recordIndex];
 	if (!record || !record->IsValid())
 	{
@@ -290,7 +283,6 @@ void Registry::ConfirmTombstone(uint32_t recordIndex)
 		return;
 	}
 
-	// Clear Tombstone flag in the cache slab
 	ComponentCacheBase* cache  = GetTemporalCache();
 	TemporalFrameHeader* hdr   = cache->GetFrameHeader();
 	const ComponentTypeID slot = CacheSlotMeta<>::StaticTemporalIndex();
@@ -371,7 +363,6 @@ void Registry::CreateInternal(ClassID classID, std::span<GlobalEntityHandle> out
 		Archetype::EntitySlot Slot = Slots[i];
 		GlobalEntityHandle GHandle = AllocateGlobalHandle();
 
-		// Populate record
 		EntityRecord& Record         = GlobalEntityRegistry.Records.findOrAdd(GHandle.GetIndex());
 		Record.Arch                  = arch;
 		Record.TargetChunk           = Slot.TargetChunk;
@@ -382,7 +373,6 @@ void Registry::CreateInternal(ClassID classID, std::span<GlobalEntityHandle> out
 		Record.EntityInfo.Generation = GHandle.GetGeneration();
 		Record.EntityInfo.ValidBit   = true;
 
-		// Cache index → global handle mapping
 		GlobalEntityRegistry.CacheToRecord.set(Slot.CacheIndex, GHandle);
 
 		outHandles[i] = GHandle;
@@ -402,7 +392,6 @@ void Registry::Destroy(EntityHandle lHandle)
 	EntityRecord* record = GlobalEntityRegistry.Records[index];
 	if (!record || !record->IsValid()) return;
 
-	// Set Tombstone flag in the cache slab
 	ComponentCacheBase* cache  = GetTemporalCache();
 	TemporalFrameHeader* hdr   = cache->GetFrameHeader();
 	const ComponentTypeID slot = CacheSlotMeta<>::StaticTemporalIndex();
@@ -425,7 +414,6 @@ void Registry::DestroyByGlobalHandle(GlobalEntityHandle gHandle)
 	EntityRecord* record = GlobalEntityRegistry.Records[index];
 	if (!record || !record->IsValid()) return;
 
-	// Set Tombstone flag in the cache slab
 	ComponentCacheBase* cache  = GetTemporalCache();
 	TemporalFrameHeader* hdr   = cache->GetFrameHeader();
 	const ComponentTypeID slot = CacheSlotMeta<>::StaticTemporalIndex();
@@ -606,7 +594,6 @@ void Registry::InitializeArchetypes()
 		{
 			NewArch = new Archetype(key);
 
-			// Set DebugName from the registered class name
 			{
 				const auto& cfr              = ReflectionRegistry::Get();
 				const std::string* debugName = nullptr;
@@ -631,28 +618,32 @@ void Registry::InitializeArchetypes()
 	}
 }
 
-void Registry::PropagateFrame(uint32_t currentFrame)
+void Registry::PropagateFrame(uint32_t currentFrame, bool bPreserveDirtiedFrame)
 {
 	TNX_ZONE_NC("Propagating Frame", TNX_COLOR_LOGIC)
 
 	TrinyxJobs::JobCounter PropagationCounter;
 #ifdef TNX_ENABLE_ROLLBACK
-	// Temporal cache: uses circular buffer strategy (defined in ComponentCache<Temporal>)
-	HistorySlab.PropagateFrame(PropagationCounter);
+	if (bPreserveDirtiedFrame)
+		// Scatter-copy only entities with DirtiedFrameBit; non-dirty entities in the
+		// destination slot retain their original-timeline data (no full memcpy).
+		HistorySlab.PropagateFrameResim(PropagationCounter);
+	else
+		HistorySlab.PropagateFrame(PropagationCounter);
 #endif
 
 	// Volatile cache: uses triple-buffer strategy with lock-based frame selection
 	// (defined in ComponentCache<Volatile>)
-	VolatileSlab.PropagateFrame(PropagationCounter);
+	if (!bPreserveDirtiedFrame)
+		VolatileSlab.PropagateFrame(PropagationCounter);
 
 	TrinyxJobs::WaitForCounter(&PropagationCounter, TrinyxJobs::Queue::Logic);
 
 	// ── Post-propagation dirty bit maintenance ──────────────────────────
-	// Bit 29 (DirtiedFrame): cleared unconditionally — it's per-frame only.
-	// Bit 30 (Dirty): cleared only if render has caught up (RenderAck >= LastPublishedFrame).
-	//
-	// After memcpy propagation, the new write frame has inherited all dirty bits.
-	// We clear here so this frame starts clean, and FieldProxy sets fresh bits.
+	// Skipped during rollback resim (bPreserveDirtiedFrame=true) so DirtiedFrame (bit 29)
+	// accumulates across all resim steps and marks every entity touched by the resimulation.
+	// After resim completes the normal path resumes and clears the accumulated bits.
+	if (!bPreserveDirtiedFrame)
 	{
 		TNX_ZONE_NC("Clear Dirty Bits", TNX_COLOR_LOGIC)
 
@@ -692,6 +683,37 @@ void Registry::PropagateFrame(uint32_t currentFrame)
 		}
 	}
 }
+
+#ifdef TNX_ENABLE_ROLLBACK
+void Registry::ClearDirtiedFrameBits()
+{
+	ComponentCacheBase* flagsCache  = GetTemporalCache();
+	TemporalFrameHeader* writeHdr   = flagsCache->GetFrameHeader();
+	const ComponentTypeID flagsSlot = CacheSlotMeta<>::StaticTemporalIndex();
+	auto* flags                     = static_cast<int32_t*>(flagsCache->GetFieldData(writeHdr, flagsSlot, 0));
+
+	if (!flags) return;
+
+	const size_t entityCount    = flagsCache->GetMaxCachedEntityCount();
+	using FlagTraits            = SIMDTraits<int32_t, FieldWidth::Wide>;
+	using FlagVec               = typename FlagTraits::VecType;
+	const size_t stride         = kSIMDWide32Lanes;
+	const size_t simdCount      = entityCount / stride;
+	const size_t remainder      = entityCount % stride;
+	const int32_t clearMask     = ~static_cast<int32_t>(TemporalFlagBits::DirtiedFrame);
+	const FlagVec vMask         = FlagTraits::set1(clearMask);
+
+	for (size_t i = 0; i < simdCount; ++i)
+	{
+		auto* p = flags + i * stride;
+		FlagTraits::store(p, WideMaskType{}, FlagTraits::bitand_(FlagTraits::load(p), vMask));
+	}
+	for (size_t i = simdCount * stride; i < simdCount * stride + remainder; ++i)
+	{
+		flags[i] &= clearMask;
+	}
+}
+#endif
 
 // Hard reset — wipes all entities, handles, free lists, caches, and archetype data.
 // Skips the normal deferred destruction path. Used by tests.
@@ -880,6 +902,13 @@ bool Registry::CheckAndCorrectEntityTransform(const EntityTransformCorrection& c
 			default: break;
 		}
 	}
+
+	// Mark corrected entity as resim-dirtied so the selective sweep and scatter
+	// propagation process it in every subsequent resim step.
+	auto* flagsArr = static_cast<int32_t*>(fieldArrayTable[0]);
+	if (flagsArr)
+		flagsArr[localIdx] |= static_cast<int32_t>(TemporalFlagBits::DirtiedFrame);
+
 	return true;
 }
 

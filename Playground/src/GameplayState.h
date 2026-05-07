@@ -9,20 +9,17 @@
 
 #include <string>
 
-// ---------------------------------------------------------------------------
-// GameplayState — The default in-game state for Playground.
-//
-// Requires a World (NeedsWorld = true). On entry, loads the scene specified
-// by EngineConfig::DefaultScene — but only if this is the server or standalone.
-// Clients wait for TravelNotify from the server, then load the level via
-// OnNetEvent so the path is always the authoritative server path.
-// ---------------------------------------------------------------------------
+/// @brief Default in-game @ref FlowState for Playground.
+///
+/// On @c OnEnter, the Authority or standalone player loads @c EngineConfig::DefaultScene
+/// and activates @c ArenaMode. Owner worlds defer level loading until the server
+/// sends @c TravelNotify — guaranteeing that all clients load the same scene path.
 class GameplayState : public FlowState
 {
 public:
 	void OnEnter(FlowManagerBase& flow, WorldBase* world) override
 	{
-		FlowState::OnEnter(flow, world); // caches Flow
+		FlowState::OnEnter(flow, world);
 
 		const EngineConfig* cfg = Flow->GetConfig();
 		if (cfg->DefaultScene[0] == '\0' || cfg->ProjectDir[0] == '\0')
@@ -69,7 +66,7 @@ public:
 
 	StateRequirements GetRequirements() const override
 	{
-		return {.NeedsWorld = true, .NeedsLevel = true, .SweepsAliveFlagsOnServerReady = true};
+		return {.NeedsWorld = true, .NeedsLevel = true};
 	}
 
 	const char* GetName() const override { return "GameplayState"; }

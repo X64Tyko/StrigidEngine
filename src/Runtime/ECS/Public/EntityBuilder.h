@@ -12,47 +12,65 @@
 
 class Registry;
 
-// Data-driven entity spawning from JSON.
-//
-// Reads entity type names and component field values from JSON, resolves them
-// to integer IDs via MetaRegistry/ComponentFieldRegistry, and hydrates field
-// arrays through the existing reflection system. String comparison happens
-// only here at the load boundary — runtime uses integer IDs exclusively.
-//
-// Must be called within a SpawnSync callback or before threads start.
+/// @brief Data-driven entity spawning from JSON scene and prefab files.
+///
+/// Reads entity type names and component field values from JSON, resolves them
+/// to integer IDs via @ref ReflectionRegistry, and hydrates field arrays through
+/// the existing reflection system. String comparisons happen only at the load
+/// boundary — all runtime paths use integer IDs.
+///
+/// All spawn methods must be called within a @c SpawnSync callback or before
+/// engine threads start.
 
 class Archetype;
 
 struct EntityBuilder
 {
-	// --- Load ---
-
-	// Spawn a single entity from a JSON object.
-	// Expected format:
-	//   { "type": "CubeEntity", "components": { "TransRot": { "PosX": 1.0, ... }, ... } }
-	// bBackground: entity is Alive but not Active — won't tick or render until an
-	// explicit Alive→Active sweep (used for background/client level loads).
-	// Returns the created EntityID, or an invalid ID on failure.
+	/// @brief Spawn a single entity from a JSON object.
+	///
+	/// Expected format: @code { "type": "CubeEntity", "components": { "CTransform": { "PosX": 1.0, ... } } } @endcode
+	///
+	/// @param bBackground If true, entity is @c Alive but not @c Active — will not
+	///        tick or render until an explicit Alive→Active sweep.
+	/// @return The created handle, or an invalid handle on failure.
 	static EntityHandle SpawnEntity(Registry* reg, const JsonValue& entityJson, bool bBackground = false);
 
-	// Spawn all entities described in a scene JSON.
-	// Expected format:
-	//   { "name": "SceneName", "entities": [ { "type": "...", "components": { ... } }, ... ] }
-	// bBackground: see SpawnEntity.
-	// Returns the number of entities successfully spawned.
+	/// @brief Spawn all entities described in a scene JSON.
+	///
+	/// Expected format: @code { "name": "SceneName", "entities": [ ... ] } @endcode
+	///
+	/// @param bBackground Passed through to each @ref SpawnEntity call.
+	/// @return Number of entities successfully spawned.
 	static size_t SpawnScene(Registry* reg, const JsonValue& sceneJson, bool bBackground = false);
 
-	// Load a .prefab or .tnxscene file from disk and spawn its contents.
-	// Returns the number of entities spawned (1 for prefab, N for scene).
-	// bBackground: see SpawnEntity. File I/O and JSON parse are synchronous on the
-	// calling thread — true async parsing is a future improvement.
+	/// @brief Load a @c .prefab or @c .tnxscene file from disk and spawn its contents.
+	///
+	/// File I/O and JSON parse are synchronous on the calling thread.
+	///
+	/// @param bBackground See @ref SpawnEntity.
+	/// @return Number of entities spawned (1 for prefab, N for scene).
 	static size_t SpawnFromFile(Registry* reg, const char* filePath, bool bBackground = false);
 
-	// Like SpawnFromFile but collects the GlobalEntityHandle of each spawned entity into outHandles.
+	/// @brief Background-load a content chunk by @ref AssetID and register spawned handles.
+	///
+	/// @c InstanceIndex disambiguates multiple simultaneous loads of the same asset.
+	/// Must be called from a logic-thread-synchronized context (@c SpawnAndWait / @c PostAndWait).
+	///
+	/// @return Number of entities spawned.
+	static size_t StreamChunkTracked(Registry* reg, const AssetID& assetID, uint16_t instanceIndex = 0);
+
+	/// @brief Activate entities registered by @ref StreamChunkTracked for @c (assetID, instanceIndex).
+	///
+	/// Sets @c Active|Dirty|DirtiedFrame on each slot. Returns slab indices for rollback event replay.
+	/// Must be called from a logic-thread-synchronized context.
+	static std::vector<uint32_t> ActivateStreamedChunk(Registry* reg, int64_t assetIDRaw, uint16_t instanceIndex = 0);
+
+	/// @brief Like @ref SpawnFromFile but also collects @ref GlobalEntityHandle of each spawned entity.
+	/// @param[out] outHandles Receives a handle per successfully spawned entity.
 	static size_t SpawnFromFileTracked(Registry* reg, const char* filePath, bool bBackground,
 									   std::vector<GlobalEntityHandle>& outHandles);
 
-	// Load by AssetID — resolves path via AssetRegistry::ResolvePath.
+	/// @brief Load by @ref AssetID — resolves the path via @c AssetRegistry::ResolvePath.
 	static size_t SpawnFromAsset(Registry* reg, const AssetID& id, bool bBackground = false)
 	{
 		std::string path = AssetRegistry::Get().ResolvePath(id);
@@ -60,9 +78,11 @@ struct EntityBuilder
 		return SpawnFromFile(reg, path.c_str(), bBackground);
 	}
 
-	// Typed prefab spawn — loads a single-entity prefab from an AssetID and creates
-	// an entity of type TEntity. Asset-ref fields stored as strings are wired through
-	// the checkout system. Use from ConstructView::Initialize(owner, assetID).
+	/// @brief Typed prefab spawn from an @ref AssetID.
+	///
+	/// Loads a single-entity prefab and creates an entity of type @c TEntity.
+	/// Asset-ref fields are resolved through the checkout system.
+	/// Typically called from @c ConstructView::Initialize(owner, assetID).
 	template <template <FieldWidth> class TEntity>
 	static EntityHandle SpawnTyped(Registry* reg, AssetID prefabID, bool bBackground = false)
 	{
@@ -76,34 +96,32 @@ struct EntityBuilder
 		return SpawnEntityFromFile(reg, path.c_str(), bBackground);
 	}
 
-	// Load a single-entity prefab from a file path and spawn it.
-	// Returns an invalid handle if the file is a scene or construct prefab.
+	/// @brief Load a single-entity prefab from a file path and spawn it.
+	/// @return Invalid handle if the file is a scene or construct prefab.
 	static EntityHandle SpawnEntityFromFile(Registry* reg, const char* filePath, bool bBackground = false);
 
-	// --- Scene metadata ---
-
+	/// @brief Scene-level metadata parsed without spawning any entities.
 	struct SceneMeta
 	{
 		std::string Name;
-		std::string DefaultState; // FlowState to load (empty = none)
-		std::string DefaultMode;  // GameMode to activate (empty = none)
+		std::string DefaultState; ///< FlowState name to activate (empty = none).
+		std::string DefaultMode;  ///< GameMode name to activate (empty = none).
 	};
 
-	// Parse scene-level metadata from a JSON scene without spawning entities.
+	/// @brief Parse scene-level metadata from a JSON scene without spawning entities.
 	static SceneMeta ParseSceneMeta(const JsonValue& sceneJson);
 
-	// --- Save ---
-
-	// Serialize a single entity at the given local index within a chunk.
-	// Returns a JSON object: { "type": "...", "components": { ... } }
+	/// @brief Serialize a single entity at a given slot within an archetype chunk.
+	/// @return JSON object: @code { "type": "...", "components": { ... } } @endcode
 	static JsonValue SerializeEntity(Registry* reg, Archetype* arch, size_t chunkIdx, uint32_t localIndex);
 
-	// Serialize all entities in the registry into a scene JSON.
-	// Returns: { "name": "...", "entities": [ ... ], "defaultState": "...", "defaultMode": "..." }
+	/// @brief Serialize all entities in the registry into a scene JSON document.
+	/// @return JSON: @code { "name": "...", "entities": [ ... ], "defaultState": "...", "defaultMode": "..." } @endcode
 	static JsonValue SerializeScene(Registry* reg, const char* sceneName,
 									const char* defaultState = nullptr, const char* defaultMode = nullptr);
 
-	// Save a scene to disk. Returns true on success.
+	/// @brief Save a scene to disk.
+	/// @return @c true on success.
 	static bool SaveToFile(Registry* reg, const char* sceneName, const char* filePath,
 						   const char* defaultState = nullptr, const char* defaultMode = nullptr);
 };

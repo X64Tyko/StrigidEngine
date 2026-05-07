@@ -5,48 +5,34 @@
 class WorldBase;
 class FlowManagerBase;
 
-// ---------------------------------------------------------------------------
-// StateRequirements — Declares what engine subsystems a state needs.
-//
-// Each FlowState subclass overrides GetRequirements() to declare its needs.
-// FlowManager uses these during transitions to create/destroy/preserve
-// subsystems. If a transition moves from a state that requires a World to
-// one that doesn't, the World is destroyed (and all World-scoped Constructs
-// with it). If both states require a World, it survives the transition.
-// ---------------------------------------------------------------------------
+/// @brief Declares which engine subsystems a @ref FlowState requires.
+///
+/// @ref FlowManagerBase reads this during transitions to create, preserve, or
+/// destroy subsystems. If the incoming state requires a World and the outgoing
+/// state already has one, the World survives. If the incoming state does not
+/// need a World, the existing World (and all its scoped Constructs) is destroyed.
 struct StateRequirements
 {
-	bool NeedsWorld                    = false; // Registry, Physics, Logic thread
-	bool NeedsLevel                    = false; // A .tnxscene loaded into the World
-	bool NeedsNetSession               = false; // Active network connection
-	bool AllowsSouls                   = true;  // Souls persist through this state
-	bool SweepsAliveFlagsOnServerReady = false; // used for activating entities after background load
+	bool NeedsWorld      = false; ///< Requires Registry, Physics, and Logic thread.
+	bool NeedsLevel      = false; ///< Requires a @c .tnxscene loaded into the World.
+	bool NeedsNetSession = false; ///< Requires an active network connection.
+	bool AllowsSouls     = true;  ///< Souls (player identities) persist through this state.
 };
 
-// ---------------------------------------------------------------------------
-// FlowState — Base class for structural application states.
-//
-// States drive the application. A FlowState is the top-level context that
-// determines what the engine is doing right now: main menu, loading screen,
-// in-game, post-match summary, etc.
-//
-// States form a stack managed by FlowManager:
-//   - TransitionTo() replaces the current state
-//   - PushState()    pushes an overlay (pause menu over gameplay)
-//   - PopState()     returns to the previous state
-//
-// Lifecycle:
-//   1. FlowManager creates the state
-//   2. OnEnter() — state sets up its context (UI, world, etc.)
-//   3. Tick() — called each frame while active
-//   4. OnExit() — state tears down, FlowManager enforces requirements
-//
-// States do NOT own Worlds or NetSessions directly. They declare what
-// they need via GetRequirements(), and FlowManager manages lifetimes.
-// This prevents dangling references and enforces clean transitions.
-//
-// Thread safety: all FlowState methods run on the Sentinel (main) thread.
-// ---------------------------------------------------------------------------
+/// @brief Base class for structural application states.
+///
+/// A @c FlowState is the top-level context that determines what the engine is
+/// doing: main menu, loading screen, in-game, post-match, etc.
+///
+/// States form a stack managed by @ref FlowManagerBase:
+/// - @c TransitionTo() — replaces the entire stack with a new state.
+/// - @c PushState() — pushes an overlay (e.g. pause menu over gameplay).
+/// - @c PopState() — returns to the previous state.
+///
+/// States declare their subsystem needs via @ref GetRequirements(); the manager
+/// creates and destroys Worlds, NetSessions, etc. as states transition in/out.
+///
+/// All methods run on the Sentinel (main) thread.
 class FlowState
 {
 public:

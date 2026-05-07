@@ -63,12 +63,6 @@ void ReplicationSystem::AddPendingResim(uint8_t ownerID, uint32_t serverFrame)
 	}
 }
 
-// ---------------------------------------------------------------------------
-// DispatchFrameJobs — called from Sentinel on every loop tick.
-// Fires spawn/correction build jobs for each newly published logic frame.
-// Only does work when LastPublishedFrame has advanced past LastDispatchedFrame.
-// ---------------------------------------------------------------------------
-
 void ReplicationSystem::DispatchFrameJobs()
 {
 	if (!AuthorityWorld) return;
@@ -82,6 +76,7 @@ void ReplicationSystem::DispatchFrameJobs()
 	Stats.Reset();
 
 	DispatchSpawnJobs(published);
+	DispatchActivateJobs(published);
 	DispatchConstructSpawnJobs(published);
 	DispatchConstructDestroyJobs(published);
 	DispatchCorrectionJobs(published);
@@ -94,21 +89,11 @@ void ReplicationSystem::DispatchFrameJobs()
 	LastDispatchedFrame = published;
 }
 
-// ---------------------------------------------------------------------------
-// Flush — called from Sentinel at NetworkUpdateHz.
-// Drains each channel's send queue to the wire.
-// ---------------------------------------------------------------------------
-
 void ReplicationSystem::Flush(NetConnectionManager* connMgr)
 {
 	if (!AuthorityWorld || !connMgr) return;
 	FlushSendQueues(connMgr);
 }
-
-// ---------------------------------------------------------------------------
-// DispatchConstructSpawnJobs — per-channel build jobs for pending ConstructSpawn payloads.
-// Sentinel: stamps header, dispatches job. Job: patches SpawnFrame, pushes PendingPacket.
-// ---------------------------------------------------------------------------
 
 void ReplicationSystem::DispatchConstructSpawnJobs(uint32_t frameNumber)
 {
@@ -164,10 +149,6 @@ void ReplicationSystem::DispatchConstructSpawnJobs(uint32_t frameNumber)
 	PendingConstructSpawns.clear();
 }
 
-// ---------------------------------------------------------------------------
-// RegisterEntity / AssignNetHandle — pre-register a server entity with a NetHandle
-// ---------------------------------------------------------------------------
-
 void ReplicationSystem::RegisterEntity(Registry* reg, EntityHandle localHandle, uint8_t ownerID)
 {
 	GlobalEntityHandle gHandle = reg->GlobalEntityRegistry.LookupGlobalHandle(localHandle);
@@ -195,20 +176,9 @@ EntityNetHandle ReplicationSystem::AssignNetHandle(Registry* reg, GlobalEntityHa
 	return netHandle;
 }
 
-// ---------------------------------------------------------------------------
-// SendSpawns — reliable EntitySpawn for entities not yet replicated
-// ---------------------------------------------------------------------------
-
-// ---------------------------------------------------------------------------
-// DispatchSpawnJobs — per-channel build jobs for entity spawns.
-//
-// Pass 1 (initial flush): Sentinel scans entities, marks Replicated[], transitions
-// RepState, then dispatches a job to build+push the payload.
-// Pass 2 (incremental): Sentinel scans unreplicated entities per channel, marks them,
-// then dispatches a job to build+push the payload.
+// Initial flush: all Alive entities → Owner; ServerReady triggers bulk Alive→Active.
+// Incremental: Active|Alive → live immediately; Alive-only → queued PendingActivations.
 // AssignNetHandle mutations stay on Sentinel — registry writes cannot go to jobs.
-// ---------------------------------------------------------------------------
-
 void ReplicationSystem::DispatchSpawnJobs(uint32_t frameNumber)
 {
 	if (!TrinyxJobs::IsRunning()) return;
@@ -249,8 +219,6 @@ void ReplicationSystem::DispatchSpawnJobs(uint32_t frameNumber)
 	const uint32_t maxEntities = temporalCache->GetMaxCachedEntityCount();
 	const uint32_t horizon     = CommittedFrameHorizon;
 
-	// Sentinel pre-scan: assign net handles (registry mutation) and collect candidates.
-	// IsReplicated/MarkReplicated run per-connection inside each job.
 	struct SpawnCandidate
 	{
 		uint32_t slabIndex;
@@ -269,6 +237,7 @@ void ReplicationSystem::DispatchSpawnJobs(uint32_t frameNumber)
 	std::vector<DestroyCandidate> allDestroys;
 	allCandidates.reserve(64);
 
+	const int32_t Active        = static_cast<int32_t>(TemporalFlagBits::Active);
 	const int32_t Alive         = static_cast<int32_t>(TemporalFlagBits::Alive);
 	const int32_t Replicated    = static_cast<int32_t>(TemporalFlagBits::Replicated);
 	const int32_t Tombstoned    = static_cast<int32_t>(TemporalFlagBits::Tombstone);
@@ -282,16 +251,10 @@ void ReplicationSystem::DispatchSpawnJobs(uint32_t frameNumber)
 
 		if (f & Tombstoned)
 		{
-			// Tombstoned entities enter the net destruction cycle regardless of Alive state.
-			// Alive is still set until deferred destroy reclaims the slot.
 			if (!(f & ConfirmedDead))
 			{
-				// Tombstone not yet confirmed — post a world queue job to stamp
-				// NetConfirmedDead once CommittedFrameHorizon has passed this frame.
-				// The flag will be visible in the next published frame.
 				if (horizon >= frameNumber)
 				{
-					// Already past horizon — stamp immediately via Logic.
 					const uint32_t slotIdx = i;
 					AuthorityWorld->Post([reg, slotIdx](uint32_t)
 					{
@@ -303,11 +266,9 @@ void ReplicationSystem::DispatchSpawnJobs(uint32_t frameNumber)
 						reg->ConfirmTombstone(slotIdx);
 					});
 				}
-				// else: horizon hasn't passed yet — will be picked up next tick
 			}
 			else
 			{
-				// Confirmed dead — collect for EntityDestroy this pass.
 				GlobalEntityHandle gH = reg->GlobalEntityRegistry.LookupGlobalHandle(static_cast<EntityCacheHandle>(i));
 				EntityRecord* record  = reg->GlobalEntityRegistry.Records[gH.GetIndex()];
 				if (!record) continue;
@@ -317,7 +278,6 @@ void ReplicationSystem::DispatchSpawnJobs(uint32_t frameNumber)
 		}
 		else if (f & Alive)
 		{
-			// Live replicated entity — collect for spawn/state replication.
 			GlobalEntityHandle gH = reg->GlobalEntityRegistry.LookupGlobalHandle(static_cast<EntityCacheHandle>(i));
 			EntityRecord* record  = reg->GlobalEntityRegistry.Records[gH.GetIndex()];
 			if (!record || !record->IsValid()) continue;
@@ -332,10 +292,18 @@ void ReplicationSystem::DispatchSpawnJobs(uint32_t frameNumber)
 		}
 	}
 
-	if (allCandidates.empty() && allDestroys.empty()) return;
+	// ServerReady must reach LevelLoaded channels even with no spawn candidates —
+	// scene entities aren't individually Replicated; the client loads the scene file itself.
+	bool anyInitialFlush = false;
+	for (uint8_t oid : ActiveOwnerIDs)
+	{
+		if (ServerClientChannel* ch = GetChannelIfActive(oid))
+			if (ch->CI && ch->CI->RepState == ClientRepState::LevelLoaded && !ch->CI->bInitialSpawnFlushed)
+				anyInitialFlush = true;
+	}
 
-	// Per-connection: stamp state transitions + headers on Sentinel, then dispatch the build job.
-	// Each job is the sole writer to its channel's Replicated[] bitfield.
+	if (allCandidates.empty() && allDestroys.empty() && !anyInitialFlush) return;
+
 	struct SpawnCapture
 	{
 		ServerClientChannel* Channel;
@@ -344,7 +312,7 @@ void ReplicationSystem::DispatchSpawnJobs(uint32_t frameNumber)
 		PacketHeader ReadyHeader;
 		std::vector<SpawnCandidate> Candidates;
 		std::vector<DestroyCandidate> Destroys;
-		bool bPass1;
+		bool bInitialFlush;
 		const int32_t* flags;
 		const SimFloat* posX;
 		const SimFloat* posY;
@@ -370,9 +338,9 @@ void ReplicationSystem::DispatchSpawnJobs(uint32_t frameNumber)
 		ServerClientChannel* ch = GetChannelIfActive(oid);
 		if (!ch || !ch->CI) continue;
 
-		const bool bPass1 = ch->CI->RepState == ClientRepState::LevelLoaded && !ch->CI->bInitialSpawnFlushed;
-		const bool bPass2 = ch->CI->RepState >= ClientRepState::Loaded && ch->CI->bInitialSpawnFlushed;
-		if (!bPass1 && !bPass2) continue;
+		const bool bInitialFlush = ch->CI->RepState == ClientRepState::LevelLoaded && !ch->CI->bInitialSpawnFlushed;
+		const bool bIncremental  = ch->CI->RepState >= ClientRepState::Loaded && ch->CI->bInitialSpawnFlushed;
+		if (!bInitialFlush && !bIncremental) continue;
 
 		ch->EnsureCapacity(maxEntities);
 		const uint32_t clientFrame = ch->CI->ToClientFrame(frameNumber);
@@ -381,28 +349,36 @@ void ReplicationSystem::DispatchSpawnJobs(uint32_t frameNumber)
 		PacketHeader destroyHdr = ch->Channel.PrepareHeader(NetMessageType::EntityDestroy, 0, clientFrame);
 		PacketHeader readyHdr{};
 
-		if (bPass1)
+		if (bInitialFlush)
 		{
 			readyHdr = ch->Channel.PrepareHeader(NetMessageType::FlowEvent, sizeof(FlowEventPayload), clientFrame);
 
 			ch->CI->bInitialSpawnFlushed = true;
 			ch->CI->RepState             = ClientRepState::Loaded;
 
-			Soul* soul                   = serverFlow ? serverFlow->GetSoul(oid) : nullptr;
-			const FlowState* activeState = serverFlow ? serverFlow->GetActiveState() : nullptr;
-			if (activeState && activeState->GetRequirements().SweepsAliveFlagsOnServerReady && AuthorityWorld)
+			Soul* soul     = serverFlow ? serverFlow->GetSoul(oid) : nullptr;
+			Registry* lReg = AuthorityWorld->GetRegistry();
+			AuthorityWorld->PostAndWait([lReg, soul](uint32_t)
 			{
-				Registry* lReg = AuthorityWorld->GetRegistry();
-				AuthorityWorld->PostAndWait([lReg, soul](uint32_t)
-				{
-					int count = lReg->SweepAliveFlagsToActive();
-					LOG_NET_INFO_F(soul, "[Replication] ServerReady: server swept %d Alive→Active", count);
-				});
+				int count = lReg->SweepAliveFlagsToActive();
+				LOG_NET_INFO_F(soul, "[Replication] ServerReady: authority swept %d Alive→Active", count);
+			});
+
+			ch->PendingActivations.reserve(allCandidates.size());
+			for (const auto& cand : allCandidates)
+				ch->PendingActivations.push_back(cand.netHandle.Value);
+		}
+		else
+		{
+			for (const auto& cand : allCandidates)
+			{
+				if (!(flags[cand.slabIndex] & Active))
+					ch->PendingActivations.push_back(cand.netHandle.Value);
 			}
 		}
 
 		auto* cap = new SpawnCapture{
-			ch, spawnHdr, destroyHdr, readyHdr, allCandidates, allDestroys, bPass1,
+			ch, spawnHdr, destroyHdr, readyHdr, allCandidates, allDestroys, bInitialFlush,
 			flags, posX, posY, posZ, rotQx, rotQy, rotQz, rotQw,
 			scX, scY, scZ, colR, colG, colB, colA, meshID
 		};
@@ -416,12 +392,13 @@ void ReplicationSystem::DispatchSpawnJobs(uint32_t frameNumber)
 			{
 				const uint32_t i = cand.slabIndex;
 
-				if (!cap->bPass1 && cap->Channel->IsReplicated(i)) continue;
+				if (!cap->bInitialFlush && cap->Channel->IsReplicated(i)) continue;
 				cap->Channel->MarkReplicated(i);
 
-				const uint32_t flagBits = cap->bPass1
-											  ? static_cast<uint32_t>(TemporalFlagBits::Alive)
-											  : static_cast<uint32_t>(TemporalFlagBits::Active | TemporalFlagBits::Alive);
+				const bool bEntityActive   = (cap->flags[i] & static_cast<int32_t>(TemporalFlagBits::Active)) != 0;
+				const uint32_t flagBits = (!cap->bInitialFlush && bEntityActive)
+											  ? static_cast<uint32_t>(TemporalFlagBits::Active | TemporalFlagBits::Alive)
+											  : static_cast<uint32_t>(TemporalFlagBits::Alive);
 
 				EntitySpawnPayload entry{};
 				entry.NetHandle  = cand.netHandle.Value;
@@ -456,10 +433,9 @@ void ReplicationSystem::DispatchSpawnJobs(uint32_t frameNumber)
 				cap->Channel->SendQueue.Push(std::move(pkt));
 
 				LOG_NET_DEBUG_F(nullptr, "[Replication] %zu %s EntitySpawn(s) queued",
-								batch.size(), cap->bPass1 ? "initial" : "incremental");
+								batch.size(), cap->bInitialFlush ? "initial" : "incremental");
 			}
 
-			// EntityDestroy — send for any confirmed-dead entities this client knew about.
 			{
 				std::vector<uint32_t> destroyBatch;
 				destroyBatch.reserve(cap->Destroys.size());
@@ -484,7 +460,7 @@ void ReplicationSystem::DispatchSpawnJobs(uint32_t frameNumber)
 				}
 			}
 
-			if (cap->bPass1)
+			if (cap->bInitialFlush)
 			{
 				FlowEventPayload serverReadyMsg{};
 				serverReadyMsg.EventID = static_cast<uint8_t>(FlowEventID::ServerReady);
@@ -506,11 +482,43 @@ void ReplicationSystem::DispatchSpawnJobs(uint32_t frameNumber)
 	if (!allDestroys.empty()) reg->ConfirmNetRecycles();
 }
 
-// ---------------------------------------------------------------------------
-// DispatchConstructDestroyJobs — drain PendingConstructDestroys (pushed by
-// OnConstructDestroyed hook on the Logic thread) and send ConstructDestroy
-// packets to all loaded Owners.
-// ---------------------------------------------------------------------------
+void ReplicationSystem::DispatchActivateJobs(uint32_t frameNumber)
+{
+	if (!TrinyxJobs::IsRunning()) return;
+
+	for (uint8_t oid : ActiveOwnerIDs)
+	{
+		ServerClientChannel* ch = GetChannelIfActive(oid);
+		if (!ch || !ch->CI) continue;
+		if (ch->CI->RepState != ClientRepState::Playing) continue;
+		if (ch->PendingActivations.empty()) continue;
+
+		const uint32_t clientFrame = ch->CI->ToClientFrame(frameNumber);
+		PacketHeader hdr = ch->Channel.PrepareHeader(NetMessageType::EntityActivate, 0, clientFrame);
+
+		struct Capture
+		{
+			ServerClientChannel* Channel;
+			PacketHeader Header;
+			std::vector<uint32_t> Handles;
+		};
+		auto* cap = new Capture{ch, hdr, std::move(ch->PendingActivations)};
+
+		TrinyxJobs::Dispatch([cap](uint32_t)
+		{
+			PendingPacket pkt;
+			pkt.Header             = cap->Header;
+			pkt.Header.PayloadSize = static_cast<uint16_t>(cap->Handles.size() * sizeof(uint32_t));
+			pkt.Payload.resize(cap->Handles.size() * sizeof(uint32_t));
+			std::memcpy(pkt.Payload.data(), cap->Handles.data(), pkt.Payload.size());
+			pkt.Reliable = true;
+			cap->Channel->SendQueue.Push(std::move(pkt));
+
+			LOG_NET_DEBUG_F(nullptr, "[Replication] %zu EntityActivate(s) queued", cap->Handles.size());
+			delete cap;
+		}, &BuildCounter, TrinyxJobs::Queue::General);
+	}
+}
 
 void ReplicationSystem::DispatchConstructDestroyJobs(uint32_t frameNumber)
 {
@@ -557,10 +565,6 @@ void ReplicationSystem::DispatchConstructDestroyJobs(uint32_t frameNumber)
 	}
 }
 
-// build job per active channel. Jobs filter by per-client Replicated[] and push
-// the correction packet to the channel's send queue.
-// ---------------------------------------------------------------------------
-
 void ReplicationSystem::DispatchCorrectionJobs(uint32_t frameNumber)
 {
 	if (!TrinyxJobs::IsRunning()) return;
@@ -587,7 +591,6 @@ void ReplicationSystem::DispatchCorrectionJobs(uint32_t frameNumber)
 	const uint32_t maxEntities = temporalCache->GetMaxCachedEntityCount();
 	const uint32_t ringSize    = temporalCache->GetTotalFrameCount();
 
-	// Rebuild ResimCache for this flush — only active owners need checking.
 	for (uint8_t oid : ActiveOwnerIDs)
 	{
 		ResimCache[oid]          = {};
@@ -605,7 +608,6 @@ void ReplicationSystem::DispatchCorrectionJobs(uint32_t frameNumber)
 		ResimCache[oid].rotQw         = static_cast<const SimFloat*>(temporalCache->GetFieldData(resimHdr, transformSlot, 6));
 	}
 
-	// Rebuild DirtyCache — one pass over all entities on Sentinel, shared by all correction jobs.
 	DirtyCache.clear();
 	DirtyCache.reserve(128);
 
@@ -631,8 +633,12 @@ void ReplicationSystem::DispatchCorrectionJobs(uint32_t frameNumber)
 
 	if (DirtyCache.empty()) return;
 
-	// Dispatch one correction build job per active channel.
-	// Jobs are read-only on DirtyCache, ResimCache, and slab ptrs.
+	// StateCorrection is expensive (fixed 64B per entity). Send it only when a
+	// per-client resim is pending (immediate rollback trigger) or on a slow
+	// heartbeat. EntityDelta handles every-frame state sync for the normal path.
+	const bool bHeartbeat = (frameNumber - LastCorrectionHeartbeat >= CorrectionHeartbeatFrames);
+	if (bHeartbeat) { LastCorrectionHeartbeat = frameNumber; Stats.bHeartbeatFired = true; }
+
 	const DirtyEntityInfo* dirtyPtr = DirtyCache.data();
 	const uint32_t dirtyCount       = static_cast<uint32_t>(DirtyCache.size());
 	const ResimSnapshot* resimPtr   = ResimCache;
@@ -664,6 +670,8 @@ void ReplicationSystem::DispatchCorrectionJobs(uint32_t frameNumber)
 		const uint32_t clientFrame = ch->CI->ToClientFrame(frameNumber);
 		const uint32_t lastAcked   = ch->CI->LastAckedClientFrame;
 		const bool bClientHasResim = ResimCache[oid].delta > 0;
+
+		if (!bClientHasResim && !bHeartbeat) continue;
 
 		PacketHeader hdr = ch->Channel.PrepareHeader(
 			NetMessageType::StateCorrection, 0, clientFrame);
@@ -734,26 +742,10 @@ void ReplicationSystem::DispatchCorrectionJobs(uint32_t frameNumber)
 	}
 }
 
-// ---------------------------------------------------------------------------
-// DispatchDeltaCorrectionJobs — per-component delta corrections for dirty entities.
-//
-// Wire format (NetMessageType::EntityDelta, unreliable):
-//   uint16_t EntityCount
-//   For each entity:
-//     uint32_t NetHandle
-//     uint8_t  ComponentCount   — how many components follow
-//     For each changed component:
-//       uint8_t  CacheSlot      — StaticTemporalIndex() of the component
-//       uint8_t  DeltaLen       — byte count of the delta payload
-//       [DeltaLen bytes]        — mask + changed field values from DeltaSerialize
-//
-// Baseline frame: ch->LastAckedSimFrame.  Current frame: frameNumber (published).
-// Components with no changed fields (zero mask) are omitted from the packet.
-// Entities with no changed components are omitted from the packet.
-//
-// Must be called AFTER DispatchCorrectionJobs so DirtyCache is populated.
-// ---------------------------------------------------------------------------
-
+// Wire format (EntityDelta, unreliable): uint16_t EntityCount | per entity: uint32_t NetHandle,
+// uint8_t ComponentCount | per component: uint8_t CacheSlot, uint8_t DeltaLen, [DeltaLen bytes].
+// Baseline: ch->LastAckedSimFrame. Zero-mask or zero-component entities are omitted.
+// Must run after DispatchCorrectionJobs (DirtyCache must be populated).
 void ReplicationSystem::DispatchDeltaCorrectionJobs(uint32_t frameNumber)
 {
 	if (!TrinyxJobs::IsRunning()) return;
@@ -767,7 +759,6 @@ void ReplicationSystem::DispatchDeltaCorrectionJobs(uint32_t frameNumber)
 		temporalCache->GetFrameHeader(temporalCache->GetActiveReadFrame());
 	if (!currentHdr) return;
 
-	// Snapshot registered delta components once on Sentinel; jobs are read-only.
 	struct ComponentInfo
 	{
 		ComponentDeltaFns Fns;
@@ -820,11 +811,9 @@ void ReplicationSystem::DispatchDeltaCorrectionJobs(uint32_t frameNumber)
 
 		TrinyxJobs::Dispatch([cap](uint32_t)
 		{
-			// Build variable-length delta payload.
 			std::vector<uint8_t> payload;
 			payload.reserve(cap->DirtyCount * 12);
 
-			// Reserve 2 bytes for entity count — filled at the end.
 			payload.push_back(0);
 			payload.push_back(0);
 			uint16_t entityCount = 0;
@@ -840,7 +829,6 @@ void ReplicationSystem::DispatchDeltaCorrectionJobs(uint32_t frameNumber)
 
 				const size_t entityHeaderPos = payload.size();
 
-				// Reserve: NetHandle (4 bytes) + ComponentCount (1 byte)
 				payload.resize(entityHeaderPos + 5);
 				uint8_t componentCount = 0;
 
@@ -871,7 +859,7 @@ void ReplicationSystem::DispatchDeltaCorrectionJobs(uint32_t frameNumber)
 
 					if (!w.IsOk() || w.BytesWritten() == 0) continue;
 
-					// Detect zero mask: if only mask bytes written and they're all zero, nothing changed.
+					// If only mask bytes written and all zero, nothing changed — skip.
 					const uint32_t maskBytes = (fieldCount <= 8) ? 1u : (fieldCount <= 16) ? 2u : 4u;
 					if (w.BytesWritten() <= maskBytes)
 					{
@@ -880,7 +868,6 @@ void ReplicationSystem::DispatchDeltaCorrectionJobs(uint32_t frameNumber)
 						if (maskVal == 0) continue;
 					}
 
-					// Clamp to uint8_t — components are asserted N <= 32 fields (max ~132 bytes).
 					const uint8_t deltaLen = static_cast<uint8_t>(
 						w.BytesWritten() > 255 ? 255 : w.BytesWritten());
 
@@ -894,12 +881,10 @@ void ReplicationSystem::DispatchDeltaCorrectionJobs(uint32_t frameNumber)
 
 				if (componentCount == 0)
 				{
-					// No changed components — discard entity header reservation.
 					payload.resize(entityHeaderPos);
 					continue;
 				}
 
-				// Patch entity header in place.
 				std::memcpy(payload.data() + entityHeaderPos,     &de.netHandleValue, 4);
 				payload[entityHeaderPos + 4] = componentCount;
 				++entityCount;
@@ -911,7 +896,6 @@ void ReplicationSystem::DispatchDeltaCorrectionJobs(uint32_t frameNumber)
 				return;
 			}
 
-			// Patch entity count at payload start.
 			std::memcpy(payload.data(), &entityCount, 2);
 
 			const uint32_t payloadSize = static_cast<uint32_t>(payload.size());
@@ -929,11 +913,6 @@ void ReplicationSystem::DispatchDeltaCorrectionJobs(uint32_t frameNumber)
 		}, &BuildCounter, TrinyxJobs::Queue::General);
 	}
 }
-
-// ---------------------------------------------------------------------------
-// FlushSendQueues — drain each channel's MPSC queue and send all pending packets.
-// Dispatches one drain job per non-empty channel — fire and forget.
-// ---------------------------------------------------------------------------
 
 void ReplicationSystem::FlushSendQueues(NetConnectionManager* connMgr)
 {

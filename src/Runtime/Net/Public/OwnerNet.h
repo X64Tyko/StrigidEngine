@@ -12,32 +12,32 @@ struct EntityRecord;
 struct EntitySpawnPayload;
 struct StateCorrectionEntry;
 
-// ---------------------------------------------------------------------------
-// OwnerNet
-//
-// Handles all client-side message routing:
-//   ConnectionHandshake (client receive)  Ping/Pong  Pong
-//   ClockSync (client compute InputLead)  TravelNotify  FlowEvent
-//   EntitySpawn  ConstructSpawn  StateCorrection
-//
-// FlowManager is resolved from the client World (world->GetFlowManager()) so
-// there is no separate FlowMgr pointer to keep in sync.
-// ---------------------------------------------------------------------------
+/// @brief Owner-side (client) network handler.
+///
+/// Routes inbound messages: @c ConnectionHandshake, @c Ping/Pong, @c ClockSync,
+/// @c TravelNotify, @c FlowEvent, @c EntitySpawn, @c ConstructSpawn,
+/// @c StateCorrection, @c EntityDelta.
+///
+/// @c FlowManager is resolved from the client World on each use — there is no
+/// separate @c FlowMgr pointer to keep in sync.
 class OwnerNet : public NetThreadBase<OwnerNet>
 {
 	friend class NetThreadBase<OwnerNet>;
 
 public:
-	/// Non-owning. Required for EntitySpawn and StateCorrection routing.
+	/// @brief Bind an owner world for @c ownerID. Non-owning; required for EntitySpawn routing.
 	void SetOwnerWorld(uint8_t ownerID, WorldBase* world) { MapConnectionToWorld(ownerID, world); }
 
-	/// Send one InputFrame packet to the server for each active client connection.
+	/// @brief Send one @c InputFrame packet to the server for each active connection.
+	///
 	/// Dispatches a General-queue job so Sentinel returns immediately.
-	/// Safe to call at 128Hz — skips dispatch if the previous job hasn't finished.
+	/// Safe to call at 128 Hz — skips dispatch if the previous job is still running.
 	void TickInputSend();
 
-	/// Drain deferred ConstructSpawn payloads that were waiting for EntitySpawn to land.
+	/// @brief Drain deferred @c ConstructSpawn payloads that were waiting for their @c EntitySpawn to arrive first.
 	void TickReplication();
+
+	/// @brief Route one inbound network message.
 	void HandleMessage(const ReceivedMessage& msg);
 
 private:
@@ -48,6 +48,8 @@ private:
 	static void HandleStateCorrections(Registry* reg, const StateCorrectionEntry* entries,
 									   uint32_t count, uint32_t clientFrame,
 									   WorldBase* world, uint32_t lastAckedFrame);
+	static void HandleEntityDelta(Registry* reg, const uint8_t* payload, uint32_t size);
+	static void HandleEntityActivate(Registry* reg, const uint32_t* netHandles, uint32_t count, uint32_t frame);
 	static bool HandleConstructSpawn(ConstructRegistry* reg, Registry* entityReg,
 									 WorldBase* clientWorld, const uint8_t* data, size_t len);
 	/// Hot-path payload — runs on a worker thread. Owns the actual packet build + send.

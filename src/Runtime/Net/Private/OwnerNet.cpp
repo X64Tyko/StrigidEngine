@@ -1,6 +1,7 @@
 #include "OwnerNet.h"
 
 #include "CacheSlotMeta.h"
+#include "EntityBuilder.h"
 #include "CColor.h"
 #include "CMeshRef.h"
 #include "CScale.h"
@@ -13,6 +14,7 @@
 #include "LogicThread.h"
 #include "NetChannel.h"
 #include "NetConnectionManager.h"
+#include "NetDelta.h"
 #include "NetTypes.h"
 #include "RPC.h"
 #include "Registry.h"
@@ -183,6 +185,63 @@ void OwnerNet::HandleEntitySpawn(Registry* reg, const EntitySpawnPayload& payloa
 				WriteEntitySpawnFields(reg, rec, capturedPayload,
 									   reg->GetTemporalCache()->GetActiveWriteFrame(),
 									   reg->GetVolatileCache()->GetActiveWriteFrame());
+			}
+		});
+	}
+#endif
+}
+
+// ---------------------------------------------------------------------------
+// HandleEntityActivate — flip Active on pre-spawned alive entities.
+// Called on the Logic thread via a Post() lambda.
+// ---------------------------------------------------------------------------
+
+void OwnerNet::HandleEntityActivate(Registry* reg, const uint32_t* netHandles, uint32_t count, uint32_t frame)
+{
+	ComponentCacheBase* cache    = reg->GetTemporalCache();
+	TemporalFrameHeader* writeHdr = cache->GetFrameHeader(cache->GetActiveWriteFrame());
+	TemporalFrameHeader* readHdr  = cache->GetFrameHeader(cache->GetActiveReadFrame());
+	const ComponentTypeID flagsSlot = CacheSlotMeta<>::StaticTemporalIndex();
+
+	auto* writeFlags = static_cast<int32_t*>(cache->GetFieldData(writeHdr, flagsSlot, 0));
+	auto* readFlags  = static_cast<int32_t*>(cache->GetFieldData(readHdr,  flagsSlot, 0));
+	if (!writeFlags) return;
+
+	const int32_t activeBit = static_cast<int32_t>(TemporalFlagBits::Active);
+
+	for (uint32_t k = 0; k < count; ++k)
+	{
+		EntityNetHandle nh{};
+		nh.Value              = netHandles[k];
+		EntityRecord* record  = reg->GlobalEntityRegistry.GetRecordPtr(nh);
+		if (!record || !record->IsValid()) continue;
+
+		const uint32_t slabIdx = static_cast<uint32_t>(record->CacheEntityIndex);
+		writeFlags[slabIdx] |= activeBit;
+		if (readFlags) readFlags[slabIdx] |= activeBit;
+	}
+
+#ifdef TNX_ENABLE_ROLLBACK
+	{
+		std::vector<uint32_t> capturedHandles(netHandles, netHandles + count);
+		reg->PushServerEvent({
+			frame,
+			[reg, capturedHandles = std::move(capturedHandles)]()
+			{
+				ComponentCacheBase* c     = reg->GetTemporalCache();
+				TemporalFrameHeader* wHdr = c->GetFrameHeader(c->GetActiveWriteFrame());
+				const ComponentTypeID slot = CacheSlotMeta<>::StaticTemporalIndex();
+				auto* wFlags = static_cast<int32_t*>(c->GetFieldData(wHdr, slot, 0));
+				if (!wFlags) return;
+				const int32_t bit = static_cast<int32_t>(TemporalFlagBits::Active);
+				for (uint32_t nhVal : capturedHandles)
+				{
+					EntityNetHandle nh{};
+					nh.Value             = nhVal;
+					EntityRecord* rec    = reg->GlobalEntityRegistry.GetRecordPtr(nh);
+					if (!rec || !rec->IsValid()) continue;
+					wFlags[static_cast<uint32_t>(rec->CacheEntityIndex)] |= bit;
+				}
 			}
 		});
 	}
@@ -398,6 +457,107 @@ void OwnerNet::HandleStateCorrections(Registry* reg, const StateCorrectionEntry*
 }
 
 // ---------------------------------------------------------------------------
+// HandleEntityDelta — apply per-component delta corrections from the Authority.
+//
+// Wire format mirrors DispatchDeltaCorrectionJobs in ReplicationSystem.cpp:
+//   uint16_t EntityCount
+//   For each entity:
+//     uint32_t NetHandle
+//     uint8_t  ComponentCount
+//     For each changed component:
+//       uint8_t  CacheSlot   (StaticTemporalIndex of the component)
+//       uint8_t  DeltaLen    (byte count of the delta payload)
+//       [DeltaLen bytes]     (field-presence mask + changed values)
+//
+// Applied directly to the current temporal write frame. Unknown entities and
+// unregistered components are skipped; exactly DeltaLen bytes are always consumed.
+// ---------------------------------------------------------------------------
+
+void OwnerNet::HandleEntityDelta(Registry* reg, const uint8_t* payload, uint32_t size)
+{
+	if (size < 2) return;
+
+	NetDeltaReader pkt{ payload, 0, size };
+	const uint16_t entityCount = pkt.ReadU16();
+	if (entityCount == 0 || !pkt.IsOk()) return;
+
+	ComponentCacheBase* cache     = reg->GetTemporalCache();
+	TemporalFrameHeader* writeHdr = cache->GetFrameHeader(cache->GetActiveWriteFrame());
+	if (!writeHdr) return;
+
+	// Build CacheSlot → fns lookup once per message.
+	constexpr size_t MaxCacheSlots = 256;
+	const ComponentDeltaFns* bySlot[MaxCacheSlots] = {};
+	ComponentDeltaRegistry::Get().ForEach([&](ComponentTypeID, const ComponentDeltaFns& fns)
+	{
+		if (fns.CacheSlot < MaxCacheSlots) bySlot[fns.CacheSlot] = &fns;
+	});
+
+	constexpr size_t MaxFields = 32;
+
+	for (uint16_t e = 0; e < entityCount; ++e)
+	{
+		const uint32_t netHandleVal = pkt.ReadU32();
+		const uint8_t  compCount    = pkt.ReadU8();
+		if (!pkt.IsOk()) break;
+
+		EntityNetHandle nh{};
+		nh.Value = netHandleVal;
+
+		GlobalEntityHandle gHandle = reg->GlobalEntityRegistry.LookupGlobalHandle(nh);
+		EntityRecord* record       = nullptr;
+		if (gHandle.GetIndex() != 0)
+		{
+			record = reg->GlobalEntityRegistry.Records[gHandle.GetIndex()];
+			if (record && !record->IsValid()) record = nullptr;
+		}
+
+		for (uint8_t c = 0; c < compCount; ++c)
+		{
+			const uint8_t cacheSlot = pkt.ReadU8();
+			const uint8_t deltaLen  = pkt.ReadU8();
+			if (!pkt.IsOk()) break;
+
+			const uint32_t compDataStart = pkt.Pos;
+
+			if (!record || !bySlot[cacheSlot])
+			{
+				// Unknown entity or unregistered component — skip payload bytes.
+				pkt.Pos = compDataStart + deltaLen;
+				continue;
+			}
+
+			const ComponentDeltaFns* fns = bySlot[cacheSlot];
+			const uint32_t slabIdx       = record->CacheEntityIndex;
+
+			void* fieldPtrs[MaxFields];
+			size_t fieldCount = 0;
+			for (size_t fi = 0; fi < MaxFields; ++fi)
+			{
+				void* ptr = cache->GetFieldData(writeHdr, cacheSlot, fi);
+				if (!ptr) break;
+				fieldPtrs[fi] = ptr;
+				++fieldCount;
+			}
+
+			if (fieldCount > 0)
+			{
+				NetDeltaReader compReader{ payload + compDataStart, 0, deltaLen };
+				ComponentDeltaCtx ctx{ fieldPtrs, nullptr, slabIdx };
+				if (!fns->Deserialize(ctx, compReader))
+					LOG_ENG_WARN_F("[ClientNet] EntityDelta: deserialize error entity=%u slot=%u",
+								   netHandleVal, cacheSlot);
+			}
+
+			// Always consume exactly DeltaLen bytes regardless of deserialize outcome.
+			pkt.Pos = compDataStart + deltaLen;
+		}
+
+		if (!pkt.IsOk()) break;
+	}
+}
+
+// ---------------------------------------------------------------------------
 // HandleConstructSpawn — create a client Construct from a received payload.
 // Returns false if any entity view is not yet in the client registry (defer + retry).
 // ---------------------------------------------------------------------------
@@ -513,7 +673,6 @@ void OwnerNet::HandleMessage(const ReceivedMessage& msg)
 	{
 		case NetMessageType::InputFrame:
 			{
-				//LOG_ENG_INFO_F("new Input Ack Floor: %u", msg.Header.AckedClientFrame);
 				break;
 			}
 
@@ -693,18 +852,20 @@ void OwnerNet::HandleMessage(const ReceivedMessage& msg)
 					{
 						ci->RepState = ClientRepState::Loaded;
 
-						const bool bSweep = flow && flow->GetActiveState()
-							&& flow->GetActiveState()->GetRequirements().SweepsAliveFlagsOnServerReady;
-						if (bSweep && clientWorld)
+						// Activate locally-loaded level entities (spawned Alive-only via bBackground=true).
+						// Server-replicated entities (no local NetHandle) are activated separately via EntityActivate.
+						if (clientWorld)
 						{
-							Registry* reg   = clientWorld->GetRegistry();
-							Soul* sweepSoul = soul;
-							clientWorld->PostAndWait([reg, sweepSoul, clientWorld](uint32_t)
+							Registry* sweepReg         = clientWorld->GetRegistry();
+							const uint32_t sweepFrame  = msg.Header.FrameNumber;
+							clientWorld->PostAndWait([sweepReg, sweepFrame](uint32_t)
 							{
-								int count = reg->SweepAliveFlagsToActive();
-								LOG_NET_INFO_F(sweepSoul, "[Replication] ServerReady: swept %d Alive→Active", count);
+								sweepReg->SweepAliveFlagsToActive();
 #ifdef TNX_ENABLE_ROLLBACK
-								reg->PushServerEvent({clientWorld->GetLogicThread()->GetLastCompletedFrame() + 1, [reg]() { reg->SweepAliveFlagsToActive(); }});
+								sweepReg->PushServerEvent({
+									sweepFrame,
+									[sweepReg]() { sweepReg->SweepAliveFlagsToActive(); }
+								});
 #endif
 							});
 						}
@@ -851,6 +1012,32 @@ void OwnerNet::HandleMessage(const ReceivedMessage& msg)
 				break;
 			}
 
+		case NetMessageType::EntityActivate:
+			{
+				const uint32_t count = static_cast<uint32_t>(msg.Payload.size() / sizeof(uint32_t));
+				if (count == 0) break;
+
+				ConnectionInfo* ci     = ConnectionMgr->FindConnection(msg.Connection);
+				const uint8_t ownerID  = ci ? ci->OwnerID : 0;
+				WorldBase* clientWorld = WorldMap[ownerID];
+				if (!clientWorld) break;
+
+				Registry* entityReg = clientWorld->GetRegistry();
+
+				auto* handlesCopy = new std::vector<uint32_t>(
+					reinterpret_cast<const uint32_t*>(msg.Payload.data()),
+					reinterpret_cast<const uint32_t*>(msg.Payload.data()) + count);
+
+				const uint32_t activateFrame = msg.Header.FrameNumber;
+				clientWorld->Post([entityReg, handlesCopy, activateFrame](uint32_t)
+				{
+					HandleEntityActivate(entityReg, handlesCopy->data(),
+										 static_cast<uint32_t>(handlesCopy->size()), activateFrame);
+					delete handlesCopy;
+				});
+				break;
+			}
+
 		case NetMessageType::ConstructDestroy:
 			{
 				const uint32_t count = static_cast<uint32_t>(msg.Payload.size() / sizeof(uint32_t));
@@ -883,7 +1070,6 @@ void OwnerNet::HandleMessage(const ReceivedMessage& msg)
 
 		case NetMessageType::SoulRPC:
 			{
-				// Inbound server→client SoulRPC. Route to client-side Soul via FlowManager.
 				ConnectionInfo* ci = ConnectionMgr->FindConnection(msg.Connection);
 				if (!ci) break;
 
@@ -941,8 +1127,6 @@ void OwnerNet::HandleMessage(const ReceivedMessage& msg)
 
 		case NetMessageType::GameModeManifest:
 			{
-				// Engine validates that at least the base header fields arrived.
-				// The GameMode is responsible for casting to its own concrete derived type.
 				struct BaseManifest : GameModeManifestPayload<BaseManifest>
 				{
 				};
@@ -955,6 +1139,134 @@ void OwnerNet::HandleMessage(const ReceivedMessage& msg)
 				const auto* base = reinterpret_cast<const BaseManifest*>(msg.Payload.data());
 				LOG_ENG_INFO_F("[ClientNet] GameModeManifest received (seq=%u, mode='%s') — GameMode routing not yet wired",
 							   base->SequenceID, base->ModeName);
+				break;
+			}
+
+		case NetMessageType::EntityDelta:
+			{
+				ConnectionInfo* ci     = ConnectionMgr->FindConnection(msg.Connection);
+				const uint8_t ownerID  = ci ? ci->OwnerID : 0;
+				WorldBase* clientWorld = WorldMap[ownerID];
+				if (!clientWorld || !ci || msg.Payload.empty()) break;
+
+				auto* payloadCopy = new std::vector<uint8_t>(msg.Payload);
+				Registry* reg     = clientWorld->GetRegistry();
+				clientWorld->Post([reg, payloadCopy](uint32_t)
+				{
+					HandleEntityDelta(reg, payloadCopy->data(),
+									  static_cast<uint32_t>(payloadCopy->size()));
+					delete payloadCopy;
+				});
+				break;
+			}
+
+		case NetMessageType::StreamLoad:
+			{
+				if (msg.Payload.size() < sizeof(StreamLoadPayload))
+				{
+					LOG_ENG_WARN_F("[ClientNet] StreamLoad payload too small (%zu)", msg.Payload.size());
+					break;
+				}
+				const auto* pl = reinterpret_cast<const StreamLoadPayload*>(msg.Payload.data());
+
+				ConnectionInfo* ci = ConnectionMgr->FindConnection(msg.Connection);
+				if (!ci) break;
+				WorldBase* clientWorld = WorldMap[ci->OwnerID];
+				Registry*  reg         = clientWorld ? clientWorld->GetRegistry() : nullptr;
+				if (!reg) break;
+
+				const int64_t  assetIDRaw    = pl->AssetID;
+				const uint16_t instanceIndex = pl->InstanceIndex;
+				const bool     bAutoActivate = pl->bAutoActivate != 0;
+
+				AssetID assetID{assetIDRaw};
+				const uint32_t serverFrame = msg.Header.FrameNumber;
+				clientWorld->SpawnAndWait([reg, assetID, instanceIndex, bAutoActivate, serverFrame](uint32_t)
+				{
+					size_t count = EntityBuilder::StreamChunkTracked(reg, assetID, instanceIndex);
+					LOG_ENG_INFO_F("[ClientNet] StreamLoad: spawned %zu entities (assetID=%lld, inst=%u)",
+								   count, assetID.Raw, static_cast<unsigned>(instanceIndex));
+
+					if (bAutoActivate)
+					{
+						auto slabs = EntityBuilder::ActivateStreamedChunk(reg, assetID.Raw, instanceIndex);
+						LOG_ENG_INFO_F("[ClientNet] StreamLoad auto-activated %zu entities", slabs.size());
+#ifdef TNX_ENABLE_ROLLBACK
+						if (!slabs.empty())
+						{
+							auto slabsCopy = std::make_shared<std::vector<uint32_t>>(std::move(slabs));
+							reg->PushServerEvent({serverFrame, [reg, slabsCopy]()
+							{
+								ComponentCacheBase* cache = reg->GetTemporalCache();
+								TemporalFrameHeader* hdr  = cache->GetFrameHeader(cache->GetActiveWriteFrame());
+								const ComponentTypeID slot = CacheSlotMeta<>::StaticTemporalIndex();
+								auto* flags = static_cast<int32_t*>(cache->GetFieldData(hdr, slot, 0));
+								if (!flags) return;
+								constexpr int32_t mask = static_cast<int32_t>(
+									static_cast<uint32_t>(TemporalFlagBits::Active) |
+									static_cast<uint32_t>(TemporalFlagBits::Dirty)  |
+									static_cast<uint32_t>(TemporalFlagBits::DirtiedFrame));
+								for (uint32_t idx : *slabsCopy) flags[idx] |= mask;
+							}});
+						}
+#endif
+					}
+				});
+
+				if (!bAutoActivate)
+				{
+					StreamReadyPayload ready{};
+					ready.AssetID        = assetIDRaw;
+					ready.InstanceIndex  = instanceIndex;
+					NetChannel(ci, ConnectionMgr).Send(NetMessageType::StreamReady, ready, /*reliable=*/true);
+				}
+				break;
+			}
+
+		case NetMessageType::ChunkActivate:
+			{
+				if (msg.Payload.size() < sizeof(ChunkActivatePayload))
+				{
+					LOG_ENG_WARN_F("[ClientNet] ChunkActivate payload too small (%zu)", msg.Payload.size());
+					break;
+				}
+				const auto* pl = reinterpret_cast<const ChunkActivatePayload*>(msg.Payload.data());
+
+				ConnectionInfo* ci = ConnectionMgr->FindConnection(msg.Connection);
+				if (!ci) break;
+				WorldBase* clientWorld = WorldMap[ci->OwnerID];
+				Registry*  reg         = clientWorld ? clientWorld->GetRegistry() : nullptr;
+				if (!reg) break;
+
+				const int64_t  assetIDRaw    = pl->AssetID;
+				const uint16_t instanceIndex = pl->InstanceIndex;
+				const uint32_t serverFrame   = msg.Header.FrameNumber;
+
+				clientWorld->PostAndWait([reg, assetIDRaw, instanceIndex, serverFrame](uint32_t)
+				{
+					auto slabs = EntityBuilder::ActivateStreamedChunk(reg, assetIDRaw, instanceIndex);
+					LOG_ENG_INFO_F("[ClientNet] ChunkActivate: activated %zu entities (assetID=%lld, inst=%u)",
+								   slabs.size(), assetIDRaw, static_cast<unsigned>(instanceIndex));
+#ifdef TNX_ENABLE_ROLLBACK
+					if (!slabs.empty())
+					{
+						auto slabsCopy = std::make_shared<std::vector<uint32_t>>(std::move(slabs));
+						reg->PushServerEvent({serverFrame, [reg, slabsCopy]()
+						{
+							ComponentCacheBase* cache = reg->GetTemporalCache();
+							TemporalFrameHeader* hdr  = cache->GetFrameHeader(cache->GetActiveWriteFrame());
+							const ComponentTypeID slot = CacheSlotMeta<>::StaticTemporalIndex();
+							auto* flags = static_cast<int32_t*>(cache->GetFieldData(hdr, slot, 0));
+							if (!flags) return;
+							constexpr int32_t mask = static_cast<int32_t>(
+								static_cast<uint32_t>(TemporalFlagBits::Active) |
+								static_cast<uint32_t>(TemporalFlagBits::Dirty)  |
+								static_cast<uint32_t>(TemporalFlagBits::DirtiedFrame));
+							for (uint32_t idx : *slabsCopy) flags[idx] |= mask;
+						}});
+					}
+#endif
+				});
 				break;
 			}
 

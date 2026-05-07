@@ -9,27 +9,24 @@
 class WorldBase;
 class LogicThreadBase;
 
-// ---------------------------------------------------------------------------
-// AuthorityNet
-//
-// Handles all server-side message routing:
-//   ConnectionHandshake  InputFrame  Ping/Pong
-//   ClockSync + TravelNotify  LevelReady  SoulRPC
-//
-// Owns the server world pointer (non-owning ref) and replication system
-// (also non-owning — caller manages lifetime).
-// ---------------------------------------------------------------------------
+/// @brief Authority-side network handler. Owns server-side message routing.
+///
+/// Routes inbound messages: @c ConnectionHandshake, @c InputFrame, @c Ping/Pong,
+/// @c ClockSync, @c TravelNotify, @c LevelReady, @c SoulRPC.
+///
+/// Holds non-owning pointers to the server World and @ref ReplicationSystem —
+/// the caller (typically @c TrinyxEngine) manages their lifetimes.
 class AuthorityNet : public NetThreadBase<AuthorityNet>
 {
 friend class NetThreadBase<AuthorityNet>;
 
 public:
-void SetAuthorityWorld(WorldBase* world) { AuthorityWorld = world; }
-WorldBase* GetAuthorityWorld() const { return AuthorityWorld; }
+void SetAuthorityWorld(WorldBase* world) { AuthorityWorld = world; }  ///< Set the authority-side world (non-owning).
+WorldBase* GetAuthorityWorld() const { return AuthorityWorld; }         ///< Get the authority-side world.
 
-void SetReplicationSystem(ReplicationSystem* repl) { Replicator = repl; }
-ReplicationSystem* GetReplicator() const { return Replicator; }
-const EngineConfig* GetConfig() const { return Config; }
+void SetReplicationSystem(ReplicationSystem* repl) { Replicator = repl; } ///< Bind the @ref ReplicationSystem (non-owning).
+ReplicationSystem* GetReplicator() const { return Replicator; }            ///< Get the bound @ref ReplicationSystem.
+const EngineConfig* GetConfig() const { return Config; }                   ///< Get the engine configuration.
 
 /// Called after ConnectionMgr is valid (post Initialize/InitAsHandler).
 void BindSoulCallbacks();
@@ -46,15 +43,27 @@ return ch ? &ch->InputLog : nullptr;
 /// Call after both LogicThread and AuthorityNet are initialized.
 void WireNetMode(WorldBase* world);
 
-void HandleMessage(const ReceivedMessage& msg);
-/// Dispatch spawn/correction build jobs for any newly published logic frames.
+void HandleMessage(const ReceivedMessage& msg); ///< Route one inbound network message.
+
+/// @brief Dispatch spawn and correction build jobs for newly published logic frames.
 /// Called from Sentinel on every loop tick (ungated).
 void TickDispatch();
+
+/// @brief Flush built packets to the wire at the network update rate.
 void TickReplication();
 
 /// Opens a ServerClientChannel for ownerID, sized to match the temporal slab.
 /// Call within the ConnectionHandshake handler when an ownerID is assigned.
 void CreateInputLog(uint8_t ownerID);
+
+/// Tell ownerID's client to background-load a content chunk.
+/// bAutoActivate=true: client activates immediately on load (fire-and-forget, no reply).
+/// bAutoActivate=false: client sends StreamReady; server drives activation via SendChunkActivate.
+void SendStreamLoad(uint8_t ownerID, int64_t assetIDRaw, uint16_t instanceIndex, bool bAutoActivate);
+
+/// Tell ownerID's client to activate a previously streamed chunk.
+/// Only meaningful when the original StreamLoad had bAutoActivate=false.
+void SendChunkActivate(uint8_t ownerID, int64_t assetIDRaw, uint16_t instanceIndex);
 
 private:
 void OnClientDisconnectedCB(uint8_t ownerID);

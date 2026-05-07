@@ -51,6 +51,9 @@ shaders/**/*.spv
 *_frag.c
 *_vert.c
 
+# Doxygen generated output
+docs/doxygen/
+
 # Runtime-generated files
 imgui.ini
 temp_*.txt

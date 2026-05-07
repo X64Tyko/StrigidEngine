@@ -33,8 +33,12 @@ enum class NetMessageType : uint8_t
 	ConstructDestroy    = 18, // Server->Client: Construct destruction command (N × uint32_t ConstructNetHandle values, count = PayloadSize / 4)
 	EntityDelta         = 19, // Server->Client: per-component delta corrections for dirty entities (variable-length)
 	InputFrameDelta     = 20, // Client->Server: delta-compressed input window (variable-length)
-	Custom              = 21, // Game-defined: first slot for user-extended message types
-	Unknown             = 22, // Sentinel: unrecognised message type — receiver must drop
+	EntityActivate      = 21, // Server->Client: activate pre-spawned alive entities (N × uint32_t net handle values, count = PayloadSize / 4)
+	StreamLoad          = 22, // Server->Client: background-load a content chunk (StreamLoadPayload)
+	StreamReady         = 23, // Client->Server: chunk load complete, ready for activation
+	ChunkActivate       = 24, // Server->Client: activate entities from a previously streamed chunk
+	Custom              = 25, // Game-defined: first slot for user-extended message types
+	Unknown             = 26, // Sentinel: unrecognised message type — receiver must drop
 	Count
 };
 
@@ -45,9 +49,10 @@ inline const char* NetMessageTypeName(uint8_t type)
 		"EntityDestroy", "Ping", "Pong", "FlowEvent",
 		"PlayerBeginRequest", "PlayerBeginConfirm", "PlayerBeginReject", "ClockSync",
 		"TravelNotify", "LevelReady", "GameModeManifest", "ClientModeManifest",
-		"SoulRPC", "ConstructSpawn", "ConstructDestroy", "EntityDelta", "InputFrameDelta", "Custom", "Unknown",
+		"SoulRPC", "ConstructSpawn", "ConstructDestroy", "EntityDelta", "InputFrameDelta",
+		"EntityActivate", "StreamLoad", "StreamReady", "ChunkActivate", "Custom", "Unknown",
 	};
-	static_assert(static_cast<size_t>(NetMessageType::Count) == 23,
+	static_assert(static_cast<size_t>(NetMessageType::Count) == 27,
 				  "NetMessageTypeName table out of sync with NetMessageType enum");
 	return type < static_cast<uint8_t>(NetMessageType::Count) ? kNames[type] : "???";
 }
@@ -498,6 +503,54 @@ struct TravelPayload
 };
 
 static_assert(sizeof(TravelPayload) == 256, "TravelPayload must be 256 bytes");
+
+// ---------------------------------------------------------------------------
+// StreamLoadPayload — server tells a client to background-load a content chunk.
+//
+// bAutoActivate=1: client activates entities immediately when loading finishes —
+//   no round-trip needed. Use for fire-and-forget cosmetic or non-deterministic loads.
+// bAutoActivate=0: client sends StreamReady when done; server drives activation
+//   timing via ChunkActivate (use when load must be coordinated across players).
+//
+// Sent reliable (NetMessageType::StreamLoad).
+// ---------------------------------------------------------------------------
+struct StreamLoadPayload
+{
+	int64_t  AssetID;        // content AssetID — client resolves to path via AssetRegistry
+	uint16_t InstanceIndex;  // 0 for first load; increment for multiple instances of the same asset
+	uint8_t  bAutoActivate;  // 1 = activate immediately on load; 0 = wait for ChunkActivate
+	uint8_t  _Pad[5];
+};
+
+static_assert(sizeof(StreamLoadPayload) == 16, "StreamLoadPayload must be 16 bytes");
+
+// ---------------------------------------------------------------------------
+// StreamReadyPayload — client notifies server that a background chunk is loaded.
+// Only sent when StreamLoadPayload.bAutoActivate == 0.
+// Sent reliable (NetMessageType::StreamReady).
+// ---------------------------------------------------------------------------
+struct StreamReadyPayload
+{
+	int64_t  AssetID;
+	uint16_t InstanceIndex;
+	uint8_t  _Pad[6];
+};
+
+static_assert(sizeof(StreamReadyPayload) == 16, "StreamReadyPayload must be 16 bytes");
+
+// ---------------------------------------------------------------------------
+// ChunkActivatePayload — server tells client to activate a previously streamed chunk.
+// Only sent when the original StreamLoad had bAutoActivate == 0.
+// Sent reliable (NetMessageType::ChunkActivate).
+// ---------------------------------------------------------------------------
+struct ChunkActivatePayload
+{
+	int64_t  AssetID;
+	uint16_t InstanceIndex;
+	uint8_t  _Pad[6];
+};
+
+static_assert(sizeof(ChunkActivatePayload) == 16, "ChunkActivatePayload must be 16 bytes");
 
 // ---------------------------------------------------------------------------
 // GameModeManifestPayload<TDerived> — CRTP base for GameMode→client context

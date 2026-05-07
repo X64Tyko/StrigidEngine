@@ -533,8 +533,7 @@ inline Fixed32 operator*(Fixed32 a, Fixed32 b) {
 transform.PosX += body.VelX * dt;   // Fixed32 * Fixed32 → Fixed32, no overflow
 ```
 
-`FieldProxy<Fixed32, WIDTH>` — all position, velocity, and force fields use this type. because we have the FieldProxy we
-can have a build variable to replace FieldProxy<float> with FieldProxy<fixed32> at runtime, no code changes required.
+`FieldProxy<Fixed32, WIDTH>` — all position, velocity, and force fields use this type. The `TNX_DETERMINISM` build flag swaps `SimFloat` between `SimFloatImpl<float>` and `SimFloatImpl<Fixed32>` with no code changes required in entity authors.
 
 ## Quaternion Representation
 
@@ -995,7 +994,7 @@ create-then-add pattern that requires an extra lock acquisition.
 
 The tiered partition design (Cold/Static/Volatile/Temporal with dual-ended arena layout) is **implemented**.
 `TemporalComponentCache` provides N-frame SoA ring buffers per field with Active and Dirty bit tracking.
-The delta-upload path is tracked but not yet wired to the GPU upload (currently full-slab copy).
+Dirty-bit-driven partial upload is operational — only modified entities are uploaded per frame.
 
 Jolt Physics v5.5.0 is integrated: `JoltJobSystemAdapter` bridges onto the Jolt job queue, `JoltBody`
 cold component provides shape/motion/mass data, and `FlushPendingBodies`/`PullActiveTransforms` sync

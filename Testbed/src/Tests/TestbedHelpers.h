@@ -1,7 +1,11 @@
 #pragma once
 
-// Shared entity-writing helpers for Testbed tests.
-// Include this in any test that spawns CubeEntity, SuperCube, or Projectile entities.
+/// @file TestbedHelpers.h
+/// @brief Shared entity-spawning helpers for Testbed unit tests.
+///
+/// Include this in any test that spawns @c CubeEntity, @c SuperCube, or @c Projectile
+/// entities. Provides @ref CubeSetup / @ref ProjectileSetup PODs and typed helper
+/// functions that hydrate entity field arrays directly.
 
 #include <vector>
 #include <cstdint>
@@ -12,17 +16,13 @@
 #include "Public/CubeEntity.h"
 #include "Public/Projectile.h"
 
-// ---------------------------------------------------------------------------
-// Global entity handle collections — tests that spawn persistent entities
-// store their IDs here so other tests (e.g. entity count checks) can see them.
-// ---------------------------------------------------------------------------
+/// @brief Persistent entity handles shared between tests (e.g. pyramid, supercube, projectile).
+/// Tests that spawn durable entities push their IDs here so count-checking tests can see them.
 inline std::vector<EntityHandle> gPyramidIds;
 inline std::vector<EntityHandle> gSuperCubeIds;
 inline std::vector<EntityHandle> gProjectileIds;
 
-// ---------------------------------------------------------------------------
-// Setup structs
-// ---------------------------------------------------------------------------
+/// @brief Spawn parameters for a @c CubeEntity or @c SuperCube.
 struct CubeSetup
 {
 	SimFloat x, y, z;
@@ -32,6 +32,7 @@ struct CubeSetup
 	uint32_t motion;
 };
 
+/// @brief Spawn parameters for a @c Projectile entity.
 struct ProjectileSetup
 {
 	SimFloat x, y, z;
@@ -39,9 +40,8 @@ struct ProjectileSetup
 	SimFloat r, g, b, a;
 };
 
-// ---------------------------------------------------------------------------
-// WriteCubeSetups — batch-creates CubeEntity entities and fills their fields.
-// ---------------------------------------------------------------------------
+/// @brief Spawn CubeEntity instances and write field data from @p setups.
+/// @param[out] outIds Receives the @c EntityHandle of each spawned entity.
 inline void WriteCubeSetups(Registry* reg, const std::vector<CubeSetup>& setups,
                              std::vector<EntityHandle>& outIds)
 {
@@ -70,7 +70,7 @@ inline void WriteCubeSetups(Registry* reg, const std::vector<CubeSetup>& setups,
 				if (setupIdx >= setups.size()) break;
 				const auto& s = setups[setupIdx++];
 
-				cube.Flags.Flags    = static_cast<int32_t>(TemporalFlagBits::Active);
+				cube.Flags.Flags    = static_cast<int32_t>(TemporalFlagBits::Active | TemporalFlagBits::Alive | TemporalFlagBits::Replicated);
 				cube.transform.PosX = s.x;
 				cube.transform.PosY = s.y;
 				cube.transform.PosZ = s.z;
@@ -101,9 +101,8 @@ inline void WriteCubeSetups(Registry* reg, const std::vector<CubeSetup>& setups,
 	}
 }
 
-// ---------------------------------------------------------------------------
-// WriteProjectileSetups
-// ---------------------------------------------------------------------------
+/// @brief Spawn Projectile instances and write field data from @p setups.
+/// @param[out] outIds Receives the @c EntityHandle of each spawned entity.
 inline void WriteProjectileSetups(Registry* reg, const std::vector<ProjectileSetup>& setups,
                                    std::vector<EntityHandle>& outIds)
 {
@@ -132,7 +131,7 @@ inline void WriteProjectileSetups(Registry* reg, const std::vector<ProjectileSet
 				if (setupIdx >= setups.size()) break;
 				const auto& s = setups[setupIdx++];
 
-				proj.Flags.Flags    = static_cast<int32_t>(TemporalFlagBits::Active);
+				proj.Flags.Flags    = static_cast<int32_t>(TemporalFlagBits::Active | TemporalFlagBits::Alive | TemporalFlagBits::Replicated);
 				proj.transform.PosX = s.x;
 				proj.transform.PosY = s.y;
 				proj.transform.PosZ = s.z;
@@ -151,9 +150,8 @@ inline void WriteProjectileSetups(Registry* reg, const std::vector<ProjectileSet
 	}
 }
 
-// ---------------------------------------------------------------------------
-// WriteSuperCubeSetups
-// ---------------------------------------------------------------------------
+/// @brief Spawn SuperCube instances and write field data from @p setups.
+/// @param[out] outIds Receives the @c EntityHandle of each spawned entity.
 inline void WriteSuperCubeSetups(Registry* reg, const std::vector<CubeSetup>& setups,
                                   std::vector<EntityHandle>& outIds)
 {
@@ -182,7 +180,7 @@ inline void WriteSuperCubeSetups(Registry* reg, const std::vector<CubeSetup>& se
 				if (setupIdx >= setups.size()) break;
 				const auto& s = setups[setupIdx++];
 
-				cube.Flags.Flags    = static_cast<int32_t>(TemporalFlagBits::Active);
+				cube.Flags.Flags    = static_cast<int32_t>(TemporalFlagBits::Active | TemporalFlagBits::Alive | TemporalFlagBits::Replicated);
 				cube.transform.PosX = s.x;
 				cube.transform.PosY = s.y;
 				cube.transform.PosZ = s.z;

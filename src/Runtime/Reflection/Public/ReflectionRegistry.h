@@ -27,26 +27,19 @@ struct RPCContext;
 struct RPCHeader;
 using  SoulRPCHandler = void(*)(Soul*, const RPCContext&, const uint8_t*);
 
-// ---------------------------------------------------------------------------
-// ReflectionRegistry — Single source of truth for all type metadata.
-//
-// Merges the former MetaRegistry (entity types, signatures, lifecycle
-// function pointers) and ComponentFieldRegistry (field decomposition,
-// component metadata, tier/slot queries) into one singleton.
-//
-// Also holds FlowState/GameMode factory registrations so FlowManager
-// and the editor can discover them without manual registration calls.
-//
-// Populated at static init time by registration macros (TNX_REGISTER_ENTITY,
-// TNX_REGISTER_COMPONENT, TNX_REGISTER_STATE, TNX_REGISTER_MODE).
-//
-// Supports baking to a file for deterministic IDs across builds. When a
-// baked file is loaded, its IDs are authoritative. Function pointers and
-// factories are merged from reflected data by name.
-//
-// Thread safety: all registration happens during static init (before main).
-// Read-only after engine init.
-// ---------------------------------------------------------------------------
+/// @brief Singleton registry for all type metadata. The single source of truth.
+///
+/// Merges entity type metadata (signatures, lifecycle function pointers), component
+/// field decomposition, @ref FlowState / @ref GameMode factory registrations,
+/// ModeMixin IDs, and SoulRPC dispatch tables into one place.
+///
+/// Populated at static-init time by registration macros (@c TNX_REGISTER_ENTITY,
+/// @c TNX_REGISTER_COMPONENT, @c TNX_REGISTER_STATE, @c TNX_REGISTER_MODE).
+/// Read-only after @c TrinyxEngine::Initialize().
+///
+/// Supports baking to a file for deterministic IDs across builds. When a baked
+/// snapshot is loaded, its IDs are authoritative and function pointers / factories
+/// are merged by name.
 class ReflectionRegistry
 {
 public:
@@ -122,6 +115,14 @@ public:
 
 		if constexpr (HasPostPhysics<T>)
 			EntityGetters[ID].PostPhys = InvokePostPhysicsImpl<T>;
+
+#ifdef TNX_ENABLE_ROLLBACK
+		if constexpr (HasPrePhysics<T>)
+			EntityGetters[ID].PrePhysResim = InvokePrePhysicsResimImpl<T>;
+
+		if constexpr (HasPostPhysics<T>)
+			EntityGetters[ID].PostPhysResim = InvokePostPhysicsResimImpl<T>;
+#endif
 
 		if constexpr (requires { T::EntitiesPerChunk; })
 			EntityGetters[ID].EntitiesPerChunk = T::EntitiesPerChunk;

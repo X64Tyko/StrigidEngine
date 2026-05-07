@@ -299,14 +299,14 @@ Delta compression yields mostly zeros per tick. Far superior to AoS where mixed 
 
 ## Known Gaps / In Progress
 
-- No delta compression (full state every tick)
 - No interest management / relevancy culling
-- `PlayerBeginRequest`/`PlayerBeginConfirm`/`PlayerBeginReject` spawn pipeline not yet fully wired
-- `ConstructHandle` not yet implemented
+- Phase 0 tentative despawn not implemented — entities dying in speculative sim are not tracked in a per-frame
+  `TentativeDestroys` ring until `CommittedHorizon` advances. The `CommittedHorizon` gate prevents incorrect
+  early send, but explicit rollback-cancellable tentative tracking is needed for correctness under resimulation.
 
 ---
 
-## Planned Refactor (Designed, Not Yet Implemented)
+## Implemented Architecture (Previously Planned)
 
 ### Vocabulary
 
@@ -319,24 +319,24 @@ All networking code uses this vocabulary — never raw "server"/"client" as noun
 | `Host` | Listen server — Soul with both `Authority + Owner` roles (`EngineMode::Host`) |
 | `Echo` | Non-owning entity stance on a client (remote player representation) |
 | `Solo` | Offline, no networking (`EngineMode::Standalone`) |
-| `AuthorityNetThread` | Authority-side net handler |
-| `OwnerNetThread` | Owner-side net handler |
+| `AuthorityNet` | Authority-side net handler (`AuthorityNet.h`) |
+| `OwnerNet` | Owner-side net handler (`OwnerNet.h`) |
 
-### `LogicThread<TSimMode>` — Sim Mode Refactor *(designed, not yet implemented)*
+### `LogicThread<TNet, TRollback, TFrame>` — Sim Mode Refactor *(done 2026-05)*
 
-`LogicThread` will be templatized on a CRTP sim mode to eliminate all in-line Authority/Owner branching:
+`LogicThread` is templatized on three policy axes to eliminate all in-line Authority/Owner branching:
 
 ```cpp
-template<typename TSimMode>
-class LogicThread : public SimModeBase<TSimMode> { ... };
+template <typename TNet, typename TRollback, typename TFrame>
+class LogicThread : public LogicThreadBase { ... };
 ```
 
-**Three modes** — dead code never compiles in a given build:
-- **`AuthoritySim`** — `OnSimInput` injects per-player `PlayerInputLog` from the client's `ServerClientChannel`; `OnFramePublished` advances `CommittedFrameHorizon`, dispatches per-client replication jobs
+**Three net policy types** — dead code never compiles in a given build:
+- **`AuthoritySim`** — `OnSimInput` injects per-player `PlayerInputLog` from `ServerClientChannel`; `OnFramePublished` advances `CommittedFrameHorizon`
 - **`OwnerSim`** — `OnSimInput` pushes to `InputAccumRing`; `OnFramePublished` is a no-op
 - **`SoloSim`** — both are no-ops
 
-Other removals from `LogicThread`: `std::function PlayerInputInjector` (inlined into sim mode), camera state (moved to `CameraManager`). `PhysicsDivizor` branch pre-calculated once per frame as `bPhysStepBegin`/`bPhysStepEnd`.
+`std::function PlayerInputInjector` removed; camera state moved to `CameraManager`.
 
 ### `ServerClientChannel` — Per-Client Replication State
 
@@ -344,14 +344,15 @@ Replaces the single global `Replicated[]` bitvector. One per connected client, O
 
 ```cpp
 struct ServerClientChannel {
-    NetChannel          Send;
-    std::vector<bool>   Replicated;         // per-entity replication tracking
-    PlayerInputLog      InputLog;           // inbound input frames from this client
-    TentativeDestroys_t TentativeDestroys;  // indexed by frame, pre-CommittedFrameHorizon
-    PendingNetDespawns  PendingNetDespawns; // post-commit, awaiting send
-    ClientRepState      RepState;
-    OwnerID_t           OwnerID;
-    bool                Active;
+    PlayerInputLog        InputLog;           // inbound input frames from this client
+    std::vector<bool>     Replicated;         // per-entity spawn-tracking
+    std::vector<uint32_t> PendingActivations; // net handles queued for EntityActivate
+    NetChannel            Channel;            // typed per-connection send wrapper
+    PendingPacketQueue    SendQueue;          // lock-free MPSC; drained by Sentinel
+    ConnectionInfo*       CI;
+    uint8_t               OwnerID;
+    uint32_t              LastAckedSimFrame;
+    // TentativeDestroys / PendingNetDespawns — not yet implemented (four-phase despawn)
 };
 ```
 

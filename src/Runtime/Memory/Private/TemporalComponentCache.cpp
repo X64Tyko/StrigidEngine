@@ -4,6 +4,7 @@
 #include <cstring>
 #include <immintrin.h>
 #include "Archetype.h"
+#include "CacheSlotMeta.h"
 #include "EngineConfig.h"
 #include "FieldMeta.h"
 #include "MemoryDefines.h"
@@ -76,8 +77,6 @@ void ComponentCacheBase::InitializeInternal(const EngineConfig* Config, uint32_t
 {
 	auto& CFR = ReflectionRegistry::Get();
 
-	// Pre-compute field allocation layout (field-major ordering)
-	// For each component in this tier, for each field, reserve a contiguous zone.
 	size_t totalFrameSize = 0;
 
 	for (auto& [typeID, meta] : CFR.GetAllComponents())
@@ -95,7 +94,6 @@ void ComponentCacheBase::InitializeInternal(const EngineConfig* Config, uint32_t
 			size_t baseSize     = static_cast<size_t>(Config->MAX_CACHED_ENTITIES) * field.Size;
 			size_t maxFieldSize = baseSize; // No padding,
 
-			// Use flat O(1) table instead of vector
 			if (cacheSlotID < MAX_COMPONENTS && fieldIdx < MAX_TEMPORAL_FIELDS_PER_COMPONENT)
 			{
 				const size_t tableIndex      = static_cast<size_t>(cacheSlotID) * MAX_TEMPORAL_FIELDS_PER_COMPONENT + fieldIdx;
@@ -143,7 +141,6 @@ void ComponentCacheBase::InitializeInternal(const EngineConfig* Config, uint32_t
 	// Zero-initialize entire slab (critical for Release builds where uninitialized memory isn't zeroed)
 	std::memset(SlabPtr, 0, TotalSlabSize);
 
-	// Build frame header pointer array for O(1) access
 	FrameHeaders.reserve(TemporalFrameCount);
 	uint8_t* currentFramePtr = static_cast<uint8_t*>(SlabPtr);
 	const size_t frameStride = HeaderSize + FrameDataCapacity;
@@ -152,7 +149,6 @@ void ComponentCacheBase::InitializeInternal(const EngineConfig* Config, uint32_t
 	{
 		auto* header = reinterpret_cast<TemporalFrameHeader*>(currentFramePtr);
 
-		// Initialize frame header
 		header->OwnershipFlags.store(0, std::memory_order_release); // Unlocked
 		header->FrameNumber            = 0;
 		header->ActiveEntityCount      = 0;
@@ -183,7 +179,6 @@ void* ComponentCacheBase::AllocateFieldArray(Archetype* owner, Chunk* chunk,
 											 CacheSlotID cacheSlot, size_t fieldIndex,
 											 const char* fieldName, size_t entityCount, size_t fieldSize, SystemID EntitySystemID)
 {
-	// Direct O(1) lookup into flat table
 	if (cacheSlot >= MAX_COMPONENTS || fieldIndex >= MAX_TEMPORAL_FIELDS_PER_COMPONENT)
 	{
 		LOG_ENG_ERROR_F("ComponentCacheBase: Invalid cache slot %u or field index %zu", cacheSlot, fieldIndex);
@@ -200,10 +195,8 @@ void* ComponentCacheBase::AllocateFieldArray(Archetype* owner, Chunk* chunk,
 		return nullptr;
 	}
 
-	// Calculate aligned size for this chunk's allocation
 	size_t allocSize = AlignSize(entityCount * fieldSize);
 
-	// Check capacity
 	if (info.CurrentUsed + allocSize > info.TotalCapacity) [[unlikely]]
 	{
 		if (Tier_ == CacheTier::Universal)
@@ -215,7 +208,6 @@ void* ComponentCacheBase::AllocateFieldArray(Archetype* owner, Chunk* chunk,
 		return nullptr;
 	}
 
-	// Allocate from this field's zone
 	size_t offsetInFieldZone = GetSystemAllocatorIndex(EntitySystemID, allocSize);
 	info.CurrentUsed         += allocSize;
 
@@ -228,14 +220,12 @@ void* ComponentCacheBase::AllocateFieldArray(Archetype* owner, Chunk* chunk,
 		allocSize
 	});
 
-	// Return absolute pointer to frame 0's data for this allocation
 	uint8_t* frame0Data = static_cast<uint8_t*>(SlabPtr) + sizeof(TemporalFrameHeader);
 	return frame0Data + info.OffsetInFrame + offsetInFieldZone;
 }
 
 size_t ComponentCacheBase::AdvanceAllocator(SystemID EntitySystemID, size_t entityCount, size_t fieldSize)
 {
-	// Calculate aligned size for this chunk's allocation
 	size_t allocSize = AlignSize(entityCount * fieldSize);
 	return AdvanceSystemAllocatorIndex(EntitySystemID, allocSize);
 }
@@ -357,11 +347,7 @@ void* ComponentCacheBase::GetFieldData(TemporalFrameHeader* header, CacheSlotID 
 bool ComponentCacheBase::TryLockFrameForWrite(uint32_t& outWriteFrame)
 {
 	outWriteFrame = ActiveWriteFrame;
-	// We still want to make sure only 1 thread is trying to lock the write frame at a time
 	TemporalFrameHeader* header = GetFrameHeader(ActiveWriteFrame);
-
-	// Try to acquire write lock - frame must be completely unlocked (no readers or writers)
-	// 0x01 = LOGIC_WRITING, 0x02 = RENDER_READING, 0x04 = NETWORK_READING, 0x08 = DEFRAG_LOCKED
 	uint8_t expected = 0;
 	return header->OwnershipFlags.compare_exchange_strong(expected, 0x01, std::memory_order_acquire);
 }
@@ -461,6 +447,64 @@ size_t ComponentCacheBase::AlignSize(size_t size)
 }
 
 #ifdef TNX_ENABLE_ROLLBACK
+void ComponentCacheBase::PropagateFrameResim(TrinyxJobs::JobCounter& counter)
+{
+	if (FrameDataCapacity == 0) return;
+
+	// Ring advance — identical to ComponentCache<Temporal>::PropagateFrameImpl but
+	// replaces the full-slab memcpy with an entity-level scatter copy.
+	const uint32_t targetSlot = (ActiveWriteFrame + 1) % static_cast<uint32_t>(TemporalFrameCount);
+
+	uint32_t spins = 0;
+	while (!LockFrameForWrite(targetSlot))
+	{
+		if (++spins > 10'000'000)
+		{
+			LOG_ENG_ERROR_F("[Temporal] PropagateFrameResim stuck — slot %u leaked lock (flags=0x%02x)",
+							targetSlot, GetFrameHeader(targetSlot)->OwnershipFlags.load(std::memory_order_relaxed));
+			return;
+		}
+	}
+
+	const uint32_t     fromFrame = ActiveWriteFrame;
+	LastWrittenFrame              = fromFrame;
+	ActiveWriteFrame              = targetSlot;
+
+	// Flags are at table index 0 — CacheSlotMeta (component 0, field 0) is always first.
+	const FieldAllocationInfo& flagsInfo = FieldAllocations[0];
+	if (!flagsInfo.bValid || flagsInfo.FieldSize == 0)
+	{
+		UnlockFrameWrite();
+		(void)counter;
+		return;
+	}
+
+	const uint8_t* readData  = reinterpret_cast<const uint8_t*>(GetFrameHeader(fromFrame)) + sizeof(TemporalFrameHeader);
+	uint8_t*       writeData = reinterpret_cast<uint8_t*>(GetFrameHeader(targetSlot)) + sizeof(TemporalFrameHeader);
+	const int32_t* flags     = reinterpret_cast<const int32_t*>(readData + flagsInfo.OffsetInFrame);
+
+	constexpr int32_t dirtyBit = static_cast<int32_t>(TemporalFlagBits::DirtiedFrame);
+	const size_t maxEntities   = GetMaxCachedEntityCount();
+
+	// Scatter-copy: for each entity with DirtiedFrameBit, copy all its field values
+	// from the source slot to the destination slot. Entities without the bit are
+	// left untouched — they retain the original-timeline data already in targetSlot.
+	for (size_t i = 0; i < maxEntities; ++i)
+	{
+		if (!(flags[i] & dirtyBit)) continue;
+		for (uint16_t idx : ValidFields)
+		{
+			const FieldAllocationInfo& fi = FieldAllocations[idx];
+			if (fi.FieldSize == 0) continue;
+			const size_t off = fi.OffsetInFrame + i * fi.FieldSize;
+			std::memcpy(writeData + off, readData + off, fi.FieldSize);
+		}
+	}
+
+	UnlockFrameWrite();
+	(void)counter; // synchronous — WaitForCounter on caller returns immediately
+}
+
 std::vector<ComponentCacheBase::FieldCompareInfo> ComponentCacheBase::GetValidFieldInfos() const
 {
 	std::vector<FieldCompareInfo> result;

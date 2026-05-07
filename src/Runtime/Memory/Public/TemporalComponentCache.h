@@ -22,6 +22,11 @@ class Archetype;
 using FnGetNextWriteFramePtr = uint32_t (*)(const class ComponentCacheBase*);
 using FnPropagateFramePtr = void (*)(class ComponentCacheBase*, TrinyxJobs::JobCounter&);
 
+/// @brief Cache-line-aligned per-frame metadata stored at the start of each ring-buffer slot.
+///
+/// Holds ownership flags for concurrent read/write coordination, the simulation frame number,
+/// camera and lighting state for the render thread, and (under rollback) the input snapshot
+/// needed to replay a frame deterministically.
 struct alignas(64) TemporalFrameHeader
 {
 	// Ownership tracking (atomic bitfield)
@@ -82,33 +87,37 @@ struct alignas(64) TemporalFrameHeader
 #endif
 };
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Non-template concrete base — all data and all method implementations.
-// Archetype, LogicThread, and RenderThread store ComponentCacheBase*.
-// No virtual functions: Initialize is not on this class; all other methods are
-// concrete and shared between Volatile and Temporal tiers.
-// ─────────────────────────────────────────────────────────────────────────────
+/// @brief Non-template concrete base for all SoA ring-buffer caches.
+///
+/// Owns all slab memory, frame headers, field allocation tables, and the frame
+/// locking protocol. @c Archetype, @c LogicThread, and @c RenderThread all
+/// store a @c ComponentCacheBase* so they are decoupled from the tier template.
+///
+/// No virtual functions — @c Initialize is on the CRTP middle layer; all runtime
+/// methods here are concrete and shared between Volatile and Temporal tiers.
+///
+/// @see ComponentCache for the concrete typed instantiation.
 class ComponentCacheBase
 {
 public:
 	ComponentCacheBase();
 	~ComponentCacheBase();
 
-	// O(1) frame header access - external systems manage locking
+	/// @brief O(1) frame header access. External systems are responsible for locking.
+	/// @param frameNum Ring-buffer slot index; -1 returns the active write frame.
 	TemporalFrameHeader* GetFrameHeader(int32_t frameNum = -1) const
 	{
 		frameNum = frameNum == -1 ? ActiveWriteFrame : frameNum;
 		return FrameHeaders[frameNum % TemporalFrameCount];
 	}
 
-	// Frame locking for multi-threaded access
-	// We assume that after propagating the next frame is locked for writing until propagated again.
-	// outWriteFrame is the actual frame we're writing to, for field data collection
+	/// @brief Try to claim the next write slot. After propagation the frame remains locked until propagated again.
+	/// @param[out] outWriteFrame The slot index being written to (for field data access).
 	bool TryLockFrameForWrite(uint32_t& outWriteFrame);
-	bool VerifyFrameReadable(uint32_t bufferIndex) const;
-	void UnlockFrameWrite();
-	bool TryLockFrameForRead(uint32_t frameNum);
-	void UnlockFrameRead(uint32_t frameNum);
+	bool VerifyFrameReadable(uint32_t bufferIndex) const; ///< @return @c true if no writer holds @p bufferIndex.
+	void UnlockFrameWrite();                              ///< Release the current write lock.
+	bool TryLockFrameForRead(uint32_t frameNum);          ///< Try to acquire a shared read lock on @p frameNum.
+	void UnlockFrameRead(uint32_t frameNum);              ///< Release a previously acquired read lock.
 
 	uint32_t GetActiveWriteFrame() const { return ActiveWriteFrame; }
 	uint32_t GetActiveReadFrame() const { return LastWrittenFrame; }
@@ -198,6 +207,12 @@ public:
 	}
 
 #ifdef TNX_ENABLE_ROLLBACK
+	// During rollback resim: advance the ring frame pointer and scatter-copy only entities
+	// with DirtiedFrameBit set. Non-dirty entities in the destination slot retain their
+	// original-timeline data — no full memcpy is performed. Caller's WaitForCounter
+	// returns immediately (no async jobs dispatched).
+	void PropagateFrameResim(TrinyxJobs::JobCounter& counter);
+
 	// Rollback test support — direct manipulation of frame pointers and slab access.
 	void SetActiveWriteFrame(uint32_t frame) { ActiveWriteFrame = frame; }
 	void SetLastWrittenFrame(uint32_t frame) { LastWrittenFrame = frame; }
@@ -316,13 +331,14 @@ private:
 	static size_t AlignSize(size_t size);
 };
 
-// ─────────────────────────────────────────────────────────────────────────────
-// CRTP middle layer.  Routes Initialize() to the derived class for:
-//   GetFrameCount(Config)  — how many history frames to allocate
-//   GetCacheTier()         — which CacheTier enum value this instance is
-//   GetLabel()             — human-readable name for logging
-// Everything else (all data, all frame/lock/alloc methods) lives in the base.
-// ─────────────────────────────────────────────────────────────────────────────
+/// @brief CRTP middle layer that routes @c Initialize() to tier-specific overrides.
+///
+/// Each derived class (@c ComponentCache<Tier>) provides:
+/// - @c GetFrameCount(Config) — how many ring-buffer frames to allocate.
+/// - @c GetCacheTier() — the @c CacheTier enum value for this instance.
+/// - @c GetLabel() — human-readable name for logging.
+///
+/// All data and frame/lock/alloc methods live in @ref ComponentCacheBase.
 template <typename Derived>
 class ComponentCacheImpl : public ComponentCacheBase
 {
@@ -339,15 +355,16 @@ protected:
 	friend Derived;
 };
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Concrete cache type.  Registry instantiates these; Archetype/LogicThread/
-// RenderThread use the ComponentCacheBase* pointer.
-//
-// The 3 CRTP overrides that differ between tiers:
-//   GetFrameCount  — Volatile: 3 (fixed, triple-buffer), Temporal: Config->TemporalFrameCount
-//   GetCacheTier   — returns the CacheTier enum value
-//   GetLabel       — "Volatile" or "Temporal" for logging
-// ─────────────────────────────────────────────────────────────────────────────
+/// @brief Concrete SoA ring-buffer cache parameterised by storage tier.
+///
+/// @ref Registry instantiates @c ComponentCache<Volatile> and
+/// @c ComponentCache<Temporal>. All callers use the @ref ComponentCacheBase*
+/// interface so they are decoupled from the tier template.
+///
+/// CRTP overrides per tier:
+/// - @c GetFrameCount — Volatile: 3 (triple-buffer); Temporal: @c Config->TemporalFrameCount.
+/// - @c GetCacheTier — returns the @c CacheTier enum value.
+/// - @c GetLabel — @c "Volatile" or @c "Temporal" for logging.
 template <CacheTier Tier>
 class ComponentCache final : public ComponentCacheImpl<ComponentCache<Tier>>
 {

@@ -22,26 +22,25 @@
 struct EngineConfig;
 class JoltPhysics;
 
-// Registry — Central entity management system.
-//
-// Manages three independent handle/index spaces:
-//   GHandle  (GlobalEntityHandle) — internal record identity, indexes into Records[]
-//   LHandle  (EntityHandle)       — OOP/Construct-facing handle, indexes into LocalToRecord[]
-//   NetHandle (EntityNetHandle)   — network replication handle, indexes into NetToRecord[]
-//
-// Index 0 is reserved/invalid in all three spaces.
-//
-// Creation flow:
-//   CreateInternal(classID, span<GHandle>)  — allocates records + archetype slots
-//   MakeEntityHandle(GHandle, classID)      — allocates a local index, wires LocalToRecord
-//   Public API (Create<T>, CreateByClassID) — wraps the above, returns EntityHandle (LHandle)
-//
-// Destruction flow:
-//   Destroy(LHandle)            — defers GHandle to PendingDestructions
-//   ProcessDeferredDestructions — removes from archetype, calls FreeGlobalHandle
-//   FreeGlobalHandle            — reclaims record index, requests local/net handle recycling
-//   ConfirmLocalRecycles/ConfirmNetRecycles — moves pending → free (call after safety window)
-//
+/// @brief Central entity management system.
+///
+/// Manages three independent handle spaces:
+/// - @c GlobalEntityHandle (GHandle) — internal record identity; indexes @c Records[].
+/// - @c EntityHandle (LHandle) — OOP / Construct-facing handle; indexes @c LocalToRecord[].
+/// - @c EntityNetHandle (NetHandle) — network replication handle; indexes @c NetToRecord[].
+///
+/// Index 0 is reserved / invalid in all three spaces.
+///
+/// **Creation flow:**
+/// 1. @c CreateInternal(classID, span<GHandle>) — allocates records and archetype slots.
+/// 2. @c MakeEntityHandle(GHandle, classID) — allocates a local index, wires @c LocalToRecord.
+/// 3. Public API (@c Create<T>, @c CreateByClassID) — wraps the above, returns @c EntityHandle.
+///
+/// **Destruction flow:**
+/// 1. @c Destroy(LHandle) — defers @c GHandle to @c PendingDestructions.
+/// 2. @c ProcessDeferredDestructions — removes from archetype, calls @c FreeGlobalHandle.
+/// 3. @c FreeGlobalHandle — reclaims record index, queues local / net handle recycling.
+/// 4. @c ConfirmLocalRecycles / @c ConfirmNetRecycles — moves pending → free after the safety window.
 class Registry
 {
 public:
@@ -279,7 +278,21 @@ private:
 	// Propagate SoA data from frame T to T+1.
 	// After propagation: clears DirtiedFrame (bit 29) unconditionally,
 	// clears Dirty (bit 30) if render has acknowledged the last published frame.
-	void PropagateFrame(uint32_t currentFrame);
+	// When bPreserveDirtiedFrame is true (rollback resim), bit 29 is NOT cleared so it
+	// accumulates across all resim steps — every entity touched by the resim stays marked.
+	void PropagateFrame(uint32_t currentFrame, bool bPreserveDirtiedFrame = false);
+
+#ifdef TNX_ENABLE_ROLLBACK
+	// Clear DirtiedFrame (bit 29) on all entities in the current write frame.
+	// Called at the start of rollback resim to establish a clean tracking baseline before
+	// PropagateFrame calls with bPreserveDirtiedFrame=true accumulate touched entities.
+	void ClearDirtiedFrameBits();
+
+	// Set/clear resim mode. When active, InvokePrePhys/InvokePostPhys dispatch to the
+	// scalar dirty-filtered variants instead of the wide SIMD variants, and
+	// PropagateFrame uses scatter copy instead of full memcpy for the temporal slab.
+	void SetResimMode(bool bActive) { bResimMode = bActive; }
+#endif
 
 	// =========================================================================
 	// Data members
@@ -321,6 +334,7 @@ private:
 
 #ifdef TNX_ENABLE_ROLLBACK
 	TemporalComponentCache HistorySlab;
+	bool bResimMode = false; // set during rollback resim to redirect sweeps to dirty-filtered variants
 #endif
 	VolatileComponentCache VolatileSlab;
 	JoltPhysics* PhysicsPtr = nullptr;
@@ -499,7 +513,6 @@ template <typename... Components>
 Signature Registry::BuildSignature()
 {
 	Signature Sig;
-	// Fold expression to set all component bits
 	((Sig.Set(Components::StaticTypeID() - 1)), ...);
 	return Sig;
 }
@@ -623,7 +636,12 @@ inline void Registry::InvokePrePhys(SimFloat dt)
 
 	for (auto& [sig, arch] : Archetypes)
 	{
+#ifdef TNX_ENABLE_ROLLBACK
+		const EntityMeta& meta = ReflectionRegistry::Get().EntityGetters[sig.ID];
+		UpdateFunc prePhys = (bResimMode && meta.PrePhysResim) ? meta.PrePhysResim : meta.PrePhys;
+#else
 		UpdateFunc prePhys = ReflectionRegistry::Get().EntityGetters[sig.ID].PrePhys;
+#endif
 		if (!prePhys) continue;
 
 		// Capture only what fits in 48 bytes: 5 pointers/values = 40 bytes
@@ -681,7 +699,12 @@ inline void Registry::InvokePostPhys(SimFloat dt)
 
 	for (auto& [sig, arch] : Archetypes)
 	{
+#ifdef TNX_ENABLE_ROLLBACK
+		const EntityMeta& meta = ReflectionRegistry::Get().EntityGetters[sig.ID];
+		UpdateFunc PostPhys = (bResimMode && meta.PostPhysResim) ? meta.PostPhysResim : meta.PostPhys;
+#else
 		UpdateFunc PostPhys = ReflectionRegistry::Get().EntityGetters[sig.ID].PostPhys;
+#endif
 		if (!PostPhys) continue;
 
 		size_t size = arch->Chunks.size();

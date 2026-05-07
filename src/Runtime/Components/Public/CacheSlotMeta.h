@@ -1,35 +1,14 @@
 #pragma once
-#include <cstdint>
+#include "TemporalFlagBits.h"
 #include "ComponentView.h"
 #include "SchemaReflector.h"
 
-enum class TemporalFlagBits : int32_t
-{
-	Active           = static_cast<int32_t>(1u << 31), ///< Entity ticks, renders, and participates in simulation. Cleared on deactivate or destroy.
-	Dirty            = static_cast<int32_t>(1u << 30), ///< Entity data changed — accumulates until render clears
-	DirtiedFrame     = static_cast<int32_t>(1u << 29), ///< Entity dirtied THIS frame — cleared at frame start, used for per-frame logic reset
-	Replicated       = static_cast<int32_t>(1u << 28), ///< This entity replicates
-	Alive            = static_cast<int32_t>(1u << 27), ///< Entity data is valid and slot cannot be reclaimed. Cleared only on deferred destroy.
-	Tombstone        = static_cast<int32_t>(1u << 16), ///< Entity is tombstoned (deferred destruction)
-	NetConfirmedDead = static_cast<int32_t>(1u << 25), ///< Server confirmed death, waiting for client ack before freeing net handle.
-
-	depthMask = 0xF << 21, ///< 4 bits for attachment depth (bits 24..21)
-
-	// Used for ConstructView bound entities
-	PrePhysSkip  = static_cast<int32_t>(1u << 20), ///< if 1 Disable PrePhysics sweep
-	PostPhysSkip = static_cast<int32_t>(1u << 19), ///< if 1 Disable PostPhysics sweep
-	ScalarSkip   = static_cast<int32_t>(1u << 18), ///< if 1 Disable ScalarUpdate sweep
-	ASleep       = static_cast<int32_t>(1u << 17), ///< if 1 Disable in Jolt
-	// Bits 15..0 available for game-layer flags
-};
-
-FORCE_INLINE TemporalFlagBits operator|(TemporalFlagBits lhs, TemporalFlagBits rhs)
-{
-	return static_cast<TemporalFlagBits>(static_cast<int32_t>(lhs) | static_cast<int32_t>(rhs));
-}
-
-// Per-entity flags in the SoA slab. GPU predicate reads Active (bit 31).
-// Dirty (bit 30) accumulates until render clears. DirtiedFrame (bit 29) is per-frame.
+/// @brief SoA component for per-entity status flags. Slot 0 of the temporal slab.
+///
+/// Wraps a single int32_t field and exposes typed bitwise operators over
+/// @ref TemporalFlagBits. The GPU predicate pass reads @c Active (bit 31) to
+/// drive the scatter compaction. @c Dirty (bit 30) accumulates until render clears.
+/// @c DirtiedFrame (bit 29) is set per-frame and cleared at frame start.
 template <FieldWidth WIDTH = FieldWidth::Scalar>
 struct CacheSlotMeta : ComponentView<CacheSlotMeta, WIDTH>
 {

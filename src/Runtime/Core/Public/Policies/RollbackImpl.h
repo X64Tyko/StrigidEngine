@@ -1,7 +1,9 @@
 #pragma once
-// Template method bodies for RollbackSim.
-// Included at the bottom of LogicThread.h after all types are defined.
-// Only compiled when TNX_ENABLE_ROLLBACK is defined.
+/// @file RollbackImpl.h
+/// @brief Template method bodies for @c RollbackSim.
+///
+/// Included at the bottom of @c LogicThread.h after all dependent types are
+/// defined. Only compiled when @c TNX_ENABLE_ROLLBACK is defined.
 #ifdef TNX_ENABLE_ROLLBACK
 
 #include "TemporalComponentCache.h"
@@ -10,6 +12,11 @@
 #include "Logger.h"
 #include "Profiler.h"
 
+/// @brief Called once per logic tick to drain corrections and trigger rollback if needed.
+///
+/// Prunes stale server events, drains @c IncomingCorrections, merges any pending
+/// spawn-rollback frame, then calls @c ExecuteRollback if the earliest correction
+/// or spawn event predates the current frame.
 template <typename TLogic>
 void RollbackSim::ProcessRollback(TLogic& logic)
 {
@@ -75,6 +82,14 @@ void RollbackSim::ProcessRollback(TLogic& logic)
     }
 }
 
+/// @brief Rewind to @p targetFrame and resimulate forward to the current frame.
+///
+/// Restores the nearest Jolt snapshot at or before @p targetFrame, rewinds
+/// the ECS slab write pointer, replays server events, then iterates the resim
+/// loop — injecting stored input and applying @c EntityTransformCorrection entries
+/// at the correct frame. Uses dirty-filtered scalar sweeps to skip unchanged entities.
+///
+/// @param targetFrame The simulation frame to rewind to.
 template <typename TLogic>
 void RollbackSim::ExecuteRollback(TLogic& logic, uint32_t targetFrame)
 {
@@ -86,7 +101,11 @@ void RollbackSim::ExecuteRollback(TLogic& logic, uint32_t targetFrame)
     const uint32_t frameCount  = logic.TemporalCache->GetTotalFrameCount();
     const double fixedStepTime = logic.ConfigPtr->GetFixedStepTime();
 
-    const uint32_t alignedTarget = (targetFrame / logic.PhysicsDivizor) * logic.PhysicsDivizor - 1;
+    // physicsSnapFrame: the physics step boundary we can restore a Jolt snapshot from.
+    // alignedTarget: the ECS slot one frame earlier — the frame whose slab we propagate forward
+    // as the resim starting state, so the first resim step sees a clean pre-physics ECS frame.
+    const uint32_t physicsSnapFrame = (targetFrame / logic.PhysicsDivizor) * logic.PhysicsDivizor;
+    const uint32_t alignedTarget    = (physicsSnapFrame > 0) ? physicsSnapFrame - 1 : 0;
 
     if (alignedTarget >= T)
     {
@@ -99,8 +118,8 @@ void RollbackSim::ExecuteRollback(TLogic& logic, uint32_t targetFrame)
 
     const uint32_t totalResimFrames = (T - alignedTarget) + 1;
 
-    LOG_ENG_INFO_F("[Rollback] Rewind to frame %u (aligned from %u), resim %u frames to frame %u",
-                   alignedTarget, targetFrame, totalResimFrames, T);
+    LOG_ENG_INFO_F("[Rollback] Rewind to frame %u (physics snap %u), resim %u frames to frame %u",
+                   alignedTarget, physicsSnapFrame, totalResimFrames, T);
 
     // ── Rewind ──────────────────────────────────────────────────────────────
     {
@@ -110,17 +129,19 @@ void RollbackSim::ExecuteRollback(TLogic& logic, uint32_t targetFrame)
 
         TrinyxJobs::WaitForCounter(logic.PhysicsPtr->GetJoltPhysCounter(), TrinyxJobs::Queue::Logic);
 
-        if (!logic.PhysicsPtr->RestoreSnapshot(alignedTarget))
+        if (!logic.PhysicsPtr->RestoreSnapshot(physicsSnapFrame))
         {
-            LOG_ENG_WARN("[Rollback] Snapshot not found, falling back to rebuild-from-slab");
+            LOG_ENG_WARN_F("[Rollback] Snapshot for physics frame %u not found, falling back to rebuild-from-slab",
+                           physicsSnapFrame);
             logic.PhysicsPtr->ResetAllBodies();
             logic.PhysicsPtr->FlushPendingBodies(logic.RegistryPtr);
         }
 
         logic.FrameNumber = alignedTarget;
         logic.RegistryPtr->ReplayServerEventsAt(logic.FrameNumber);
-        logic.PhysicsPtr->SaveSnapshot(alignedTarget);
-        logic.RegistryPtr->PropagateFrame(logic.FrameNumber++);
+        logic.RegistryPtr->ClearDirtiedFrameBits();
+        logic.PhysicsPtr->SaveSnapshot(physicsSnapFrame);
+        logic.RegistryPtr->PropagateFrame(logic.FrameNumber++, true);
 
         logic.SimulationTime = logic.FrameNumber * fixedStepTime;
     }
@@ -130,6 +151,10 @@ void RollbackSim::ExecuteRollback(TLogic& logic, uint32_t targetFrame)
     // ── Resimulate ──────────────────────────────────────────────────────────
     {
         TNX_ZONE_N("Rollback_Resim");
+
+        // Redirect PrePhys/PostPhys sweeps to dirty-filtered scalar variants and
+        // PropagateFrame to scatter-copy for the duration of the resim loop.
+        logic.RegistryPtr->SetResimMode(true);
 
         for (uint32_t i = 0; i < totalResimFrames; ++i)
         {
@@ -149,10 +174,12 @@ void RollbackSim::ExecuteRollback(TLogic& logic, uint32_t targetFrame)
             }
 
             logic.RegistryPtr->ReplayServerEventsAt(logic.FrameNumber);
-            logic.RegistryPtr->PropagateFrame(logic.FrameNumber++);
+            logic.RegistryPtr->PropagateFrame(logic.FrameNumber++, true);
         }
 
         LOG_ENG_INFO_F("[Rollback] Resimulation complete, frame %u", logic.FrameNumber);
+
+        logic.RegistryPtr->SetResimMode(false);
     }
 
     PendingCorrections.erase(
@@ -162,6 +189,12 @@ void RollbackSim::ExecuteRollback(TLogic& logic, uint32_t targetFrame)
     logic.bRollbackActive = false;
 }
 
+/// @brief Determinism test: roll back @c RollbackFrameCount frames and compare against ground truth.
+///
+/// Under @c TNX_TESTING, backs up the current slab and Jolt state, calls @c ExecuteRollback,
+/// then does a byte-perfect @c memcmp of the resimulated field data against the saved ground
+/// truth. Reports per-field divergences and Jolt state mismatches. Restores the original
+/// simulation state before returning.
 template <typename TLogic>
 void RollbackSim::ExecuteRollbackTest(TLogic& logic)
 {

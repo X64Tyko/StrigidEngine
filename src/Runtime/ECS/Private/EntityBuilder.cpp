@@ -7,15 +7,13 @@
 #include "Registry.h"
 #include "Schema.h"
 #include "CacheSlotMeta.h"
+#include "TemporalComponentCache.h"
 
 #include <cstring>
 #include <fstream>
 #include <sstream>
+#include <unordered_map>
 #include <unordered_set>
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
 
 // Write a numeric JSON value into a raw field pointer, using FieldValueType for
 // correct interpretation. Without this, uint32 fields (MeshID, Shape, Motion)
@@ -102,8 +100,6 @@ static void WriteFieldValue(void* dst, size_t fieldSize, FieldValueType valueTyp
 	}
 }
 
-// Build a map of field name → (fieldSlotIndex, fieldSize, valueType, refAssetType) for an
-// archetype using ArchetypeFieldLayout + ComponentFieldRegistry for name resolution.
 struct FieldLookup
 {
 	size_t ArrayIndex;
@@ -131,7 +127,6 @@ static std::vector<std::pair<const char*, FieldLookup>> BuildFieldMap(const Arch
 	return map;
 }
 
-// Find a field by name in the lookup.
 static const FieldLookup* FindField(
 	const std::vector<std::pair<const char*, FieldLookup>>& map,
 	std::string_view name)
@@ -153,9 +148,13 @@ static thread_local std::unordered_set<std::string> ActivePrefabLoads;
 // Thread-local handle collector — non-null only during SpawnFromFileTracked.
 static thread_local std::vector<GlobalEntityHandle>* ActiveHandleCollector = nullptr;
 
+// Streamed chunk registry: (AssetID.Raw → (InstanceIndex → handles)).
+// All access must be from a logic-thread-synchronized context (SpawnAndWait / PostAndWait).
+static std::unordered_map<int64_t, std::unordered_map<uint16_t, std::vector<GlobalEntityHandle>>>
+	StreamedChunkHandles;
+
 EntityHandle EntityBuilder::SpawnEntity(Registry* reg, const JsonValue& entityJson, bool bBackground)
 {
-	// Read entity type name
 	const JsonValue* typeVal = entityJson.Find("type");
 	if (!typeVal || !typeVal->IsString())
 	{
@@ -166,9 +165,12 @@ EntityHandle EntityBuilder::SpawnEntity(Registry* reg, const JsonValue& entityJs
 	const std::string& typeName = typeVal->AsString();
 
 	const uint32_t activeMask = bBackground ? 0u : static_cast<uint32_t>(TemporalFlagBits::Active);
-	const int32_t spawnFlags  = static_cast<int32_t>(activeMask | static_cast<uint32_t>(TemporalFlagBits::Alive));
+	const int32_t spawnFlags  = static_cast<int32_t>(
+		activeMask
+		| static_cast<uint32_t>(TemporalFlagBits::Alive)
+		| static_cast<uint32_t>(TemporalFlagBits::Dirty)
+		| static_cast<uint32_t>(TemporalFlagBits::DirtiedFrame));
 
-	// Resolve type name → ClassID
 	auto& MR        = ReflectionRegistry::Get();
 	ClassID classID = MR.GetEntityByName(typeName);
 	if (classID == 0)
@@ -182,7 +184,6 @@ EntityHandle EntityBuilder::SpawnEntity(Registry* reg, const JsonValue& entityJs
 		auto fieldMap       = BuildFieldMap(record.Arch);
 		uint32_t localIndex = record.LocalIndex;
 
-		// Zero-initialize all fields for this entity.
 		for (const auto& [fkey, fdesc] : record.Arch->ArchetypeFieldLayout)
 		{
 			size_t idx = fdesc.fieldSlotIndex;
@@ -191,7 +192,6 @@ EntityHandle EntityBuilder::SpawnEntity(Registry* reg, const JsonValue& entityJs
 			std::memset(base + localIndex * fdesc.fieldSize, 0, fdesc.fieldSize);
 		}
 
-		// Apply component field values from JSON
 		const JsonValue* components = entityJson.Find("components");
 		if (components && components->IsObject())
 		{
@@ -243,7 +243,6 @@ EntityHandle EntityBuilder::SpawnEntity(Registry* reg, const JsonValue& entityJs
 // Prefab loading helpers
 // ---------------------------------------------------------------------------
 
-// Load and parse an asset JSON file from an absolute path.
 static JsonValue LoadAssetJSON(const std::string& path)
 {
 	std::ifstream file(path);
@@ -281,7 +280,6 @@ static void MergeComponentOverrides(JsonValue& entityJson, const JsonValue* over
 	}
 }
 
-// Resolve an AssetID stored as a JSON number to an absolute path via the AssetRegistry.
 static std::string ResolveAssetIDFromJSON(const JsonValue& val)
 {
 	if (!val.IsNumber()) return {};
@@ -319,12 +317,10 @@ static size_t SpawnFromAssetJSON(Registry* reg, const std::string& path,
 		}
 		else if (assetJson.Find("entities"))
 		{
-			// Scene / entity-group prefab — recurse.
 			count = SpawnSceneInternal(reg, assetJson, bBackground);
 		}
 		else if (assetJson.Find("type"))
 		{
-			// Single entity prefab — apply overrides then spawn.
 			MergeComponentOverrides(assetJson, componentOverrides);
 			EntityHandle id = EntityBuilder::SpawnEntity(reg, assetJson, bBackground);
 			if (id.IsValid()) ++count;
@@ -366,7 +362,6 @@ static size_t SpawnSceneInternal(Registry* reg, const JsonValue& sceneJson, bool
 		}
 		else
 		{
-			// Inline entity definition.
 			EntityHandle id = EntityBuilder::SpawnEntity(reg, entry, bBackground);
 			if (id.IsValid()) ++count;
 		}
@@ -398,6 +393,56 @@ size_t EntityBuilder::SpawnFromFileTracked(Registry* reg, const char* filePath, 
 	size_t count          = SpawnFromAssetJSON(reg, filePath, nullptr, bBackground);
 	ActiveHandleCollector = nullptr;
 	return count;
+}
+
+size_t EntityBuilder::StreamChunkTracked(Registry* reg, const AssetID& assetID, uint16_t instanceIndex)
+{
+	std::string path = AssetRegistry::Get().ResolvePath(assetID);
+	if (path.empty())
+	{
+		LOG_ENG_ERROR_F("[EntityBuilder] StreamChunkTracked: AssetID %lld not found in registry",
+						static_cast<long long>(assetID.Raw));
+		return 0;
+	}
+
+	auto& handles = StreamedChunkHandles[assetID.Raw][instanceIndex];
+	handles.clear();
+	return SpawnFromFileTracked(reg, path.c_str(), /*bBackground=*/true, handles);
+}
+
+std::vector<uint32_t> EntityBuilder::ActivateStreamedChunk(Registry* reg, int64_t assetIDRaw, uint16_t instanceIndex)
+{
+	auto outerIt = StreamedChunkHandles.find(assetIDRaw);
+	if (outerIt == StreamedChunkHandles.end()) return {};
+	auto innerIt = outerIt->second.find(instanceIndex);
+	if (innerIt == outerIt->second.end()) return {};
+
+	ComponentCacheBase* cache       = reg->GetTemporalCache();
+	TemporalFrameHeader* writeHdr   = cache->GetFrameHeader(cache->GetActiveWriteFrame());
+	const ComponentTypeID flagsSlot = CacheSlotMeta<>::StaticTemporalIndex();
+	auto* flags = static_cast<int32_t*>(cache->GetFieldData(writeHdr, flagsSlot, 0));
+	if (!flags) return {};
+
+	constexpr int32_t activateMask = static_cast<int32_t>(
+		static_cast<uint32_t>(TemporalFlagBits::Active) |
+		static_cast<uint32_t>(TemporalFlagBits::Dirty)  |
+		static_cast<uint32_t>(TemporalFlagBits::DirtiedFrame));
+
+	std::vector<uint32_t> activatedSlabs;
+	activatedSlabs.reserve(innerIt->second.size());
+
+	for (const GlobalEntityHandle& gh : innerIt->second)
+	{
+		const EntityRecord* record = reg->GlobalEntityRegistry.Records[gh.GetIndex()];
+		if (!record || !record->IsValid()) continue;
+		flags[record->CacheEntityIndex] |= activateMask;
+		activatedSlabs.push_back(record->CacheEntityIndex);
+	}
+
+	outerIt->second.erase(innerIt);
+	if (outerIt->second.empty()) StreamedChunkHandles.erase(outerIt);
+
+	return activatedSlabs;
 }
 
 EntityHandle EntityBuilder::SpawnEntityFromFile(Registry* reg, const char* filePath, bool bBackground)
@@ -507,19 +552,16 @@ JsonValue EntityBuilder::SerializeEntity(Registry* reg, Archetype* arch, size_t 
 {
 	JsonValue entity = JsonValue::Object();
 
-	// Entity type name
 	const auto& MR       = ReflectionRegistry::Get();
 	const char* typeName = MR.EntityGetters[arch->ArchClassID].Name;
 	entity["type"]       = JsonValue::String(typeName ? typeName : "unknown");
 
-	// Build field array table for reading
 	Chunk* chunk = arch->Chunks[chunkIdx];
 	void* fieldArrayTable[MAX_FIELDS_PER_ARCHETYPE];
 	arch->BuildFieldArrayTable(chunk, fieldArrayTable,
 							   reg->GetTemporalCache()->GetActiveWriteFrame(),
 							   reg->GetVolatileCache()->GetActiveWriteFrame());
 
-	// Group fields by component
 	const auto& CFR      = ReflectionRegistry::Get();
 	JsonValue components = JsonValue::Object();
 
@@ -532,14 +574,12 @@ JsonValue EntityBuilder::SerializeEntity(Registry* reg, Archetype* arch, size_t 
 		size_t idx = fdesc.fieldSlotIndex;
 		if (!fieldArrayTable[idx]) continue;
 
-		// Look up field name from ComponentFieldRegistry
 		const auto* fields    = CFR.GetFields(fdesc.componentID);
 		const char* fieldName = (fields && fdesc.componentSlotIndex < fields->size())
 									? (*fields)[fdesc.componentSlotIndex].Name
 									: nullptr;
 		if (!fieldName) continue;
 
-		// Look up component name when the component ID changes
 		if (fdesc.componentID != currentCompID)
 		{
 			currentCompID        = fdesc.componentID;
@@ -560,7 +600,6 @@ JsonValue EntityBuilder::SerializeEntity(Registry* reg, Archetype* arch, size_t 
 
 		if (!currentComp) continue;
 
-		// Read field value
 		const auto* base          = static_cast<const uint8_t*>(fieldArrayTable[idx]);
 		(*currentComp)[fieldName] = ReadFieldValue(base + localIndex * fdesc.fieldSize, fdesc.fieldSize, fdesc.valueType);
 	}
@@ -588,7 +627,6 @@ JsonValue EntityBuilder::SerializeScene(Registry* reg, const char* sceneName,
 
 	JsonValue entities = JsonValue::Array();
 
-	// Build field array table to check Active flags
 	const auto& archetypes = reg->GetArchetypes();
 
 	for (const auto& [key, arch] : archetypes)
@@ -597,20 +635,17 @@ JsonValue EntityBuilder::SerializeScene(Registry* reg, const char* sceneName,
 		{
 			uint32_t count = arch->GetAllocatedChunkCount(ci);
 
-			// Build field table to read flags
 			void* fieldArrayTable[MAX_FIELDS_PER_ARCHETYPE];
 			arch->BuildFieldArrayTable(arch->Chunks[ci], fieldArrayTable,
 									   reg->GetTemporalCache()->GetActiveWriteFrame(),
 									   reg->GetVolatileCache()->GetActiveWriteFrame());
 
-			// Flags are at field index 0 by convention (CacheSlotMeta::Flags)
 			const auto* flagsArr = (arch->GetFieldArrayCount() > 0 && fieldArrayTable[0])
 									   ? static_cast<const int32_t*>(fieldArrayTable[0])
 									   : nullptr;
 
 			for (uint32_t li = 0; li < count; ++li)
 			{
-				// Skip inactive entities
 				if (flagsArr && !(flagsArr[li] & static_cast<int32_t>(TemporalFlagBits::Active))) continue;
 
 				entities.GetArray().push_back(SerializeEntity(reg, arch, ci, li));

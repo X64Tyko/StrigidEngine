@@ -23,21 +23,18 @@ class WorldBase;
 class TrinyxEngine;
 struct EngineConfig;
 
-// ---------------------------------------------------------------------------
-// FlowManagerBase — Non-template base for FlowManager<TNet,TRollback,TFrame>.
-//
-// All data members and ALL externally-called methods live here. This is what
-// TrinyxEngine, EditorContext, AuthorityNet, OwnerNet, FlowState, Soul,
-// GameMode, and Construct hold as a pointer.
-//
-// One protected pure-virtual: CreateWorldImpl() — the ONLY virtual called on
-// state transitions (Sentinel thread, not hot path).
-//
-// One virtual override point: LoadLevel(const char*, bool) — overridden by
-// FlowManager<> to replace #ifdef TNX_ENABLE_ROLLBACK with if constexpr.
-//
-// See FlowManager.h for the concrete template derived class.
-// ---------------------------------------------------------------------------
+/// @brief Non-template base for @c FlowManager<TNet,TRollback,TFrame>.
+///
+/// Owns all data and all externally-callable methods. This is the pointer type
+/// stored by @c TrinyxEngine, @c EditorContext, @c AuthorityNet, @c OwnerNet,
+/// @c FlowState, @c Soul, @c GameMode, and @c Construct.
+///
+/// One protected pure-virtual: @c CreateWorldImpl() — the only virtual called
+/// on state transitions (Sentinel thread, not a hot path). @c LoadLevel is a
+/// second override point, used by the concrete template to resolve rollback
+/// configuration at compile time.
+///
+/// @see FlowManager.h for the concrete template derived class.
 class FlowManagerBase
 {
 public:
@@ -47,11 +44,11 @@ public:
 	FlowManagerBase(const FlowManagerBase&)            = delete;
 	FlowManagerBase& operator=(const FlowManagerBase&) = delete;
 
-	/// Called once by TrinyxEngine after construction.
+	/// @brief One-time initialization called by @c TrinyxEngine after construction.
 	void Initialize(TrinyxEngine* engine, const EngineConfig* config,
 					int windowWidth, int windowHeight);
 
-	// ----- State registration (code-driven, call in PostInitialize) -----
+	// ----- State / Mode registration (call in PostInitialize) -----
 
 	using StateFactory = std::function<std::unique_ptr<FlowState>()>;
 	using ModeFactory  = std::function<std::unique_ptr<GameMode>()>;
@@ -111,6 +108,10 @@ public:
 	void OnClientLoaded(uint8_t ownerID);
 	void OnLocalOwnerConnected(uint8_t ownerID);
 	void OnClientDisconnected(uint8_t ownerID);
+
+	/// Called by AuthorityNet when a client sends StreamReady for a non-auto-activate chunk.
+	/// Override or wire GameMode logic to call AuthorityNet::SendChunkActivate when ready.
+	virtual void OnStreamReady(int64_t /*assetIDRaw*/, uint16_t /*instanceIndex*/, uint8_t /*ownerID*/) {}
 
 	Soul* GetSoul(uint8_t ownerID) const { return Souls[ownerID].get(); }
 

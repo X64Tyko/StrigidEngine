@@ -8,12 +8,10 @@
 
 #include <string>
 
-// ---------------------------------------------------------------------------
-// DeterminismState — standalone flow state for rollback determinism testing.
-//
-// On entry: loads the floor scene and immediately spawns the local player
-// via DeterminismMode so the test begins without any networking handshake.
-// ---------------------------------------------------------------------------
+/// @brief Standalone @ref FlowState for rollback determinism testing.
+///
+/// On @c OnEnter, sets @c DeterminismMode and loads the configured default scene
+/// so the test begins immediately without a networking handshake.
 class DeterminismState : public FlowState
 {
 public:
@@ -45,7 +43,7 @@ public:
 
 	StateRequirements GetRequirements() const override
 	{
-		return {.NeedsWorld = true, .NeedsLevel = true, .SweepsAliveFlagsOnServerReady = true};
+		return {.NeedsWorld = true, .NeedsLevel = true};
 	}
 
 	const char* GetName() const override { return "DeterminismState"; }
