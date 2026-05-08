@@ -1,6 +1,6 @@
 # Trinyx Engine: Editor Debugging & Tooling Suite
 
-> **Navigation:** [← Back to README](../README.md) | [Architecture →](ARCHITECTURE.md)
+> **Navigation:** [← Back to README](../../README.md) | [Architecture →](ARCHITECTURE.md)
 
 ## Overview
 The Trinyx Engine debugging suite bridges the gap between high-performance Data-Oriented Design (DoD) and developer-friendly Object-Oriented Programming (OOP). It provides real-time, interactive windows into the engine's contiguous memory arenas, temporal ring buffers, multi-threaded task scheduler, network rollback state, GPU pipeline, and asset streaming systems.

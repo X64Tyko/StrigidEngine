@@ -1,6 +1,6 @@
 # Networking Architecture
 
-> **Navigation:** [← Architecture](ARCHITECTURE.md) | [← Game Flow](FLOW.md) | [← Back to README](../README.md)
+> **Navigation:** [← Architecture](ARCHITECTURE.md) | [← Game Flow](FLOW.md) | [← Back to README](../../README.md)
 
 ---
 

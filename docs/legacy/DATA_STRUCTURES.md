@@ -1,6 +1,6 @@
 # Data Structures Reference
 
-> **Navigation:** [← Back to README](../README.md) | [← Performance](PERFORMANCE_TARGETS.md) | [Configuration →](CONFIGURATION.md)
+> **Navigation:** [← Back to README](../../README.md) | [← Performance](PERFORMANCE_TARGETS.md) | [Configuration →](CONFIGURATION.md)
 
 ---
 

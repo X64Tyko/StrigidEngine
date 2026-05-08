@@ -1,7 +1,7 @@
 # Current Status (2026-05)
 
 > **Navigation:
-** [← Back to README](../README.md) | [← Configuration](CONFIGURATION.md) | [Game Flow →](FLOW.md) | [Networking →](NETWORKING.md)
+** [← Back to README](../../README.md) | [← Configuration](CONFIGURATION.md) | [Game Flow →](FLOW.md) | [Networking →](NETWORKING.md)
 
 ---
 

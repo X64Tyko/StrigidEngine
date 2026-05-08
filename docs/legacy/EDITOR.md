@@ -1,6 +1,6 @@
 # TrinyxEngine Editor
 
-> **Navigation:** [← Back to README](../README.md) | [Architecture →](ARCHITECTURE.md) | [Status →](STATUS.md)
+> **Navigation:** [← Back to README](../../README.md) | [Architecture →](ARCHITECTURE.md) | [Status →](STATUS.md)
 
 ---
 

@@ -1,6 +1,6 @@
 # Game Flow (TrinyxEngine)
 
-> **Navigation:** [← Architecture](ARCHITECTURE.md) | [← Status](STATUS.md) | [← Back to README](../README.md)
+> **Navigation:** [← Architecture](ARCHITECTURE.md) | [← Status](STATUS.md) | [← Back to README](../../README.md)
 
 ---
 

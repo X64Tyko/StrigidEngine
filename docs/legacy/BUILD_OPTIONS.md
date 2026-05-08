@@ -1,6 +1,6 @@
 # TrinyxEngine Build Options
 
-> **Navigation:** [← Back to README](../README.md) | [Schema Errors →](SCHEMA_ERROR_EXAMPLES.md)
+> **Navigation:** [← Back to README](../../README.md) | [Schema Errors →](SCHEMA_ERROR_EXAMPLES.md)
 
 ## Prerequisites
 

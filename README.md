@@ -32,7 +32,7 @@ Test meshes and rigs from https://www.3dfiggins.com/Store/
 
 ---
 
-Sync and Build: [docs/BUILD_OPTIONS.md](docs/BUILD_OPTIONS.md)
+Sync and Build: [docs/BUILD_OPTIONS.md](docs/legacy/BUILD_OPTIONS.md)
 
 ---
 
@@ -163,7 +163,7 @@ Within each tier, entities are placed into one of two fixed-size **arenas** usin
 Partition group (Dual/Phys/Render/Logic) is derived automatically from the `SystemGroup` tags on each component. No
 manual annotation required.
 
-See [Architecture Documentation](docs/ARCHITECTURE.md) for full details.
+See [Architecture Documentation](docs/legacy/ARCHITECTURE.md) for full details.
 
 ### GPU-Driven Rendering Pipeline
 
@@ -315,22 +315,22 @@ ratios.
 
 ## Documentation
 
-- **[Architecture Overview](docs/ARCHITECTURE.md)** — Tiered storage, partition design, threading model, GPU upload
-- **[Game Flow](docs/FLOW.md)** — FlowManager, GameState stack, travel model
-- **[GameMode & Soul](docs/GAMEFLOW.md)** — GameMode lifecycle, player join/spawn flow, Soul RPC system
-- **[Networking](docs/NETWORKING.md)** — GNS transport, replication, input injection, PIE loopback
-- **[Performance Targets](docs/PERFORMANCE_TARGETS.md)** — Benchmarks, budgets, scalability analysis
-- **[Data Structures](docs/DATA_STRUCTURES.md)** — FieldProxy, EntityView, InstanceData, component patterns
-- **[Configuration Guide](docs/CONFIGURATION.md)** — EngineConfig presets and tuning
-- **[Current Status](docs/STATUS.md)** — Progress log, roadmap, next milestones
-- **[Build Options](docs/BUILD_OPTIONS.md)** — CMake configuration, Tracy profiling, vectorization
-- **[Defragmentation](docs/DEFRAGMENTATION.md)** — Entity slot defrag, chunk mirror compaction, View rehydration
+- **[Architecture Overview](docs/legacy/ARCHITECTURE.md)** — Tiered storage, partition design, threading model, GPU upload
+- **[Game Flow](docs/legacy/FLOW.md)** — FlowManager, GameState stack, travel model
+- **[GameMode & Soul](docs/legacy/GAMEFLOW.md)** — GameMode lifecycle, player join/spawn flow, Soul RPC system
+- **[Networking](docs/legacy/NETWORKING.md)** — GNS transport, replication, input injection, PIE loopback
+- **[Performance Targets](docs/legacy/PERFORMANCE_TARGETS.md)** — Benchmarks, budgets, scalability analysis
+- **[Data Structures](docs/legacy/DATA_STRUCTURES.md)** — FieldProxy, EntityView, InstanceData, component patterns
+- **[Configuration Guide](docs/legacy/CONFIGURATION.md)** — EngineConfig presets and tuning
+- **[Current Status](docs/legacy/STATUS.md)** — Progress log, roadmap, next milestones
+- **[Build Options](docs/legacy/BUILD_OPTIONS.md)** — CMake configuration, Tracy profiling, vectorization
+- **[Defragmentation](docs/legacy/DEFRAGMENTATION.md)** — Entity slot defrag, chunk mirror compaction, View rehydration
   contract
-- **[Determinism](docs/DETERMINISM.md)** — Deterministic simulation rules, EntityCacheIndex stability, networking
+- **[Determinism](docs/legacy/DETERMINISM.md)** — Deterministic simulation rules, EntityCacheIndex stability, networking
   contract
-- **[Schema Error Examples](docs/SCHEMA_ERROR_EXAMPLES.md)** — Reflection system mistakes and fixes
-- **[Rendering Pipeline](docs/RENDERING.md)** — VizBuffer architecture, GPU compute pipeline, transparency design
-- **[Editor](docs/EDITOR.md)** — Panel reference, PIE, gizmo, asset database, keyboard shortcuts
+- **[Schema Error Examples](docs/legacy/SCHEMA_ERROR_EXAMPLES.md)** — Reflection system mistakes and fixes
+- **[Rendering Pipeline](docs/legacy/RENDERING.md)** — VizBuffer architecture, GPU compute pipeline, transparency design
+- **[Editor](docs/legacy/EDITOR.md)** — Panel reference, PIE, gizmo, asset database, keyboard shortcuts
 
 ---
 
@@ -398,7 +398,7 @@ cmake -B build -DTNX_ENABLE_EDITOR=ON -DENABLE_TRACY=ON -DCMAKE_BUILD_TYPE=RelWi
 cmake --build build
 ```
 
-See [docs/BUILD_OPTIONS.md](docs/BUILD_OPTIONS.md) for complete configuration reference.
+See [docs/BUILD_OPTIONS.md](docs/legacy/BUILD_OPTIONS.md) for complete configuration reference.
 
 ---
 
@@ -416,7 +416,7 @@ The tiered partition design eliminates the cross-archetype co-indexing problem: 
 DUAL→PHYS→STATIC as three dense SIMD passes; render iterates DUAL→RENDER→STATIC. No pointer chasing,
 no per-chunk header lookups, no data duplication, some gaps, so far seems a worthwhile tradeoff.
 
-See [docs/PERFORMANCE_TARGETS.md](docs/PERFORMANCE_TARGETS.md) for detailed analysis.
+See [docs/PERFORMANCE_TARGETS.md](docs/legacy/PERFORMANCE_TARGETS.md) for detailed analysis.
 
 ---
 
@@ -431,6 +431,10 @@ See [docs/PERFORMANCE_TARGETS.md](docs/PERFORMANCE_TARGETS.md) for detailed anal
 ---
 
 ## License
+
+Licensed under the [Apache License, Version 2.0](LICENSE). Free to use for any purpose — personal, commercial, or otherwise — at your own risk. This is an active R&D project; production use is not recommended (see note above).
+
+See [NOTICE](NOTICE) for third-party component attributions (Tracy, GameNetworkingSockets, Jolt Physics, Dear ImGui, and others).
 
 ---
 

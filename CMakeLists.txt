@@ -541,3 +541,22 @@ endif ()
 add_subdirectory(Testbed)
 add_subdirectory(Playground)
 add_subdirectory(DeterminismTest)
+
+# -----------------------------------------------------------------------------
+# 10. DOCUMENTATION (optional — requires Doxygen)
+# -----------------------------------------------------------------------------
+find_package(Doxygen OPTIONAL_COMPONENTS dot)
+if (DOXYGEN_FOUND)
+    set(DOXYFILE_IN  "${CMAKE_CURRENT_SOURCE_DIR}/Doxyfile")
+    set(DOXYGEN_OUT  "${CMAKE_CURRENT_SOURCE_DIR}/docs/doxygen")
+
+    add_custom_target(docs
+        COMMAND ${DOXYGEN_EXECUTABLE} "${DOXYFILE_IN}"
+        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+        COMMENT "Generating API and wiki documentation (output: docs/doxygen/html/index.html)"
+        VERBATIM
+    )
+    message(STATUS "Doxygen found — 'docs' target available (run: cmake --build <dir> --target docs)")
+else ()
+    message(STATUS "Doxygen not found — 'docs' target unavailable")
+endif ()

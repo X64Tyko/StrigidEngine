@@ -1,6 +1,6 @@
 # Engine Configuration
 
-> **Navigation:** [← Back to README](../README.md) | [← Data Structures](DATA_STRUCTURES.md) | [Current Status →](STATUS.md)
+> **Navigation:** [← Back to README](../../README.md) | [← Data Structures](DATA_STRUCTURES.md) | [Current Status →](STATUS.md)
 
 ---
 

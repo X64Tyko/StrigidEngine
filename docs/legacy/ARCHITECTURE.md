@@ -1,7 +1,7 @@
 # TrinyxEngine Architecture
 
 > **Navigation:
-** [← Back to README](../README.md) | [Performance Targets →](PERFORMANCE_TARGETS.md) | [Game Flow →](FLOW.md) | [Networking →](NETWORKING.md)
+** [← Back to README](../../README.md) | [Performance Targets →](PERFORMANCE_TARGETS.md) | [Game Flow →](FLOW.md) | [Networking →](NETWORKING.md)
 
 ---
 
