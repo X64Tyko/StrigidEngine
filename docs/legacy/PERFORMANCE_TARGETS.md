@@ -1,6 +1,6 @@
 # Performance Targets
 
-> **Navigation:** [← Back to README](../README.md) | [← Architecture](ARCHITECTURE.md) | [Data Structures →](DATA_STRUCTURES.md)
+> **Navigation:** [← Back to README](../../README.md) | [← Architecture](ARCHITECTURE.md) | [Data Structures →](DATA_STRUCTURES.md)
 
 ---
 

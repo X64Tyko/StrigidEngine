@@ -117,7 +117,8 @@ EXCLUDE                = libs \
                          cmake-build-ci \
                          cmake-build-ci-server \
                          cmake-build-ci-client \
-                         docs/doxygen
+                         docs/doxygen \
+                         docs/legacy
 EXCLUDE_SYMLINKS       = NO
 EXCLUDE_PATTERNS       = */libs/* \
                          */cmake-build*/* \
@@ -131,7 +132,7 @@ INPUT_FILTER           =
 FILTER_PATTERNS        =
 FILTER_SOURCE_FILES    = NO
 FILTER_SOURCE_PATTERNS =
-USE_MDFILE_AS_MAINPAGE = README.md
+USE_MDFILE_AS_MAINPAGE = docs/Home.md
 
 #---------------------------------------------------------------------------
 # Source browsing

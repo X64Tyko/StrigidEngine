@@ -1,6 +1,6 @@
 # Schema Reflection - Error Message Examples
 
-> **Navigation:** [← Back to README](../README.md) | [← Build Options](BUILD_OPTIONS.md)
+> **Navigation:** [← Back to README](../../README.md) | [← Build Options](BUILD_OPTIONS.md)
 
 This document shows the improved error messages for common schema reflection mistakes.
 
