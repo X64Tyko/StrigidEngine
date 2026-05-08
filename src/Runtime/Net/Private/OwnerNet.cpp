@@ -490,7 +490,7 @@ void OwnerNet::HandleEntityDelta(Registry* reg, const uint8_t* payload, uint32_t
 	const ComponentDeltaFns* bySlot[MaxCacheSlots] = {};
 	ComponentDeltaRegistry::Get().ForEach([&](ComponentTypeID, const ComponentDeltaFns& fns)
 	{
-			bySlot[fns.CacheSlot] = &fns;
+		bySlot[fns.CacheSlot] = &fns;
 	});
 
 	constexpr size_t MaxFields = 32;
