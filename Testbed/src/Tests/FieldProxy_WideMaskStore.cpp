@@ -2,11 +2,11 @@
 #include "TrinyxEngine.h"
 #include "FieldProxy.h"
 
-// Validates FieldProxy<float, WideMask> — AVX2 masked store.
-// Used at the tail of a chunk when fewer than 8 entity slots are active.
+// Validates FieldProxy<float, WideMask> — masked store at tail of a chunk.
+// Used when fewer than kSIMDWide32Lanes entity slots are active in a lane.
 // The mask is computed from startCount in Bind(); only lanes [0, startCount)
-// are written. Lanes [startCount, 8) must remain unchanged.
-// Guarded by __AVX2__ — skipped on builds without AVX2 support.
+// are written. Lanes [startCount, kSIMDWide32Lanes) must remain unchanged.
+// Guarded by TNX_HAS_AVX2 — skipped on builds without AVX2 support.
 TEST(FieldProxy_WideMaskStore)
 {
 	(void)Engine;
@@ -14,49 +14,53 @@ TEST(FieldProxy_WideMaskStore)
 #ifndef TNX_HAS_AVX2
 	SKIP_TEST("AVX2 not available in this build (ENABLE_AVX2=OFF)");
 #else
-	alignas(FIELD_ARRAY_ALIGNMENT) SimFloat data[8] = {0, 0, 0, 0, 0, 0, 0, 0};
-	alignas(FIELD_ARRAY_ALIGNMENT) int32_t flags[8] = {};
+	alignas(FIELD_ARRAY_ALIGNMENT) SimFloat data[kSIMDWide32Lanes] = {};
+	alignas(FIELD_ARRAY_ALIGNMENT) int32_t flags[kSIMDWide32Lanes] = {};
 
-	// --- 5-active-lane masked store: lanes 0-4 written, 5-7 untouched ---
+	// --- 5-active-lane masked store: lanes 0-4 written, rest untouched ---
 	{
 		FieldProxy<SimFloat, FieldWidth::WideMask> proxy;
-		proxy.Bind(data, flags, 0, 5); // 5 active lanes
+		proxy.Bind(data, flags, 0, 5);
 
 		proxy = SimFloat(9.9f);
 
 		for (int i = 0; i < 5; ++i) ASSERT_EQ(data[i], SimFloat(9.9f));
 
-		for (int i = 5; i < 8; ++i)
+		for (int i = 5; i < kSIMDWide32Lanes; ++i)
 			ASSERT_EQ(data[i], 0.0f); // untouched — key invariant
 	}
 
-	// --- Full 8-lane masked store behaves like Wide ---
+	// --- Full-lane masked store behaves like Wide ---
 	{
-		alignas(FIELD_ARRAY_ALIGNMENT) SimFloat full[8] = {1, 2, 3, 4, 5, 6, 7, 8};
+		alignas(FIELD_ARRAY_ALIGNMENT) SimFloat full[kSIMDWide32Lanes] = {};
+		for (int i = 0; i < kSIMDWide32Lanes; ++i) full[i] = static_cast<SimFloat>(i + 1);
 		FieldProxy<SimFloat, FieldWidth::WideMask> proxy;
-		proxy.Bind(full, flags, 0, 8);
+		proxy.Bind(full, flags, 0, kSIMDWide32Lanes);
 
 		proxy = SimFloat(0.0f);
 
-		for (int i = 0; i < 8; ++i)
+		for (int i = 0; i < kSIMDWide32Lanes; ++i)
 			ASSERT_EQ(full[i], 0.0f);
 	}
 
 	// --- 1-active-lane: only the first element written ---
 	{
-		alignas(FIELD_ARRAY_ALIGNMENT) SimFloat single[8] = {0, 1, 2, 3, 4, 5, 6, 7};
+		alignas(FIELD_ARRAY_ALIGNMENT) SimFloat single[kSIMDWide32Lanes] = {};
+		for (int i = 0; i < kSIMDWide32Lanes; ++i) single[i] = static_cast<SimFloat>(i);
 		FieldProxy<SimFloat, FieldWidth::WideMask> proxy;
 		proxy.Bind(single, flags, 0, 1);
 
 		proxy = SimFloat(42.0f);
 
 		ASSERT_EQ(single[0], 42.0f);
-		for (int i = 1; i < 8; ++i) ASSERT_EQ(single[i], static_cast<SimFloat>(i)); // unchanged
+		for (int i = 1; i < kSIMDWide32Lanes; ++i)
+			ASSERT_EQ(single[i], static_cast<SimFloat>(i)); // unchanged
 	}
 
 	// --- Masked += ---
 	{
-		alignas(FIELD_ARRAY_ALIGNMENT) SimFloat addData[8] = {10, 10, 10, 10, 10, 10, 10, 10};
+		alignas(FIELD_ARRAY_ALIGNMENT) SimFloat addData[kSIMDWide32Lanes] = {};
+		for (int i = 0; i < kSIMDWide32Lanes; ++i) addData[i] = 10.0f;
 		FieldProxy<SimFloat, FieldWidth::WideMask> proxy;
 		proxy.Bind(addData, flags, 0, 3); // 3 active lanes
 
@@ -64,7 +68,7 @@ TEST(FieldProxy_WideMaskStore)
 
 		for (int i = 0; i < 3; ++i)
 			ASSERT_EQ(addData[i], 15.0f);
-		for (int i = 3; i < 8; ++i)
+		for (int i = 3; i < kSIMDWide32Lanes; ++i)
 			ASSERT_EQ(addData[i], 10.0f); // untouched
 	}
 #endif
