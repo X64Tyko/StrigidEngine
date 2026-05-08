@@ -432,6 +432,10 @@ See [docs/PERFORMANCE_TARGETS.md](docs/PERFORMANCE_TARGETS.md) for detailed anal
 
 ## License
 
+Licensed under the [Apache License, Version 2.0](LICENSE). Free to use for any purpose — personal, commercial, or otherwise — at your own risk. This is an active R&D project; production use is not recommended (see note above).
+
+See [NOTICE](NOTICE) for third-party component attributions (Tracy, GameNetworkingSockets, Jolt Physics, Dear ImGui, and others).
+
 ---
 
 ## Contact

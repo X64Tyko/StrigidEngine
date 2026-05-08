@@ -1,0 +1,156 @@
+TrinyxEngine
+Copyright 2026 X64Tyko
+
+=========================================================================
+R&D Status Notice
+=========================================================================
+
+TrinyxEngine is an active research and development project. It is not
+recommended for use in commercial or production products at this time.
+Architecture, APIs, and data formats may change significantly between
+versions without notice or migration support.
+
+=========================================================================
+Third-Party Component Notices
+=========================================================================
+
+This product includes the following third-party software. Each component
+retains its original copyright and license terms, reproduced below.
+
+-------------------------------------------------------------------------
+Tracy Profiler
+-------------------------------------------------------------------------
+Copyright (c) 2017-2026, Bartosz Taudul <wolf@nereid.pl>
+All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
+
+1. Redistributions of source code must retain the above copyright notice,
+   this list of conditions and the following disclaimer.
+2. Redistributions in binary form must reproduce the above copyright notice,
+   this list of conditions and the following disclaimer in the documentation
+   and/or other materials provided with the distribution.
+3. Neither the name of the copyright holder nor the names of its contributors
+   may be used to endorse or promote products derived from this software
+   without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
+LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+POSSIBILITY OF SUCH DAMAGE.
+
+-------------------------------------------------------------------------
+GameNetworkingSockets
+-------------------------------------------------------------------------
+Copyright (c) 2018, Valve Corporation
+All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
+
+1. Redistributions of source code must retain the above copyright notice,
+   this list of conditions and the following disclaimer.
+2. Redistributions in binary form must reproduce the above copyright notice,
+   this list of conditions and the following disclaimer in the documentation
+   and/or other materials provided with the distribution.
+3. Neither the name of Valve Corporation nor the names of its contributors
+   may be used to endorse or promote products derived from this software
+   without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
+LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+POSSIBILITY OF SUCH DAMAGE.
+
+-------------------------------------------------------------------------
+Protocol Buffers (protobuf)
+-------------------------------------------------------------------------
+Copyright (c) 2008 Google Inc.
+All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
+
+1. Redistributions of source code must retain the above copyright notice,
+   this list of conditions and the following disclaimer.
+2. Redistributions in binary form must reproduce the above copyright notice,
+   this list of conditions and the following disclaimer in the documentation
+   and/or other materials provided with the distribution.
+3. Neither the name of Google Inc. nor the names of its contributors may be
+   used to endorse or promote products derived from this software without
+   specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
+LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+POSSIBILITY OF SUCH DAMAGE.
+
+-------------------------------------------------------------------------
+Jolt Physics
+-------------------------------------------------------------------------
+Copyright (c) 2021 Jorrit Rouwe
+Licensed under the MIT License.
+
+-------------------------------------------------------------------------
+Dear ImGui
+-------------------------------------------------------------------------
+Copyright (c) 2014-2025 Omar Cornut
+Licensed under the MIT License.
+
+-------------------------------------------------------------------------
+ImGuizmo
+-------------------------------------------------------------------------
+Copyright (c) 2016 Cedric Guillemet
+Licensed under the MIT License.
+
+-------------------------------------------------------------------------
+SDL3
+-------------------------------------------------------------------------
+Copyright (C) 1997-2025 Sam Lantinga <slouken@libsdl.org>
+Licensed under the zlib License.
+
+-------------------------------------------------------------------------
+Vulkan Memory Allocator (VMA)
+-------------------------------------------------------------------------
+Copyright (c) 2017-2025 Advanced Micro Devices, Inc.
+Licensed under the MIT License.
+
+-------------------------------------------------------------------------
+Volk
+-------------------------------------------------------------------------
+Copyright (c) 2018-2024 Arseny Kapoulkine
+Licensed under the MIT License.
+
+-------------------------------------------------------------------------
+Slang
+-------------------------------------------------------------------------
+Copyright (c) 2024, NVIDIA CORPORATION & AFFILIATES
+Licensed under the Apache License, Version 2.0 with LLVM Exception.
+
+-------------------------------------------------------------------------
+OpenSSL
+-------------------------------------------------------------------------
+Copyright (c) 1998-2024 The OpenSSL Project Authors
+Licensed under the Apache License, Version 2.0.
