@@ -1245,7 +1245,7 @@ void OwnerNet::HandleMessage(const ReceivedMessage& msg)
 				clientWorld->PostAndWait([reg, assetIDRaw, instanceIndex, serverFrame](uint32_t)
 				{
 					auto slabs = EntityBuilder::ActivateStreamedChunk(reg, assetIDRaw, instanceIndex);
-					LOG_ENG_INFO_F("[ClientNet] ChunkActivate: activated %zu entities (assetID=%lld, inst=%u)",
+					LOG_ENG_INFO_F("[ClientNet] ChunkActivate: activated %zu entities (assetID=%ld, inst=%u)",
 								   slabs.size(), assetIDRaw, static_cast<unsigned>(instanceIndex));
 #ifdef TNX_ENABLE_ROLLBACK
 					if (!slabs.empty())
