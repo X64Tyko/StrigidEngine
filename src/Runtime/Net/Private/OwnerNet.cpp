@@ -1184,7 +1184,7 @@ void OwnerNet::HandleMessage(const ReceivedMessage& msg)
 				clientWorld->SpawnAndWait([reg, assetID, instanceIndex, bAutoActivate, serverFrame](uint32_t)
 				{
 					size_t count = EntityBuilder::StreamChunkTracked(reg, assetID, instanceIndex);
-					LOG_ENG_INFO_F("[ClientNet] StreamLoad: spawned %zu entities (assetID=%lld, inst=%u)",
+					LOG_ENG_INFO_F("[ClientNet] StreamLoad: spawned %zu entities (assetID=%ld, inst=%u)",
 								   count, assetID.Raw, static_cast<unsigned>(instanceIndex));
 
 					if (bAutoActivate)
