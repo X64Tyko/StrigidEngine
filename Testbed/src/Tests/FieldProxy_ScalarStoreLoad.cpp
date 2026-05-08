@@ -5,13 +5,13 @@
 // Validates FieldProxy<float, Scalar> — the single-entity scalar update path.
 // This is the most commonly exercised path (Construct-side entity writes).
 // Tests: store via operator=, load via Value(), dirty bit marking, Advance() cursor.
-TEST(FieldProxy_ScalarStoreLoad)
+TEST (FieldProxy_ScalarStoreLoad)
 {
 	(void)Engine;
 
 	// Raw backing arrays — simulate what BuildFieldArrayTable provides
-	alignas(32) SimFloat data[16] = {};
-	alignas(32) int32_t flags[16] = {};
+	alignas(FIELD_ARRAY_ALIGNMENT) SimFloat data[16] = {};
+	alignas(FIELD_ARRAY_ALIGNMENT) int32_t flags[16] = {};
 
 	// --- Basic store and load ---
 	{

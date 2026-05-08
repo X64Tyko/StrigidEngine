@@ -2,6 +2,7 @@
 
 #include "TemporalFlagBits.h"
 #include "EntityMeta.h"
+#include "MemoryDefines.h"
 #include "Profiler.h"
 
 /// @brief Entity dispatch templates — wide SIMD + scalar + tail-masked loops.
@@ -18,7 +19,7 @@
 template <typename T>
 FORCE_INLINE void InvokePrePhysicsImpl(SimFloat dt, void** fieldArrayTable, void* FlagBase, uint32_t componentCount)
 {
-	alignas(32) typename T::WideType viewBatch;
+	alignas(FIELD_ARRAY_ALIGNMENT) typename T::WideType viewBatch;
 
 	constexpr uint32_t SIMD_BATCH = 8;
 	const uint32_t batchCount     = componentCount / SIMD_BATCH;
@@ -31,7 +32,7 @@ FORCE_INLINE void InvokePrePhysicsImpl(SimFloat dt, void** fieldArrayTable, void
 		viewBatch.Advance(SIMD_BATCH);
 	}
 
-	alignas(32) typename T::MaskedType tailBatch;
+	alignas(FIELD_ARRAY_ALIGNMENT) typename T::MaskedType tailBatch;
 	tailBatch.Hydrate(fieldArrayTable, FlagBase, SIMD_BATCH * batchCount, componentCount % SIMD_BATCH);
 	tailBatch.PrePhysics(dt);
 }
@@ -40,7 +41,7 @@ FORCE_INLINE void InvokePrePhysicsImpl(SimFloat dt, void** fieldArrayTable, void
 template <typename T>
 FORCE_INLINE void InvokeScalarUpdateImpl(SimFloat dt, void** fieldArrayTable, void* FlagBase, uint32_t componentCount)
 {
-	alignas(32) T viewBatch;
+	alignas(FIELD_ARRAY_ALIGNMENT) T viewBatch;
 
 	viewBatch.Hydrate(fieldArrayTable, FlagBase);
 
@@ -65,7 +66,7 @@ FORCE_INLINE void InvokeInitializeImpl(void** fieldArrayTable, void* FlagBase, u
 template <typename T>
 FORCE_INLINE void InvokePostPhysicsImpl(SimFloat dt, void** fieldArrayTable, void* FlagBase, uint32_t componentCount)
 {
-	alignas(32) typename T::WideType viewBatch;
+	alignas(FIELD_ARRAY_ALIGNMENT) typename T::WideType viewBatch;
 
 	constexpr uint32_t SIMD_BATCH = 8;
 	const uint32_t batchCount     = componentCount / SIMD_BATCH;
@@ -79,7 +80,7 @@ FORCE_INLINE void InvokePostPhysicsImpl(SimFloat dt, void** fieldArrayTable, voi
 	}
 
 	TNX_ZONE_FINE_N("Tail Batch")
-	alignas(32) typename T::MaskedType tailBatch;
+	alignas(FIELD_ARRAY_ALIGNMENT) typename T::MaskedType tailBatch;
 	tailBatch.Hydrate(fieldArrayTable, FlagBase, SIMD_BATCH * batchCount, componentCount % SIMD_BATCH);
 	tailBatch.PostPhysics(dt);
 }
@@ -94,9 +95,9 @@ FORCE_INLINE void InvokePrePhysicsResimImpl(SimFloat dt, void** fieldArrayTable,
 {
 	if constexpr (HasPrePhysics<T>)
 	{
-		const int32_t* flags     = static_cast<const int32_t*>(FlagBase);
-		constexpr int32_t dirty  = static_cast<int32_t>(TemporalFlagBits::DirtiedFrame);
-		alignas(32) T view;
+		const int32_t* flags    = static_cast<const int32_t*>(FlagBase);
+		constexpr int32_t dirty = static_cast<int32_t>(TemporalFlagBits::DirtiedFrame);
+		alignas(FIELD_ARRAY_ALIGNMENT) T view;
 		view.Hydrate(fieldArrayTable, FlagBase);
 		for (uint32_t i = 0; i < componentCount; ++i)
 		{
@@ -112,9 +113,9 @@ FORCE_INLINE void InvokePostPhysicsResimImpl(SimFloat dt, void** fieldArrayTable
 {
 	if constexpr (HasPostPhysics<T>)
 	{
-		const int32_t* flags     = static_cast<const int32_t*>(FlagBase);
-		constexpr int32_t dirty  = static_cast<int32_t>(TemporalFlagBits::DirtiedFrame);
-		alignas(32) T view;
+		const int32_t* flags    = static_cast<const int32_t*>(FlagBase);
+		constexpr int32_t dirty = static_cast<int32_t>(TemporalFlagBits::DirtiedFrame);
+		alignas(FIELD_ARRAY_ALIGNMENT) T view;
 		view.Hydrate(fieldArrayTable, FlagBase);
 		for (uint32_t i = 0; i < componentCount; ++i)
 		{

@@ -14,8 +14,8 @@ TEST(FieldProxy_WideMaskStore)
 #ifndef TNX_HAS_AVX2
 	SKIP_TEST("AVX2 not available in this build (ENABLE_AVX2=OFF)");
 #else
-	alignas(32) SimFloat data[8] = {0, 0, 0, 0, 0, 0, 0, 0};
-	alignas(32) int32_t flags[8]  = {};
+	alignas(FIELD_ARRAY_ALIGNMENT) SimFloat data[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+	alignas(FIELD_ARRAY_ALIGNMENT) int32_t flags[8] = {};
 
 	// --- 5-active-lane masked store: lanes 0-4 written, 5-7 untouched ---
 	{
@@ -32,7 +32,7 @@ TEST(FieldProxy_WideMaskStore)
 
 	// --- Full 8-lane masked store behaves like Wide ---
 	{
-		alignas(32) SimFloat full[8] = {1, 2, 3, 4, 5, 6, 7, 8};
+		alignas(FIELD_ARRAY_ALIGNMENT) SimFloat full[8] = {1, 2, 3, 4, 5, 6, 7, 8};
 		FieldProxy<SimFloat, FieldWidth::WideMask> proxy;
 		proxy.Bind(full, flags, 0, 8);
 
@@ -44,7 +44,7 @@ TEST(FieldProxy_WideMaskStore)
 
 	// --- 1-active-lane: only the first element written ---
 	{
-		alignas(32) SimFloat single[8] = {0, 1, 2, 3, 4, 5, 6, 7};
+		alignas(FIELD_ARRAY_ALIGNMENT) SimFloat single[8] = {0, 1, 2, 3, 4, 5, 6, 7};
 		FieldProxy<SimFloat, FieldWidth::WideMask> proxy;
 		proxy.Bind(single, flags, 0, 1);
 
@@ -56,7 +56,7 @@ TEST(FieldProxy_WideMaskStore)
 
 	// --- Masked += ---
 	{
-		alignas(32) SimFloat addData[8] = {10, 10, 10, 10, 10, 10, 10, 10};
+		alignas(FIELD_ARRAY_ALIGNMENT) SimFloat addData[8] = {10, 10, 10, 10, 10, 10, 10, 10};
 		FieldProxy<SimFloat, FieldWidth::WideMask> proxy;
 		proxy.Bind(addData, flags, 0, 3); // 3 active lanes
 
