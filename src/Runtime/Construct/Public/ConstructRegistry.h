@@ -9,7 +9,7 @@
 #include "ConstructRecord.h"
 #include "PagedMap.h"
 
-class World;
+class WorldBase;
 class Soul;
 class ReplicationSystem;
 
@@ -46,10 +46,10 @@ public:
 	ConstructRegistry& operator=(const ConstructRegistry&) = delete;
 
 	// --- Callback signatures for world transition hooks ---
-	using TeardownFn    = void(*)(void*);         // void OnWorldTeardown()
-	using InitializedFn = void(*)(void*, World*); // void OnWorldInitialized(World*)
-	using ShutdownFn    = void(*)(void*);         // Construct::Shutdown()
-	using ReinitFn      = void(*)(void*, World*); // Construct::Initialize(World*)
+	using TeardownFn    = void(*)(void*);               // void OnWorldTeardown()
+	using InitializedFn = void(*)(void*, WorldBase*);   // void OnWorldInitialized(WorldBase*)
+	using ShutdownFn    = void(*)(void*);               // Construct::Shutdown()
+	using ReinitFn      = void(*)(void*, WorldBase*);   // Construct::Initialize(WorldBase*)
 
 	// PreInit is a zero-cost compile-time callable (no std::function overhead).
 	// Called after allocation but before Initialize, allowing the caller to
@@ -58,7 +58,7 @@ public:
 	// after OwnerWorld is set (and can use GetWorld()). Both paths coexist.
 	// Omit the second argument for the no-op path — the branch is compiled away.
 	template <typename T, typename PreInit = std::nullptr_t>
-	T* Create(World* InWorld, PreInit&& preInit = nullptr)
+	T* Create(WorldBase* InWorld, PreInit&& preInit = nullptr)
 	{
 		auto typed = std::make_unique<TypedStorage<T>>();
 		T* raw     = &typed->Value;
@@ -76,12 +76,12 @@ public:
 
 		// Store Shutdown/Initialize for surviving Constructs across World reset
 		entry.ShutdownPtr = [](void* p) { static_cast<T*>(p)->Shutdown(); };
-		entry.ReinitPtr   = [](void* p, World* w) { static_cast<T*>(p)->Initialize(w); };
+		entry.ReinitPtr   = [](void* p, WorldBase* w) { static_cast<T*>(p)->Initialize(w); };
 
 		// Concept-detected world transition callbacks
 		if constexpr (requires(T t) { t.OnWorldTeardown(); }) entry.OnTeardown = [](void* p) { static_cast<T*>(p)->OnWorldTeardown(); };
 
-		if constexpr (requires(T t, World* w) { t.OnWorldInitialized(w); }) entry.OnInitialized = [](void* p, World* w) { static_cast<T*>(p)->OnWorldInitialized(w); };
+		if constexpr (requires(T t, WorldBase* w) { t.OnWorldInitialized(w); }) entry.OnInitialized = [](void* p, WorldBase* w) { static_cast<T*>(p)->OnWorldInitialized(w); };
 
 		constexpr auto tier = static_cast<uint8_t>(T::Lifetime);
 		Buckets[tier].push_back(std::move(entry));
@@ -92,7 +92,7 @@ public:
 	/// Called by ReplicationSystem::HandleConstructSpawn — the server's handle is in the payload.
 	/// Does NOT allocate a new NetIndex; uses the one already assigned by the server.
 	ConstructRef WireNetRef(void* ptr, ConstructNetHandle serverHandle,
-							ConstructNetManifest manifest, uint32_t typeHash)
+							ConstructNetManifest manifest, uint32_t typeHash, uint32_t spawnFrame)
 	{
 		const uint32_t netIndex = serverHandle.NetIndex;
 		const uint8_t ownerID   = serverHandle.NetOwnerID;
@@ -104,6 +104,7 @@ public:
 		rec.ConstructPtr = ptr;
 		rec.TypeHash     = typeHash;
 		rec.PrefabIDRaw  = 0;
+		rec.SpawnFrame   = spawnFrame;
 		rec.Generation   = 1;
 		rec.OwnerID      = ownerID;
 
@@ -122,7 +123,7 @@ public:
 	/// Allocate a net identity for a Construct (server or standalone).
 	/// Returns a valid ConstructRef with a non-zero NetIndex.
 	ConstructRef AllocateNetRef(void* ptr, uint8_t ownerID, ConstructNetManifest manifest,
-								uint32_t typeHash, int64_t prefabIDRaw)
+								uint32_t typeHash, int64_t prefabIDRaw, uint32_t spawnFrame = 0)
 	{
 		const uint32_t netIndex = NextNetIndex++;
 
@@ -135,6 +136,7 @@ public:
 		rec.ConstructPtr = ptr;
 		rec.TypeHash     = typeHash;
 		rec.PrefabIDRaw  = prefabIDRaw;
+		rec.SpawnFrame   = spawnFrame;
 		rec.Generation   = 1;
 		rec.OwnerID      = ownerID;
 
@@ -153,7 +155,7 @@ public:
 	/// ownerSoul is set on the Construct before InitializeForReplication so ownership
 	/// checks (e.g. SetActiveCameraIfOwned) work correctly during initialization.
 	template <typename T>
-	T* CreateForReplication(World* InWorld, EntityHandle* viewHandles, uint8_t viewCount, Soul* ownerSoul)
+	T* CreateForReplication(WorldBase* InWorld, EntityHandle* viewHandles, uint8_t viewCount, Soul* ownerSoul)
 	{
 		auto typed = std::make_unique<TypedStorage<T>>();
 		T* raw     = &typed->Value;
@@ -169,10 +171,10 @@ public:
 		entry.Storage = std::move(typed);
 
 		entry.ShutdownPtr = [](void* p) { static_cast<T*>(p)->Shutdown(); };
-		entry.ReinitPtr   = [](void* p, World* w) { static_cast<T*>(p)->Initialize(w); };
+		entry.ReinitPtr   = [](void* p, WorldBase* w) { static_cast<T*>(p)->Initialize(w); };
 
 		if constexpr (requires(T t) { t.OnWorldTeardown(); }) entry.OnTeardown = [](void* p) { static_cast<T*>(p)->OnWorldTeardown(); };
-		if constexpr (requires(T t, World* w) { t.OnWorldInitialized(w); }) entry.OnInitialized = [](void* p, World* w) { static_cast<T*>(p)->OnWorldInitialized(w); };
+		if constexpr (requires(T t, WorldBase* w) { t.OnWorldInitialized(w); }) entry.OnInitialized = [](void* p, WorldBase* w) { static_cast<T*>(p)->OnWorldInitialized(w); };
 
 		constexpr auto tier = static_cast<uint8_t>(T::Lifetime);
 		Buckets[tier].push_back(std::move(entry));
@@ -182,6 +184,61 @@ public:
 	void Destroy(uint32_t id)
 	{
 		PendingDestructions.push_back(id);
+	}
+
+	/// Destroy a Construct by its network handle. Searches Entry buckets for the
+	/// matching pointer (same pattern as SetNetDestroyHook). Safe to call on Logic thread.
+	void DestroyByNetHandle(ConstructNetHandle handle)
+	{
+		const GlobalConstructHandle& gH = LookupGlobalHandle(handle);
+		if (gH.GetIndex() == 0) return;
+		const ConstructRecord* rec = Records.try_get_ptr(gH.GetIndex());
+		if (!rec || !rec->ConstructPtr) return;
+		void* target = rec->ConstructPtr;
+		for (auto& bucket : Buckets)
+		{
+			for (auto& entry : bucket)
+			{
+				if (entry.Ptr == target)
+				{
+					Destroy(entry.ID);
+					return;
+				}
+			}
+		}
+	}
+
+	/// Called by ReplicationSystem after RegisterConstruct to auto-deregister on destruction.
+	void SetNetDestroyHook(void* ptr, ConstructNetHandle handle,
+						   void (*fn)(void*, ConstructNetHandle), void* ctx)
+	{
+		for (auto& bucket : Buckets)
+		{
+			for (auto& entry : bucket)
+			{
+				if (entry.Ptr == ptr)
+				{
+					entry.NetHandle     = handle;
+					entry.NetDestroyFn  = fn;
+					entry.NetDestroyCtx = ctx;
+					return;
+				}
+			}
+		}
+	}
+
+	/// Clear all net destroy hooks — called by ReplicationSystem on destruction
+	/// to prevent stale callbacks after the system is torn down.
+	void ClearNetDestroyHooks()
+	{
+		for (auto& bucket : Buckets)
+		{
+			for (auto& entry : bucket)
+			{
+				entry.NetDestroyFn  = nullptr;
+				entry.NetDestroyCtx = nullptr;
+			}
+		}
 	}
 
 	/// Process deferred destructions. Called by LogicThread at frame top.
@@ -198,6 +255,7 @@ public:
 				{
 					if (bucket[i].ID == id)
 					{
+						if (bucket[i].NetDestroyFn) bucket[i].NetDestroyFn(bucket[i].NetDestroyCtx, bucket[i].NetHandle);
 						if (i != bucket.size() - 1) bucket[i] = std::move(bucket.back());
 						bucket.pop_back();
 						found = true;
@@ -217,7 +275,8 @@ public:
 	{
 		for (uint8_t i = 0; i < static_cast<uint8_t>(minSurviving); ++i)
 		{
-			Buckets[i].clear(); // unique_ptr destructors call ~TypedStorage → ~Construct → Shutdown
+			for (auto& entry : Buckets[i]) if (entry.NetDestroyFn) entry.NetDestroyFn(entry.NetDestroyCtx, entry.NetHandle);
+			Buckets[i].clear();
 		}
 	}
 
@@ -236,7 +295,7 @@ public:
 	}
 
 	/// Re-initialize surviving Constructs on a fresh World and call OnWorldInitialized.
-	void NotifyWorldInitialized(ConstructLifetime minSurviving, World* newWorld)
+	void NotifyWorldInitialized(ConstructLifetime minSurviving, WorldBase* newWorld)
 	{
 		for (uint8_t i = static_cast<uint8_t>(minSurviving); i < BucketCount; ++i)
 		{
@@ -251,7 +310,11 @@ public:
 	/// Destroy everything.
 	void DestroyAll()
 	{
-		for (auto& bucket : Buckets) bucket.clear();
+		for (auto& bucket : Buckets)
+		{
+			for (auto& entry : bucket) if (entry.NetDestroyFn) entry.NetDestroyFn(entry.NetDestroyCtx, entry.NetHandle);
+			bucket.clear();
+		}
 		PendingDestructions.clear();
 	}
 
@@ -291,6 +354,20 @@ public:
 		const ConstructRecord* rec = Records.try_get_ptr(
 			LookupGlobalHandle(ref.Handle).GetIndex());
 		return rec && ref.Generation == rec->Generation;
+	}
+
+	/// Returns the earliest SpawnFrame across all live Construct records.
+	/// Used by LogicThread to clamp rollback targets — we must never roll back to
+	/// before the oldest Construct was spawned, as there is no replay event to re-create it.
+	uint32_t GetEarliestSpawnFrame() const
+	{
+		uint32_t earliest = UINT32_MAX;
+		for (uint32_t i = 1; i < NextNetIndex; ++i)
+		{
+			const ConstructRecord* rec = Records.try_get_ptr(i);
+			if (rec && rec->IsValid() && rec->SpawnFrame < earliest) earliest = rec->SpawnFrame;
+		}
+		return earliest;
 	}
 
 private:
@@ -334,6 +411,12 @@ private:
 		InitializedFn OnInitialized = nullptr;
 		ShutdownFn ShutdownPtr      = nullptr;
 		ReinitFn ReinitPtr          = nullptr;
+
+		// Net destroy hook — set by ReplicationSystem::RegisterConstruct.
+		// Fires before the Entry is erased so ReplicationSystem can queue ConstructDestroy.
+		ConstructNetHandle NetHandle{};
+		void (*NetDestroyFn)(void* ctx, ConstructNetHandle handle) = nullptr;
+		void* NetDestroyCtx                                        = nullptr;
 	};
 
 	static constexpr uint8_t BucketCount = 4; // Level, World, Session, Persistent

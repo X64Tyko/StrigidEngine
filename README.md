@@ -2,8 +2,13 @@
 
 [![CI (main)](https://github.com/X64Tyko/TrinyxEngine/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/X64Tyko/TrinyxEngine/actions/workflows/ci.yml?query=branch%3Amain)
 [![CI (Dev-Main)](https://github.com/X64Tyko/TrinyxEngine/actions/workflows/ci.yml/badge.svg?branch=Dev-Main)](https://github.com/X64Tyko/TrinyxEngine/actions/workflows/ci.yml?query=branch%3ADev-Main)
+[![Docs](https://github.com/X64Tyko/TrinyxEngine/actions/workflows/docs.yml/badge.svg?branch=main)](https://x64tyko.github.io/TrinyxEngine/)
 
 **A high-performance, data-oriented game engine for R&D and experimentation**
+
+> **In-progress work lives on [`Dev-Main`](https://github.com/X64Tyko/TrinyxEngine/tree/Dev-Main).**
+> `main` tracks stable, CI-green milestones. If you want to see what's actively being built — new subsystems,
+> experiments, and work-in-progress features — check `Dev-Main` instead.
 
 ---
 
@@ -31,7 +36,7 @@ Sync and Build: [docs/BUILD_OPTIONS.md](docs/BUILD_OPTIONS.md)
 
 ---
 
-## Current Status (2026-04)
+## Current Status (2026-05)
 
 **Performance:**
 
@@ -172,7 +177,7 @@ A 3-pass compute pipeline processes entity data on the GPU each frame:
 The render thread copies SoA field arrays from the temporal/volatile caches into one of 5 PersistentMapped
 field slabs when a new logic frame is detected. The GPU reads the current and previous slabs via BDA for
 interpolation. 3 field slabs cycle independently of the 2 GPU frame-in-flight slots, decoupling VSync
-from the logic thread. Dirty-bit-driven partial upload is tracked but not yet wired (currently full-slab copy).
+from the logic thread. Dirty-bit-driven partial upload is operational — only modified entities are uploaded per frame.
 
 ### Data-Oriented Components
 
@@ -245,17 +250,17 @@ SystemGroup tags.
 
 ### Networking
 
-Server-authoritative model with GNS (GameNetworkingSockets) transport:
+Authority-authoritative model with GNS (GameNetworkingSockets) transport:
 
-- **PIENetThread** dispatches messages to `ServerNetThread` and `ClientNetThread` sub-handlers within the same process
-- **ServerNetThread** injects per-player `InputFrame` packets into per-owner `InputBuffer` slots (
-  `World::GetPlayerSimInput(ownerID)`), ensuring client input drives only that player's Construct
-- **ReplicationSystem** walks the server Registry each net tick:
+- **PIENetThread** dispatches messages to `AuthorityNetThread` and `OwnerNetThread` sub-handlers within the same process
+- **AuthorityNetThread** injects per-player `InputFrame` packets into per-owner `InputBuffer` slots (
+  `World::GetPlayerSimInput(ownerID)`), ensuring Owner input drives only that player's Construct
+- **ReplicationSystem** walks the Authority Registry each net tick:
     - Sends `EntitySpawn` (reliable) for new entities — includes ClassID, transform, scale, color, mesh
     - Sends batched `StateCorrection` (unreliable) with authoritative transforms
-- **Soul RPC system** — type-safe server/client RPC dispatch (`TNX_IMPL_SERVER` / `TNX_IMPL_CLIENT`) used for
+- **Soul RPC system** — type-safe Authority/Owner RPC dispatch (`TNX_IMPL_SERVER` / `TNX_IMPL_CLIENT`) used for
   `PlayerBegin` handshake and `PlayerBeginConfirm`
-- **PIE loopback** — editor creates server + N client Worlds in same process for local testing
+- **PIE loopback** — editor creates Authority + N Owner Worlds in same process for local testing
 - **EntityNetHandle** — packed uint32 (NetOwnerID:8 + NetIndex:24) for network entity identity
 
 ```bash
@@ -324,7 +329,8 @@ ratios.
 - **[Determinism](docs/DETERMINISM.md)** — Deterministic simulation rules, EntityCacheIndex stability, networking
   contract
 - **[Schema Error Examples](docs/SCHEMA_ERROR_EXAMPLES.md)** — Reflection system mistakes and fixes
-- **[GPU-Driven Rendering Design](docs/GPU_Driven_Rendering_Design.md)** — GPU pipeline design doc
+- **[Rendering Pipeline](docs/RENDERING.md)** — VizBuffer architecture, GPU compute pipeline, transparency design
+- **[Editor](docs/EDITOR.md)** — Panel reference, PIE, gizmo, asset database, keyboard shortcuts
 
 ---
 

@@ -370,8 +370,7 @@ Designer-authored values (e.g. MaxAmmo) belong in cold components. On load:
 
 ## SimFloat / FloatProxy — Determinism Alias
 
-> **Status: Design intent — not yet implemented.** Fixed32 is designed but not yet wired. `SimFloat`
-> currently aliases to `float` directly. The switch to `Fixed32` is a hardening-phase task.
+> **Status: Complete.** `Fixed32`, `FixedUnit`, `SimFloat`, and `FixedTrig` are implemented and fully wired. `FieldProxy<Fixed32, WIDTH>` is live for all position, velocity, and force fields. `SimFloat` aliases `SimFloatImpl<Fixed32>` under `TNX_DETERMINISM` and the engine runs deterministically. Jolt bridge (int32↔float32 at cell boundary) validated.
 
 The determinism mode switch is designed to live in one place. Entity authors never touch it:
 

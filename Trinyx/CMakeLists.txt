@@ -72,8 +72,8 @@ add_library(${PROJECT_NAME} STATIC
     ${TRACY_SOURCES}
     ${VOLK_SOURCES}
         ${IMGUI_SOURCES}
-        ../src/Runtime/Core/Public/ComponentView.h
-        ../src/Runtime/Core/Public/TrinyxJobs.h
+        ../src/Runtime/ECS/Public/ComponentView.h
+        ../src/Runtime/Threading/Public/TrinyxJobs.h
 )
 
 # Suppress all warnings from Tracy (third-party, not our code)
@@ -121,6 +121,13 @@ endif()
 target_include_directories(${PROJECT_NAME} PUBLIC
     "${CMAKE_SOURCE_DIR}/src/Runtime/Core/Public"
     "${CMAKE_SOURCE_DIR}/src/Runtime/Memory/Public"
+        "${CMAKE_SOURCE_DIR}/src/Runtime/Math/Public"
+        "${CMAKE_SOURCE_DIR}/src/Runtime/Containers/Public"
+        "${CMAKE_SOURCE_DIR}/src/Runtime/Threading/Public"
+        "${CMAKE_SOURCE_DIR}/src/Runtime/Reflection/Public"
+        "${CMAKE_SOURCE_DIR}/src/Runtime/ECS/Public"
+        "${CMAKE_SOURCE_DIR}/src/Runtime/Camera/Public"
+        "${CMAKE_SOURCE_DIR}/src/Runtime/Serialization/Public"
     "${CMAKE_SOURCE_DIR}/src/Runtime/Rendering/Public"
     "${CMAKE_SOURCE_DIR}/src/Runtime/Profiling/Public"
     "${CMAKE_SOURCE_DIR}/src/Runtime/Logging/Public"
@@ -132,7 +139,13 @@ target_include_directories(${PROJECT_NAME} PUBLIC
         "${CMAKE_SOURCE_DIR}/src/Runtime/Construct/Public"
         "${CMAKE_SOURCE_DIR}/src/Runtime/Entities/Public"
         "${CMAKE_SOURCE_DIR}/src/Runtime/Flow/Public"
+        "${CMAKE_SOURCE_DIR}/src/Runtime/Audio/Public"
         "${CMAKE_SOURCE_DIR}/src/Editor/Public"
+)
+
+# stb_vorbis (single-header, no separate build step)
+target_include_directories(${PROJECT_NAME} SYSTEM PUBLIC
+        "${CMAKE_SOURCE_DIR}/libs/stb_vorbis"
 )
 
 # B. SDL3 - Platform specific
@@ -174,6 +187,17 @@ if (TNX_ENABLE_EDITOR)
 endif ()
 if (NOT TNX_HEADLESS)
     target_link_libraries(${PROJECT_NAME} PUBLIC Vulkan::Vulkan)
+endif ()
+
+# F. Nsight Aftermath SDK (optional — only linked if SDK path is valid)
+if (TNX_ENABLE_AFTERMATH AND TNX_AFTERMATH_SDK_PATH AND EXISTS "${TNX_AFTERMATH_SDK_PATH}/include/GFSDK_Aftermath.h")
+    target_include_directories(${PROJECT_NAME} SYSTEM PUBLIC "${TNX_AFTERMATH_SDK_PATH}/include")
+    if (WIN32)
+        target_link_libraries(${PROJECT_NAME} PUBLIC "${TNX_AFTERMATH_SDK_PATH}/lib/x64/GFSDK_Aftermath_Lib.x64.lib")
+        # GFSDK_Aftermath_Lib.x64.dll must be alongside the executable at runtime.
+    elseif (UNIX)
+        target_link_libraries(${PROJECT_NAME} PUBLIC "${TNX_AFTERMATH_SDK_PATH}/lib/x64/libGFSDK_Aftermath_Lib.x64.so")
+    endif ()
 endif ()
 
 # D. Jolt Physics

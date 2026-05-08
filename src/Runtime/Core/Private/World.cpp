@@ -1,31 +1,30 @@
-#include "World.h"
+#include "WorldBase.h"
 
 #include "Logger.h"
-#include "LogicThread.h"
+#include "LogicThreadBase.h"
 #include "Registry.h"
 #include "JoltPhysics.h"
 
-World::World() = default;
+WorldBase::WorldBase() = default;
 
-bool World::IsLogicRunning() const { return Logic && Logic->IsRunning(); }
+bool WorldBase::IsLogicRunning() const { return Logic && Logic->IsRunning(); }
 
-World::~World()
+WorldBase::~WorldBase()
 {
-	// If not already shut down, clean up gracefully.
-	if (Logic&& Logic
-	->
-	IsRunning()
-	)
+	if (Logic && Logic->IsRunning())
 	{
 		Stop();
 		Join();
 	}
 }
 
-bool World::Initialize(const EngineConfig& config, ConstructRegistry* constructRegistry,
-					   int windowWidth, int windowHeight)
+bool WorldBase::InitBase(const EngineConfig& config, ConstructRegistry* constructRegistry,
+						 int windowWidth, int windowHeight)
 {
-	Config = config;
+	(void)windowWidth;
+	(void)windowHeight;
+
+	Config     = config;
 	Constructs = constructRegistry;
 
 	// --- Registry ---
@@ -40,39 +39,33 @@ bool World::Initialize(const EngineConfig& config, ConstructRegistry* constructR
 	}
 	RegistryPtr->SetPhysics(Physics.get());
 
-	// --- Logic thread (created but not started) ---
-	Logic    = std::make_unique<LogicThread>();
+	// --- World queue ---
 	WQHandle = TrinyxJobs::CreateWorldQueue();
 	if (WQHandle == TrinyxJobs::InvalidWorldQueue)
 	{
 		LOG_ENG_ERROR("[World] Failed to create WorldQueue");
 		return false;
 	}
-	Logic->Initialize(RegistryPtr.get(), &Config, Physics.get(),
-					  &SimInput, &VizInput, WQHandle, &bJobsInitialized,
-					  windowWidth, windowHeight);
-	Logic->SetConstructRegistry(Constructs);
 
-	LOG_ENG_INFO("[World] Initialized");
 	return true;
 }
 
-void World::Start()
+void WorldBase::Start()
 {
 	if (Logic) Logic->Start();
 }
 
-void World::Stop()
+void WorldBase::Stop()
 {
 	if (Logic) Logic->Stop();
 }
 
-void World::Join()
+void WorldBase::Join()
 {
 	if (Logic) Logic->Join();
 }
 
-void World::Shutdown()
+void WorldBase::Shutdown()
 {
 	Stop();
 	Join();
@@ -95,12 +88,75 @@ void World::Shutdown()
 	LOG_ENG_INFO("[World] Shut down");
 }
 
-void World::ResetRegistry() const
+void WorldBase::ResetRegistry() const
 {
 	if (RegistryPtr) RegistryPtr->ResetRegistry();
 }
 
-void World::ConfirmLocalRecycles() const
+void WorldBase::ConfirmLocalRecycles() const
 {
 	if (RegistryPtr) RegistryPtr->ConfirmLocalRecycles();
 }
+
+// ---------------------------------------------------------------------------
+// World<TNet, TRollback, TFrame>::Initialize
+//
+// Lives here (not inline in World.h) so that constructing a LogicThread<>
+// only happens in this TU. LogicThread<> has extern template declarations in
+// LogicThread.h, so World.cpp.o emits references to the LogicThread<> vtable
+// (not definitions). The definitions come from LogicThread.cpp.o.
+// ---------------------------------------------------------------------------
+#include "World.h"
+
+template <typename TNet, typename TRollback, typename TFrame>
+bool World<TNet, TRollback, TFrame>::Initialize(
+	const EngineConfig& config, ConstructRegistry* constructRegistry,
+	int windowWidth, int windowHeight)
+{
+	if (!InitBase(config, constructRegistry, windowWidth, windowHeight)) return false;
+
+	auto typedLogic = std::make_unique<LogicType>();
+	TypedLogic      = typedLogic.get();
+	Logic           = std::move(typedLogic);
+
+	Logic->Initialize(RegistryPtr.get(), &Config, Physics.get(),
+					  &SimInput, &VizInput,
+					  WQHandle, &bJobsInitialized,
+					  windowWidth, windowHeight);
+	Logic->SetConstructRegistry(Constructs);
+
+	// Initialize the audio command ring (any thread → Sentinel drain).
+	if (!AudioCmdRing.Initialize(64))
+	{
+		LOG_ENG_ERROR("[World] Failed to initialize AudioCmdRing");
+		return false;
+	}
+	AudioCmdConsumer.emplace(AudioCmdRing.MakeConsumer());
+
+	if constexpr (std::is_same_v<TNet, OwnerSim>)
+	{
+		if (!InputAccumRing.Initialize(256))
+		{
+			LOG_ENG_ERROR("[World] Failed to initialize InputAccumRing");
+			return false;
+		}
+		InputAccumConsumer.emplace(InputAccumRing.MakeConsumer());
+		TypedLogic->GetNetMode().Initialize(&InputAccumRing, &bInputAccumEnabled, &SimInput);
+	}
+
+	LOG_ENG_INFO("[World] Initialized");
+	return true;
+}
+
+template class World<SoloSim, NoRollback, GameFrame>;
+#ifdef TNX_ENABLE_NETWORK
+template class World<AuthoritySim, NoRollback, GameFrame>;
+template class World<OwnerSim, NoRollback, GameFrame>;
+#endif
+#ifdef TNX_ENABLE_ROLLBACK
+template class World<SoloSim, RollbackSim, GameFrame>;
+#ifdef TNX_ENABLE_NETWORK
+template class World<AuthoritySim, RollbackSim, GameFrame>;
+template class World<OwnerSim, RollbackSim, GameFrame>;
+#endif
+#endif

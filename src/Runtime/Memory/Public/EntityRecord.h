@@ -1,6 +1,7 @@
 #pragma once
 #include <cstdint>
 #include <type_traits>
+#include <vector>
 
 #include "RegistryTypes.h"
 #include "Events.h"
@@ -133,6 +134,8 @@ struct EntityArchive
 private:
 	friend class Registry;
 	friend class ReplicationSystem;
+	friend class OwnerNet;
+	friend struct EntityBuilder;
 
 	// Private constructor - only Registry can create
 	EntityArchive() = default;

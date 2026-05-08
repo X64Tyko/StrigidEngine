@@ -533,8 +533,7 @@ inline Fixed32 operator*(Fixed32 a, Fixed32 b) {
 transform.PosX += body.VelX * dt;   // Fixed32 * Fixed32 → Fixed32, no overflow
 ```
 
-`FieldProxy<Fixed32, WIDTH>` — all position, velocity, and force fields use this type. because we have the FieldProxy we
-can have a build variable to replace FieldProxy<float> with FieldProxy<fixed32> at runtime, no code changes required.
+`FieldProxy<Fixed32, WIDTH>` — all position, velocity, and force fields use this type. The `TNX_DETERMINISM` build flag swaps `SimFloat` between `SimFloatImpl<float>` and `SimFloatImpl<Fixed32>` with no code changes required in entity authors.
 
 ## Quaternion Representation
 
@@ -951,9 +950,24 @@ class ContactListener : public JPH::ContactListener {
 };
 ```
 
-After Pull, Brain drains the contact buffers and dispatches `OnCollision` events to entity update
-functions. Contacts are mapped back to entity IDs via a `BodyID → EntityID` lookup table maintained
-during Push (body creation/destruction).
+After Pull, Brain drains the contact buffers via `ProcessContacts()`. Contacts are resolved from
+`BodyID → EntityCacheHandle → EntityHandle` and dispatched to per-body callbacks (`BodyToOnHit`,
+`BodyToOverlap`) mapped by `BodyID.GetIndex()`.
+
+**Two dispatch paths:**
+
+- **Constructs:** direct typed callbacks via `BodyToOnHit`/`BodyToOverlap`. Auto-bound via concept
+  detection (`HasOnHit`, `HasOnOverlapBegin`, `HasOnOverlapEnd`) during `Construct<T>::Initialize`.
+  Callbacks receive `PhysicsOnHitData` (EntityHandle + normal + penetration) or `PhysicsOverlapData`
+  (EntityHandle). Currently implemented.
+
+- **Entities (designed, not yet implemented):** `ContactSystem<T>` — one CRTP instance per entity type
+  that implements contact methods. Pre-hydrated EntityView that repoints its FieldProxy cursor to the
+  contacted entity's cache index during `ProcessContacts`. No per-entity allocation, no dynamic View
+  hydration. Multi-hit handled naturally (each contact invokes the function, logic accumulates). Only
+  instantiated for entity types that implement `OnHit`/`OnOverlapBegin`. Types without contact methods
+  pay nothing. Determinism preserved since `ProcessContacts` runs at a fixed point in the frame
+  (after `PullActiveTransforms`, before `PostPhysics`).
 
 ## Body Lifecycle
 
@@ -980,7 +994,7 @@ create-then-add pattern that requires an extra lock acquisition.
 
 The tiered partition design (Cold/Static/Volatile/Temporal with dual-ended arena layout) is **implemented**.
 `TemporalComponentCache` provides N-frame SoA ring buffers per field with Active and Dirty bit tracking.
-The delta-upload path is tracked but not yet wired to the GPU upload (currently full-slab copy).
+Dirty-bit-driven partial upload is operational — only modified entities are uploaded per frame.
 
 Jolt Physics v5.5.0 is integrated: `JoltJobSystemAdapter` bridges onto the Jolt job queue, `JoltBody`
 cold component provides shape/motion/mass data, and `FlushPendingBodies`/`PullActiveTransforms` sync
@@ -1149,7 +1163,7 @@ target; dedicated server follows from the same code paths.
 - **GNSContext** — GNS init/teardown, isolates GNS headers
 - **NetConnectionManager** — per-connection `ConnectionInfo` (GNS handle, OwnerID, RTT, `ClientRepState`)
 - **NetThread** — 30Hz poller (configurable), routes `NetMessageType` dispatch
-- **ReplicationSystem** — server-side entity flush (EntitySpawn + StateCorrection), fires `ServerReady`
+- **ReplicationSystem** — Authority-side entity flush (EntitySpawn + StateCorrection), fires `AuthorityReady`
 - **NetChannel** — typed per-connection send API; home for delta state, coalescing, RPC dispatch
 - **Soul** — one per OwnerID (even splitscreen), owns the `NetChannel`, drives spawn flow
 - **ConstructHandle** *(planned)* — 32-bit handle (`OwnerID:8 | LocalIndex:16 | Generation:8`), modeled
@@ -1157,7 +1171,7 @@ target; dedicated server follows from the same code paths.
 
 ## Network Identity
 
-**EntityNetHandle** — `NetOwnerID:8 | NetIndex:24`. OwnerID 0 = server, 1-255 = clients.
+**EntityNetHandle** — `NetOwnerID:8 | NetIndex:24`. OwnerID 0 = Authority, 1-255 = Owners.
 
 **Three handle spaces in Registry:** GlobalEntityHandle (internal) / EntityHandle (local OOP) / EntityNetHandle (
 network)
@@ -1224,8 +1238,8 @@ Server + N client Worlds in same process. Each client: own OwnerID, viewport, sl
 
 - [ ] **ConstructHandle** — 32-bit `OwnerID:8|LocalIndex:16|Generation:8`, PagedMap-backed ConstructRegistry,
   owner-local indices. See [NETWORKING.md](NETWORKING.md).
-- [ ] `GetTemporalFieldWritePtr` migrated from Archetype to TemporalComponentCache
-- [ ] `TemporalFrameStride` removed from Archetype (duplicated state — call cache->GetFrameStride())
+- [x] ~~`GetTemporalFieldWritePtr` migrated from Archetype to TemporalComponentCache~~ ✅ Done (2026-04-21) — now `ComponentCacheBase::GetWriteFramePtr(void*)`/`GetReadFramePtr(void*)`
+- [x] ~~`TemporalFrameStride` removed from Archetype~~ ✅ Done (2026-04-21) — `BuildFieldArrayTable` queries cache directly
 - [ ] `GetLiveChunkCount` needs per-chunk live counters or Active flag scanning (currently approximation from global
   counter)
 - [ ] **Presentation Reconciler** (Anti-Events, speculative presentation diff)

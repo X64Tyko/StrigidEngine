@@ -7,7 +7,7 @@
 #include "VulkanMemory.h"
 #include "RendererCore.h" // MaxFramesInFlight
 
-class World;
+class WorldBase;
 
 // -----------------------------------------------------------------------
 // WorldViewport — per-world GPU resource bundle for editor multi-viewport.
@@ -29,12 +29,15 @@ static constexpr int kViewportSlabCount = 5;
 
 struct WorldViewport
 {
-	World* TargetWorld = nullptr;
+	WorldBase* TargetWorld = nullptr;
 
 	// ── Offscreen render targets ────────────────────────────────────────
 	VulkanImage ColorTarget;                       // RGBA8, rendered scene
 	VulkanImage DepthTarget;                       // D32_SFLOAT
 	VkDescriptorSet ImGuiTexture = VK_NULL_HANDLE; // For ImGui::Image()
+#ifdef TNX_GPU_PICKING
+	VulkanImage PickTarget;                        // R32_UINT, entity cache index per pixel
+#endif
 
 	// ── Per-viewport sampler (for ImGui::Image compositing) ─────────────
 	VkSampler ImGuiSampler = VK_NULL_HANDLE;
@@ -61,6 +64,8 @@ struct WorldViewport
 	// ── Per-world frame tracking ────────────────────────────────────────
 	uint64_t LastVolatileFrame = 0;
 	uint64_t LastTemporalFrame = 0;
+	uint64_t PrevVolatileFrame = 0;
+	uint64_t PrevTemporalFrame = 0;
 
 	// ── Viewport dimensions ─────────────────────────────────────────────
 	uint32_t Width    = 0;

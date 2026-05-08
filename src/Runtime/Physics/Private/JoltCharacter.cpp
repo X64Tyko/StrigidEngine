@@ -1,12 +1,18 @@
 #include "JoltCharacter.h"
 #include "JoltLayers.h"
+#include "JoltPhysics.h"
 #include <Jolt/Physics/PhysicsSystem.h>
 #include <Jolt/Physics/Collision/Shape/CapsuleShape.h>
 
-void JoltCharacter::Initialize(JPH::PhysicsSystem* system, JPH::RVec3 position,
+JoltCharacter::~JoltCharacter()
+{
+	Shutdown();
+}
+
+void JoltCharacter::Initialize(JoltPhysics* physics, JPH::RVec3 position,
 							   float capsuleRadius, float capsuleHalfHeight)
 {
-	PhysSystem = system;
+	Physics = physics;
 
 	JPH::CharacterVirtualSettings settings;
 	settings.mShape                     = new JPH::CapsuleShape(capsuleHalfHeight, capsuleRadius);
@@ -15,14 +21,33 @@ void JoltCharacter::Initialize(JPH::PhysicsSystem* system, JPH::RVec3 position,
 	settings.mCharacterPadding          = 0.02f;
 	settings.mPenetrationRecoverySpeed  = 1.0f;
 	settings.mPredictiveContactDistance = 0.1f;
+	settings.mInnerBodyShape            = settings.mShape;
+	settings.mInnerBodyLayer            = JoltLayers::Dynamic;
 
 	Character = new JPH::CharacterVirtual(
-		&settings, position, JPH::Quat::sIdentity(), 0, PhysSystem);
+		&settings, position, JPH::Quat::sIdentity(), 0, Physics->GetPhysicsSystem());
+
+	Physics->RegisterCharacter(this);
+}
+
+void JoltCharacter::Shutdown()
+{
+	if (!Character) { Physics = nullptr; return; }
+
+	if (Physics)
+	{
+		Physics->UnregisterCharacter(this);
+	}
+
+	Character = nullptr; // triggers CharacterVirtual::~CharacterVirtual() while PhysSystem is still alive
+	Physics = nullptr;
 }
 
 void JoltCharacter::Update(JPH::Vec3 desiredVelocity, JPH::Vec3 gravity, float dt,
 						   JPH::TempAllocator& allocator)
 {
+	if (!Character) return;
+
 	JPH::Vec3 current_vertical_velocity = Character->GetLinearVelocity().Dot(Character->GetUp()) * Character->GetUp();
 	JPH::Vec3 ground_velocity           = Character->GetGroundVelocity();
 	JPH::Vec3 new_velocity;
@@ -55,8 +80,8 @@ void JoltCharacter::Update(JPH::Vec3 desiredVelocity, JPH::Vec3 gravity, float d
 		dt,
 		gravity,
 		updateSettings,
-		PhysSystem->GetDefaultBroadPhaseLayerFilter(JoltLayers::Dynamic),
-		PhysSystem->GetDefaultLayerFilter(JoltLayers::Dynamic),
+		Physics->GetPhysicsSystem()->GetDefaultBroadPhaseLayerFilter(JoltLayers::Dynamic),
+		Physics->GetPhysicsSystem()->GetDefaultLayerFilter(JoltLayers::Dynamic),
 		{}, // body filter
 		{}, // shape filter
 		allocator);
@@ -65,24 +90,25 @@ void JoltCharacter::Update(JPH::Vec3 desiredVelocity, JPH::Vec3 gravity, float d
 JPH::RVec3 JoltCharacter::GetPosition() const { return Character->GetPosition(); }
 JPH::Quat JoltCharacter::GetRotation() const { return Character->GetRotation(); }
 JPH::Vec3 JoltCharacter::GetLinearVelocity() const { return Character->GetLinearVelocity(); }
-void JoltCharacter::SetPosition(JPH::RVec3 position) { Character->SetPosition(position); }
+void JoltCharacter::SetPosition(JPH::RVec3 position) { if (Character) Character->SetPosition(position); }
 
 bool JoltCharacter::IsGrounded() const
 {
-	return Character->GetGroundState() == JPH::CharacterVirtual::EGroundState::OnGround;
+	return Character ? Character->GetGroundState() == JPH::CharacterVirtual::EGroundState::OnGround : false;
 }
 
-void JoltCharacter::SyncToSlab(float* posX, float* posY, float* posZ,
-							   float* rotX, float* rotY, float* rotZ, float* rotW,
+void JoltCharacter::SyncToSlab(SimFloat* posX, SimFloat* posY, SimFloat* posZ,
+							   SimFloat* rotX, SimFloat* rotY, SimFloat* rotZ, SimFloat* rotW,
 							   uint32_t index)
 {
+	if (!Character) return;
 	JPH::RVec3 pos = GetPosition();
 	JPH::Quat rot  = GetRotation();
-	posX[index]    = pos.GetX();
-	posY[index]    = pos.GetY();
-	posZ[index]    = pos.GetZ();
-	rotX[index]    = rot.GetX();
-	rotY[index]    = rot.GetY();
-	rotZ[index]    = rot.GetZ();
-	rotW[index]    = rot.GetW();
+	posX[index]    = SimFloat(pos.GetX());
+	posY[index]    = SimFloat(pos.GetY());
+	posZ[index]    = SimFloat(pos.GetZ());
+	rotX[index]    = SimFloat(rot.GetX());
+	rotY[index]    = SimFloat(rot.GetY());
+	rotZ[index]    = SimFloat(rot.GetZ());
+	rotW[index]    = SimFloat(rot.GetW());
 }

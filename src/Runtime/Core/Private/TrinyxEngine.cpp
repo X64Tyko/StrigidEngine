@@ -1,5 +1,6 @@
 #include "TrinyxEngine.h"
 
+#include <filesystem>
 #include <iostream>
 #include <SDL3/SDL.h>
 #ifndef TNX_HEADLESS
@@ -10,6 +11,7 @@
 #include "AssetRegistry.h"
 #include "EngineConfig.h"
 #include "FlowManager.h"
+#include "Globals.h"
 #include "ReflectionRegistry.h"
 #include "Logger.h"
 #include "LogicThread.h"
@@ -19,6 +21,8 @@
 #include "TrinyxJobs.h"
 #include "World.h"
 #ifndef TNX_HEADLESS
+#include "AudioManager.h"
+#include "../../../Runtime/Audio/Private/AudioInternal.h"
 #if TNX_ENABLE_EDITOR
 #include "EditorRenderer.h"
 #else
@@ -60,19 +64,18 @@ void TrinyxEngine::ParseCommandLine(int argc, char* argv[])
 			Config.MaxFrames = atoi(argv[++i]);
 		}
 #ifdef TNX_ENABLE_NETWORK
-		else if (strcmp(argv[i], "--server") == 0)
+		// --server / --listen set the network role at runtime in the old model.
+		// Role is now baked in at compile time via TNX_NET_MODEL. These args are
+		// accepted and silently ignored so existing launch scripts don't break.
+		// --client <ip> is still valid: it sets the connect address.
+		else if (strcmp(argv[i], "--server") == 0 || strcmp(argv[i], "--listen") == 0)
 		{
-			Config.Mode = EngineMode::Server;
+			// No-op — role is compile-time (TNX_NET_MODEL).
 		}
 		else if (strcmp(argv[i], "--client") == 0 && i + 1 < argc)
 		{
-			Config.Mode = EngineMode::Client;
 			strncpy(Config.NetAddress, argv[++i], sizeof(Config.NetAddress) - 1);
 			Config.NetAddress[sizeof(Config.NetAddress) - 1] = '\0';
-		}
-		else if (strcmp(argv[i], "--listen") == 0)
-		{
-			Config.Mode = EngineMode::ListenServer;
 		}
 		else if (strcmp(argv[i], "--port") == 0 && i + 1 < argc)
 		{
@@ -96,7 +99,7 @@ bool TrinyxEngine::Initialize(const char* title, int width, int height, const ch
 	Logger::Get().Init("TrinyxEngine.log", LogLevel::Debug);
 	LOG_ENG_INFO("TrinyxEngine initialization started");
 	TrinyxThreading::Initialize();
-	TrinyxThreading::PinCurrentThread(TrinyxThreading::GetIdealCore(CoreAffinity::Input));
+	// Sentinel pin deferred to after config load — EnableThreadPinning may disable it.
 
 	// ---- SDL init --------------------------------------------------------
 	if (Config.Headless)
@@ -111,7 +114,7 @@ bool TrinyxEngine::Initialize(const char* title, int width, int height, const ch
 
 		if (!SDL_WasInit(SDL_INIT_VIDEO))
 		{
-			if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS))
+			if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS | SDL_INIT_AUDIO))
 			{
 				std::cerr << "SDL_Init failed: " << SDL_GetError() << std::endl;
 				return false;
@@ -174,6 +177,10 @@ bool TrinyxEngine::Initialize(const char* title, int width, int height, const ch
 	Config.Headless  = headlessCLI;
 	Config.MaxFrames = maxFramesCLI;
 
+	// Apply thread pinning preference now that config is resolved.
+	TrinyxThreading::SetPinningEnabled(Config.EnableThreadPinning);
+	TrinyxThreading::PinCurrentThread(TrinyxThreading::GetIdealCore(CoreAffinity::Input));
+
 	// Apply per-channel log levels from config (Unset → Info for Engine, Debug for Game).
 	{
 		const LogLevel engineLevel = (Config.EngineLogLevel >= 0)
@@ -194,30 +201,24 @@ bool TrinyxEngine::Initialize(const char* title, int width, int height, const ch
 	if (Config.ProjectDir[0] != '\0')
 		AssetRegistry::Get().SetContentRoot(std::string(Config.ProjectDir) + "/content");
 
-	Flow = std::make_unique<FlowManager>();
+	Flow = std::make_unique<FlowManagerType>();
 	Flow->Initialize(this, &Config, width, height);
 
 	// ---- GNS + NetThread -------------------------------------------------
-#ifdef TNX_ENABLE_NETWORK
-	if (Config.Mode != EngineMode::Standalone)
+#if defined(TNX_ENABLE_NETWORK) && !defined(TNX_NET_MODEL_PIE)
+	// PIE manages its own GNS init inside EditorContext.
+	if (!GNS.Initialize())
 	{
-		if (!GNS.Initialize())
-		{
-			LOG_ENG_ERROR("GNSContext::Initialize failed — falling back to Standalone");
-			Config.Mode = EngineMode::Standalone;
-		}
-		else
-		{
-			Net = std::make_unique<NetThreadType>();
-			Net->Initialize(&GNS, &Config);
-#if defined(TNX_NET_MODEL_PIE)
-			Net->InitChildren();
-			// Server world wired below, after FlowManager::CreateWorld().
-#elif defined(TNX_NET_MODEL_SERVER)
-	// ServerNetThread resolves FlowManager via ServerWorld->GetFlowManager().
-	// SetServerWorld() is called below after CreateWorld().
+		LOG_ENG_ERROR("GNSContext::Initialize failed — networking unavailable");
+	}
+	else
+	{
+		Net = std::make_unique<NetThreadType>();
+		Net->Initialize(&GNS, &Config);
+#if defined(TNX_NET_MODEL_SERVER)
+		// AuthorityNet resolves FlowManager via AuthorityWorld->GetFlowManager().
+		// SetAuthorityWorld() is called below after CreateWorld().
 #endif
-		}
 	}
 #endif
 
@@ -229,26 +230,17 @@ bool TrinyxEngine::Initialize(const char* title, int width, int height, const ch
 	}
 	DefaultWorld = Flow->GetWorld();
 
-#if defined(TNX_ENABLE_NETWORK) && !TNX_ENABLE_EDITOR
-	// Create ReplicationSystem for all server-role modes (including Standalone — Tick
-	// does nothing with zero connections, but RegisterConstruct works correctly).
-	if (Config.Mode != EngineMode::Client)
-	{
-		Replicator = std::make_unique<ReplicationSystem>();
-		Replicator->Initialize(DefaultWorld);
-		DefaultWorld->SetReplicationSystem(Replicator.get());
-#if defined(TNX_NET_MODEL_PIE) || defined(TNX_NET_MODEL_SERVER)
+#if defined(TNX_ENABLE_NETWORK) && !defined(TNX_ENABLE_EDITOR) && !defined(TNX_NET_MODEL_CLIENT)
+	// Authority and Solo builds create a ReplicationSystem. Tick is a no-op with
+	// zero connections, but RegisterConstruct works correctly in all cases.
+	Replicator = std::make_unique<ReplicationSystem>();
+	Replicator->Initialize(DefaultWorld);
+	DefaultWorld->SetReplicationSystem(Replicator.get());
+#if defined(TNX_NET_MODEL_SERVER)
 	if (Net) Net->SetReplicationSystem(Replicator.get());
+	if (Net) Net->SetAuthorityWorld(DefaultWorld);
+	if (Net) Net->WireNetMode(DefaultWorld);
 #endif
-#if defined(TNX_NET_MODEL_PIE)
-	if (Net) Net->SetServerWorld(DefaultWorld);
-#elif defined(TNX_NET_MODEL_SERVER)
-	// Wire the per-player input injector into the server world's LogicThread.
-	// PIE wires this in EditorContext after SetServerWorld() is called per-session.
-	if (Net) Net->SetServerWorld(DefaultWorld);
-	if (Net) Net->WirePlayerInputInjector(DefaultWorld);
-#endif
-	}
 #endif
 
 #ifndef TNX_HEADLESS
@@ -263,6 +255,11 @@ bool TrinyxEngine::Initialize(const char* title, int width, int height, const ch
 	DefaultWorld->GetLogicThread()->SetSimPaused(true); // Editor starts paused
 	Render->SetEngine(this);
 #endif
+
+	// ---- Audio -----------------------------------------------------------
+	Audio = std::make_unique<AudioManager>();
+	Audio->Initialize(Config.MaxAudioVoices);
+	Audio::SetManager(Audio.get());
 #endif // !TNX_HEADLESS
 
 	LOG_ENG_INFO("TrinyxEngine initialization complete");
@@ -302,9 +299,9 @@ bool TrinyxEngine::EnsureNetworking()
 	Net->Initialize(&GNS, &Config);
 #if defined(TNX_NET_MODEL_PIE)
 	Net->InitChildren();
-	if (DefaultWorld) Net->SetServerWorld(DefaultWorld);
+	if (DefaultWorld) Net->SetAuthorityWorld(DefaultWorld);
 #elif defined(TNX_NET_MODEL_SERVER)
-// ServerNetThread resolves FlowManager via ServerWorld->GetFlowManager().
+	// AuthorityNet resolves FlowManager via AuthorityWorld->GetFlowManager().
 #endif
 	return true;
 }
@@ -326,14 +323,9 @@ void TrinyxEngine::StartThreadsAndJobs()
 		// Spin while we wait so that we don't initialize workers before our Primary threads
 	}
 
-	// Server model uses inline Tick() from the main loop — no extra thread.
-	// Client and PIE models spin a dedicated net thread.
+	// All net models are now driven from the Sentinel main loop — no dedicated net thread.
 #ifdef TNX_ENABLE_NETWORK
-#if defined(TNX_NET_MODEL_SERVER)
-	// Inline — no Start(); main loop calls Net->Tick()
-#else
-	if (Net) Net->Start();
-#endif
+	// (no Start() call needed)
 #endif
 
 	bool JobsInitialized = TrinyxJobs::Initialize(&Config);
@@ -351,6 +343,15 @@ void TrinyxEngine::RunMainLoop()
 	LastFrameCounter             = SDL_GetPerformanceCounter();
 
 	uint64_t sentinelFrameCount = 0;
+#ifndef TNX_HEADLESS
+	double audioAccum = 0.0;
+#endif
+#ifdef TNX_ENABLE_NETWORK
+	double netInputAccum      = 0.0; // gates TickInputSend at InputNetHz (128Hz)
+	double netTickAccum       = 0.0; // gates Tick (replication) at NetworkUpdateHz (30Hz)
+	const double netInputStep = 1.0 / std::max(1, Config.InputNetHz == EngineConfig::Unset ? 128 : Config.InputNetHz);
+	const double netTickStep  = 1.0 / std::max(1, Config.NetworkUpdateHz == EngineConfig::Unset ? 30 : Config.NetworkUpdateHz);
+#endif
 
 	while (bIsRunning.load(std::memory_order_acquire))
 	{
@@ -361,14 +362,62 @@ void TrinyxEngine::RunMainLoop()
 		LastFrameCounter          = frameStart;
 
 #if defined(TNX_NET_MODEL_SERVER) && defined(TNX_ENABLE_NETWORK)
-		// Dedicated server: main thread is the network poller — no SDL events.
-		if (Net) Net->Tick();
+		// Dedicated server has no SDL window — skip event pump.
 #elif !defined(TNX_HEADLESS)
 		PumpEvents();
+
+		// Sentinel-driven audio update at AudioUpdateHz (accumulator, no busy-wait).
+		if (Audio)
+		{
+			audioAccum             += dt;
+			const double audioStep = 1.0 / std::max(1, Config.AudioUpdateHz);
+			while (audioAccum >= audioStep)
+			{
+				// Drain Logic→Sentinel audio commands before processing audio.
+				if (DefaultWorld)
+				{
+					if (auto* consumer = DefaultWorld->GetAudioCmdConsumer())
+					{
+						AudioCommand cmd;
+						while (consumer->TryPop(cmd)) Audio->Trigger(cmd.Name, {cmd.Volume, cmd.Pitch, cmd.Loop});
+					}
+				}
+				Audio->Update(static_cast<float>(audioStep));
+				audioAccum -= audioStep;
+			}
+		}
 #endif
 
 		// Tick the flow state machine — drives FlowState::Tick() on the active state
 		Flow->Tick(dt);
+
+#ifdef TNX_ENABLE_NETWORK
+		if (Net)
+		{
+			// PumpMessages every sentinel tick: Poll(0) + recv + HandleMessage (may dispatch jobs).
+			Net->PumpMessages();
+			Net->TickDispatch();
+
+			netInputAccum += static_cast<double>(dt);
+			netTickAccum  += static_cast<double>(dt);
+
+			// Input send gated at InputNetHz (128Hz).
+			if (netInputAccum >= netInputStep)
+			{
+				netInputAccum -= netInputStep;
+				Net->TickInputSend();
+				// Force sendto immediately — packet is on the wire before sleep.
+				GNS.Poll();
+			}
+
+			// Replication + clock sync gated at NetworkUpdateHz (30Hz).
+			if (netTickAccum >= netTickStep)
+			{
+				netTickAccum -= netTickStep;
+				Net->Tick();
+			}
+		}
+#endif
 
 		if (DefaultWorld->GetLogicThread() && !DefaultWorld->GetLogicThread()->IsRunning())
 		{
@@ -406,15 +455,11 @@ void TrinyxEngine::Shutdown()
 #ifndef TNX_HEADLESS
 	if (Render) Render->Stop();
 #endif
-#ifdef TNX_ENABLE_NETWORK
-	if (Net) Net->Stop();
-#endif
 	Flow->JoinWorld();
 #ifndef TNX_HEADLESS
 	if (Render) Render->Join();
 #endif
 #ifdef TNX_ENABLE_NETWORK
-	if (Net) Net->Join();
 	Net.reset();
 	GNS.Shutdown();
 #endif
@@ -425,6 +470,9 @@ void TrinyxEngine::Shutdown()
 #ifndef TNX_HEADLESS
 	// Destroy thread objects BEFORE Vulkan teardown.
 	// RenderThread owns GPU resources that call vmaDestroy* in their destructors.
+	Audio::SetManager(nullptr);
+	Audio->Shutdown();
+	Audio.reset();
 	Render.reset();
 #endif
 
@@ -453,10 +501,10 @@ void TrinyxEngine::PumpEvents()
 {
 	TNX_ZONE_N("Input_Poll");
 
-	World* targetWorld = InputTargetWorld ? InputTargetWorld : DefaultWorld;
+	WorldBase* targetWorld = InputTargetWorld ? InputTargetWorld : DefaultWorld;
 	auto inputTargets  = targetWorld->GetInputTargets();
 #ifdef TNX_ENABLE_ROLLBACK
-	LogicThread* Logic = targetWorld->GetLogicThread();
+	LogicThreadBase* Logic = targetWorld->GetLogicThread();
 #endif
 
 #if TNX_ENABLE_EDITOR

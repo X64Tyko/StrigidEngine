@@ -1,9 +1,11 @@
 #pragma once
 
+#include "EntityMeta.h"
 #include "EntityRecord.h"
-#include "LogicThread.h"
+#include "LogicThreadBase.h"
+#include "PhysicsTypes.h"
 #include "Schema.h"
-#include "World.h"
+#include "WorldBase.h"
 
 class Soul;
 
@@ -71,7 +73,7 @@ public:
 		}
 	}
 	
-	void Initialize(World* InWorld)
+	void Initialize(WorldBase* InWorld)
 	{
 		OwnerWorld = InWorld;
 
@@ -85,7 +87,7 @@ public:
 		}
 
 		// Auto-register tick methods via concept detection
-		LogicThread* Logic = OwnerWorld->GetLogicThread();
+		LogicThreadBase* Logic = OwnerWorld->GetLogicThread();
 
 		if constexpr (HasPrePhysics<Derived>)
 		{
@@ -111,6 +113,23 @@ public:
 				static_cast<Derived*>(this));
 		}
 
+		// Auto-bind contact callbacks for all registered Views.
+		// Implement OnHit / OnOverlapBegin / OnOverlapEnd → get the callback. Don't implement → pay nothing.
+		if constexpr (HasOnHit<Derived> || HasOnOverlapBegin<Derived> || HasOnOverlapEnd<Derived>)
+		{
+			JoltPhysics* Phys = OwnerWorld->GetPhysics();
+			Registry* Reg     = OwnerWorld->GetRegistry();
+			Derived* Self     = static_cast<Derived*>(this);
+			for (uint32_t i = 0; i < ViewCount; ++i)
+			{
+				if (!Views[i].GetHandleFn) continue;
+				EntityHandle handle = Views[i].GetHandleFn(Views[i].View);
+				if constexpr (HasOnHit<Derived>) Phys->BindOnHit<Derived, &Derived::OnHit>(handle, Reg, Self);
+				if constexpr (HasOnOverlapBegin<Derived>) Phys->BindOnOverlapBegin<Derived, &Derived::OnOverlapBegin>(handle, Reg, Self);
+				if constexpr (HasOnOverlapEnd<Derived>) Phys->BindOnOverlapEnd<Derived, &Derived::OnOverlapEnd>(handle, Reg, Self);
+			}
+		}
+
 		bInitialized = true;
 
 		// Called once after views are hydrated and ticks are registered.
@@ -125,7 +144,20 @@ public:
 	{
 		if (!bInitialized) return;
 
-		LogicThread* Logic = OwnerWorld->GetLogicThread();
+		// Unbind contact callbacks before deregistering ticks
+		if constexpr (HasOnHit<Derived> || HasOnOverlapBegin<Derived> || HasOnOverlapEnd<Derived>)
+		{
+			JoltPhysics* Phys = OwnerWorld->GetPhysics();
+			Registry* Reg     = OwnerWorld->GetRegistry();
+			for (uint32_t i = 0; i < ViewCount; ++i)
+			{
+				if (!Views[i].GetHandleFn) continue;
+				EntityHandle handle = Views[i].GetHandleFn(Views[i].View);
+				Phys->UnbindContacts(handle, Reg, static_cast<Derived*>(this));
+			}
+		}
+
+		LogicThreadBase* Logic = OwnerWorld->GetLogicThread();
 		Logic->ScalarPrePhysicsBatch.Deregister(static_cast<Derived*>(this));
 		Logic->ScalarPostPhysicsBatch.Deregister(static_cast<Derived*>(this));
 		Logic->ScalarPhysicsStepBatch.Deregister(static_cast<Derived*>(this));
@@ -163,7 +195,7 @@ public:
 		}
 	}
 
-	World* GetWorld() const { return OwnerWorld; }
+	WorldBase* GetWorld() const { return OwnerWorld; }
 	Registry* GetRegistry() const { return OwnerWorld ? OwnerWorld->GetRegistry() : nullptr; }
 	bool IsInitialized() const { return bInitialized; }
 	uint32_t GetConstructID() const { return ConstructID; }
@@ -181,7 +213,7 @@ protected:
 	}
 
 private:
-	World* OwnerWorld    = nullptr;
+	WorldBase* OwnerWorld    = nullptr;
 	Soul* OwnerSoul      = nullptr;
 	uint32_t ConstructID = 0;
 	bool bInitialized    = false;

@@ -52,17 +52,18 @@ cmake --build cmake-build-relwithdebinfo-visual-studio --config RelWithDebInfo
 
 **Key CMake options** (append to the configure step):
 
-| Option | Default | Purpose |
-|--------|---------|---------|
-| `TNX_ENABLE_EDITOR=ON/OFF` | OFF | Enable editor UI (ImGui + GPU picking) |
-| `TNX_ENABLE_ROLLBACK=ON/OFF` | OFF | Enable N-frame rollback history for netcode |
-| `ENABLE_TRACY=ON/OFF` | ON | Tracy profiler integration |
-| `TRACY_PROFILE_LEVEL=1/2/3` | 3 | 1=coarse (~1%), 2=medium (~5%), 3=per-entity (~50%+ overhead) |
-| `ENABLE_AVX2=ON/OFF` | ON | `-march=native` on GCC/Clang |
-| `GENERATE_ASSEMBLY=ON/OFF` | OFF | Emit `.s` files for vectorization inspection |
-| `VECTORIZATION_REPORTS=ON/OFF` | OFF | Compiler loop-vectorization diagnostics |
-| `TNX_ALIGN_64=ON/OFF` | OFF | 64-byte vs 32-byte field array alignment |
-| `TNX_DETAILED_METRICS=ON/OFF` | OFF | Per-frame latency breakdown logging |
+| Option                         | Default | Purpose                                                                                                    |
+|--------------------------------|---------|------------------------------------------------------------------------------------------------------------|
+| `TNX_ENABLE_EDITOR=ON/OFF`     | OFF     | Enable editor UI (ImGui + GPU picking)                                                                     |
+| `TNX_ENABLE_ROLLBACK=ON/OFF`   | OFF     | Enable N-frame rollback history for netcode (forces `TNX_DETERMINISM=ON`)                                  |
+| `TNX_DETERMINISM=ON/OFF`       | OFF     | Cross-platform determinism: disables FMA/fast-math in engine and Jolt (`JPH_CROSS_PLATFORM_DETERMINISTIC`) |
+| `ENABLE_TRACY=ON/OFF`          | ON      | Tracy profiler integration                                                                                 |
+| `TRACY_PROFILE_LEVEL=1/2/3`    | 3       | 1=coarse (~1%), 2=medium (~5%), 3=per-entity (~50%+ overhead)                                              |
+| `ENABLE_AVX2=ON/OFF`           | ON      | `-march=native` on GCC/Clang                                                                               |
+| `GENERATE_ASSEMBLY=ON/OFF`     | OFF     | Emit `.s` files for vectorization inspection                                                               |
+| `VECTORIZATION_REPORTS=ON/OFF` | OFF     | Compiler loop-vectorization diagnostics                                                                    |
+| `TNX_ALIGN_64=ON/OFF`          | OFF     | 64-byte vs 32-byte field array alignment                                                                   |
+| `TNX_DETAILED_METRICS=ON/OFF`  | OFF     | Per-frame latency breakdown logging                                                                        |
 
 **Example builds:**
 ```bash
@@ -354,6 +355,15 @@ holds a stale handle.
 
 Spawn and despawn are serialized through the Logic thread by construction — the handshake model for spawn and deferred destroy on the Logic thread for despawn guarantee this.
 
+**Networked despawn — four phases (designed, not yet implemented):**
+
+- **Phase 0 — Tentative:** entity dies in speculative sim → recorded in `TentativeDestroys[frame]` on the per-client `ServerClientChannel`. Net index held. No packet sent. Rollback cancels this and revives the entity.
+- **Phase 1 — Commit:** `CommittedFrameHorizon` advances past the death frame (all player inputs confirmed) → entry graduates to `PendingNetDespawns`. `Replicated[i]` cleared on the channel. The server cannot free the net slot before this transition.
+- **Phase 2 — Send:** `SendDespawns()` batches N × `uint32_t` net handle values, sends reliable. `ConfirmNetRecycles()` fires after send. GNS reliable ordering makes explicit ACK unnecessary.
+- **Phase 3 — Client Apply:** `OwnerNetThread` `EntityDestroy` handler receives the batch, looks up each handle via `NetToRecord`, calls `Destroy()` locally.
+
+Wire format: `EntityDestroyPayload` = N × `uint32_t` (net handle values). Count = `PayloadSize / 4`.
+
 ---
 
 ## Physics: Jolt Integration
@@ -424,7 +434,7 @@ World size (int64 cell origins): ~45M km at 0.1mm precision
 
 The only lossy step is render thread upload: fixed-point → camera-relative float32 for the GPU. Precision loss is ≈0.05mm at 1km — imperceptible and acceptable.
 
-**Status:** Designed and documented. Not yet fully wired. Fixed-point coordinate system is on the cleanup-pass TODO list before netcode implementation.
+**Status:** Complete. `FieldProxy<Fixed32, WIDTH>` is wired into all position, velocity, and force fields. `SimFloat` aliases `SimFloatImpl<Fixed32>` under `TNX_DETERMINISM`. Render thread camera-relative float32 conversion and Jolt bridge validated. Engine runs deterministically.
 
 ---
 
@@ -440,7 +450,7 @@ Three-pass GPU-driven compute pipeline (Slang shaders):
 
 **5 InstanceBuffers** decouple Logic from VSync — breaks the chain `VSync → GPU holds buffer → CPU render thread blocks → holds slab read locks → Logic stalls`.
 
-**Status:** Dirty bit tracking is functional. Dirty-bit-driven GPU upload path is designed but not yet wired (currently full-slab copy).
+**Status:** Dirty bit tracking functional. Dirty-bit-driven partial upload operational (2026-05) — only modified entities uploaded per frame.
 
 ---
 
@@ -455,7 +465,7 @@ On rollback, a `PresentationReconciler` diffs the abandoned timeline against the
 
 Anti-Events fade/decay over ~20ms rather than instant cull — visually continuous across rollback.
 
-**Status:** Designed. Not yet implemented. The audio wrapper must expose handle-based fade control to be compatible with this system.
+**Status:** Designed. Not yet implemented. The `AudioManager::FadeOut(handle, seconds)` API is implemented and Anti-Event-compatible; the `PresentationReconciler` diff logic itself is not implemented.
 
 ---
 
@@ -466,17 +476,23 @@ for the authoritative status tracker.
 
 ### Stage 1: Foundation
 
-1. **Editor (bare-bones)** — Complete. Scene hierarchy, entity inspection, reflected properties, save/load. ImGui
-   docking, JSON serialization. Scope is explicitly limited to this definition.
+1. **Editor (bare-bones)** — Complete. 8 panels (World Outliner, Details, Content Browser, Engine Stats, Log,
+   Node Script, Component Generator, Debugger), ImGuizmo gizmo (W/E/R, snap, undo), PIE (local + networked
+   1–4 clients, scene snapshot/restore), asset database (.tnxid sidecars, .tnxdb), JSON .tnxscene format,
+   50-command undo/redo stack, GPU picking. See `docs/EDITOR.md`. Scope is explicitly limited to this definition.
 2. **Construct/View OOP** — Complete. `Construct<T>`, `Owned<T>`, `ConstructView<TEntity>`, `ConstructBatch`,
    JoltCharacter. PlayerConstruct proven.
-3. **Networking** — Functional. GNS wrapper, client/server authority model, PIE loopback, entity spawn replication,
-   state corrections. Delta compression and rollback netcode pending.
-4. **Audio** — Not started. SDL3 thin wrapper first (handle-based for Anti-Event compatibility).
-5. **Game Flow** — In progress. FlowManager (state stack + travel primitives), GameState (flow states with declared
-   requirements), GameMode (inheritable rules runtime). Toolbox travel model: three orthogonal levers (domain lifetime,
-   Construct lifetime, network continuity) composable per-game. Persistent Constructs survive World resets via
-   reinitialization. Bootstrap: engine loads one named default state, user code owns the flow graph.
+3. **Networking** — Complete. GNS wrapper, Authority/Owner/Host model, PIE loopback, entity spawn/destroy
+   replication, state corrections, delta compression, rollback netcode integration, ClientRepState 7-state machine,
+   gated push replication, networked despawn. `LogicThread<TNet,TRollback,TFrame>`, `AuthoritySim`/`OwnerSim`,
+   `ServerClientChannel` all done. Only pending: Phase 0 tentative despawn (needed for rollback-safe entity death).
+4. **Audio** — Complete. SDL3 `AudioManager`: voice pool, handle-based (`SoundHandle`) playback/stop/fade,
+   `AudioEventEntry` registry, priority voice stealing, lazy-load/auto-unload. Compatible with Anti-Event design.
+5. **Camera System** — Complete. `CameraManager` (per-Soul layer stack), `CameraSlot[5]`, `CameraLayer` with
+   `CameraStateMix`/`CameraBlendMix`/`CameraOrientationMix` CRTP mixins, `ECameraNode` (cold, lobby cameras),
+   `ECamera` (hot SoA), `CurveHandle`.
+6. **Game Flow** — In progress. FlowManager, FlowState, GameMode, Soul, NetChannel implemented. `WithSpawnManagement`,
+   `WithLobby`, `WithTeamAssignment` ModeMixins done. Travel toolbox model implemented. Bootstrap contract done.
 
 ### Stage 2: Hardening
 
@@ -484,8 +500,7 @@ Once the gameplay layer is proven with a test arena, the engine enters a dedicat
 phase. The goal is to make the substrate as solid as possible before building behavior trees, AI directors, and
 higher-level systems.
 
-Targets include: dirty-bit GPU upload, Archetype/TemporalComponentCache deduplication, Fixed32/SimFloat, hot-path audit,
-constraint system, static entity tier, reflection robustness, `TNX_STRIP_NAMES` build option.
+Targets include: hot-path audit, constraint system, static entity tier, reflection robustness, `TNX_STRIP_NAMES` build option.
 
 **After hardening:** Arena shooter test level to prove the full stack.
 
@@ -493,12 +508,15 @@ constraint system, static entity tier, reflection robustness, `TNX_STRIP_NAMES` 
 
 - ~~Construct/View OOP layer~~ ✅ Implemented (2026-04)
 - ~~Cumulative dirty bit array wired to GPU upload~~ ✅ Implemented (2026-03)
-- Game Flow implementation (FlowManager state transitions, World create/destroy wiring, level load/unload, GameMode
-  lifecycle, persistent Construct reinitialization)
-- `GetTemporalFieldWritePtr` migrated from Archetype to TemporalComponentCache
-- `TemporalFrameStride` removed from Archetype (duplicated state)
+- ~~`GetTemporalFieldWritePtr` migrated from Archetype to TemporalComponentCache~~ ✅ Done (2026-04)
+- ~~`TemporalFrameStride` removed from Archetype (duplicated state)~~ ✅ Done (2026-04)
+- ~~`LogicThread<TSimMode>` CRTP refactor~~ ✅ Done (2026-05) — `LogicThread<TNet, TRollback, TFrame>`, `AuthoritySim`, `OwnerSim`
+- ~~`ServerClientChannel`~~ ✅ Done (2026-05) — `PlayerInputLog`, `Replicated[]`, `PendingActivations`, `PendingPacketQueue`
+- ~~Camera system~~ ✅ Done (2026-05) — `CameraManager`, `CameraLayer` + mixins, `ECameraNode`, `ECamera`, `CurveHandle`
+- ~~Fixed-point coordinate system~~ ✅ Complete — `Fixed32`, `FixedUnit`, `SimFloat`, `FixedTrig`, `FieldProxy<Fixed32>` wired, Jolt bridge validated, engine deterministic
+- Four-phase networked despawn (Tentative → Commit → Send → Client Apply, gated on `CommittedFrameHorizon`)
+- Gated push replication model (`OnFramePublished` → per-client read-only jobs, queued for next net tick)
 - Presentation Reconciler (Anti-Events, speculative presentation diff)
-- Fixed-point coordinate system (Fixed32, SimFloat alias, Jolt bridge validation)
 - ConstraintEntity system (constraint pool, rigid attachment pass, physics root determination)
 - Static entity tier (needs asset importing online first)
 
@@ -506,25 +524,46 @@ constraint system, static entity tier, reflection robustness, `TNX_STRIP_NAMES` 
 
 ## Key Files
 
-| Path                                               | Purpose                                                     |
-|----------------------------------------------------|-------------------------------------------------------------|
-| `src/Runtime/Core/Public/FieldProxy.h`             | Core SoA field wrapper (Scalar/Wide/WideMask)               |
-| `src/Runtime/Core/Public/SchemaValidation.h`       | Compile-time component validation                           |
-| `src/Runtime/Core/Public/TemporalComponentCache.h` | N-frame SoA ring buffer (proto-History Slab)                |
-| `src/Runtime/Construct/Public/Construct.h`         | Construct<T> CRTP base, tick auto-registration              |
-| `src/Runtime/Construct/Public/ConstructView.h`     | ConstructView<TEntity> — generic ECS lens for Constructs    |
-| `src/Runtime/Construct/Public/ConstructRegistry.h` | Type-erased Construct registry, deferred destruction        |
-| `src/Runtime/Flow/Public/`                         | FlowManager, GameState, GameMode — game flow layer          |
-| `src/Runtime/Memory/`                              | Archetype chunks, Registry, cold component storage          |
-| `src/Runtime/Physics/Public/JoltPhysics.h`         | Jolt integration (body management, step, pull)              |
-| `src/Runtime/Physics/Public/JoltCharacter.h`       | CharacterVirtual wrapper for Construct-driven controllers   |
-| `src/Runtime/Physics/Public/JoltLayers.h`          | Shared Jolt layer constants (Static, Dynamic)               |
-| `src/Runtime/Entities/Public/`                     | Entity types: EInstanced, EPlayer, EPoint                   |
-| `src/Runtime/Components/Public/`                   | Components: CTransform, CJoltBody, CColor, CScale, CMeshRef |
-| `src/Runtime/Rendering/`                           | VulkanContext, VulkanMemory, VulkRender                     |
-| `shaders/`                                         | Slang compute shaders (predicate, prefix_sum, scatter)      |
-| `docs/ARCHITECTURE.md`                             | Full architecture reference                                 |
-| `docs/PERFORMANCE_TARGETS.md`                      | Benchmark targets and testbed results                       |
+| Path                                               | Purpose                                                          |
+|----------------------------------------------------|------------------------------------------------------------------|
+| `src/Runtime/Core/Public/FieldProxy.h`             | Core SoA field wrapper (Scalar/Wide/WideMask)                    |
+| `src/Runtime/Core/Public/SchemaValidation.h`       | Compile-time component validation                                |
+| `src/Runtime/Core/Public/TemporalComponentCache.h` | N-frame SoA ring buffer; `GetWriteFramePtr`/`GetReadFramePtr`    |
+| `src/Runtime/Core/Public/LogicThread.h`            | Brain thread — `LogicThread<TNet, TRollback, TFrame>` (three-axis policy template) |
+| `src/Runtime/Core/Public/Types.h`                  | `EngineMode` enum (Standalone/Host/Authority/Owner), `SoulRole`  |
+| `src/Runtime/Construct/Public/Construct.h`         | Construct<T> CRTP base, tick auto-registration                   |
+| `src/Runtime/Construct/Public/ConstructView.h`     | ConstructView<TEntity> — generic ECS lens for Constructs         |
+| `src/Runtime/Construct/Public/ConstructRegistry.h` | Type-erased Construct registry, deferred destruction             |
+| `src/Runtime/Flow/Public/`                         | FlowManager, GameState, GameMode, Soul — game flow layer         |
+| `src/Runtime/Memory/`                              | Archetype chunks, Registry, cold component storage               |
+| `src/Runtime/Net/Public/AuthorityNet.h`            | Authority-side net handler (dedicated server / Host)             |
+| `src/Runtime/Net/Public/OwnerNet.h`                | Owner-side net handler (client)                                  |
+| `src/Runtime/Net/Public/ReplicationSystem.h`       | Entity replication — uses `ServerClientChannel` per client       |
+| `src/Runtime/Net/Public/ServerClientChannel.h`     | Per-client authority state: InputLog, Replicated[], send queue   |
+| `src/Runtime/Net/Public/AuthoritySim.h`            | `LogicThread` net policy — server-side OnSimInput/OnFramePublished |
+| `src/Runtime/Net/Public/OwnerSim.h`                | `LogicThread` net policy — client-side input snapshot            |
+| `src/Runtime/Net/Public/NetChannel.h`              | Per-connection typed send wrapper                                |
+| `src/Runtime/Net/Public/NetTypes.h`                | Wire types: `EntityNetHandle`, `EntitySpawnPayload`, `SoulRole`  |
+| `src/Runtime/Physics/Public/JoltPhysics.h`         | Jolt integration (body management, step, pull)                   |
+| `src/Runtime/Physics/Public/JoltCharacter.h`       | CharacterVirtual wrapper for Construct-driven controllers        |
+| `src/Runtime/Physics/Public/JoltLayers.h`          | Shared Jolt layer constants (Static, Dynamic)                    |
+| `src/Runtime/Entities/Public/`                     | Entity types: EInstanced, EPlayer, EPoint, ECameraNode, ECamera, EInterpEntity, ESpawnPoint |
+| `src/Runtime/Components/Public/`                   | Components: CTransform, CJoltBody, CColor, CScale, CMeshRef, CVisualTransform, CCameraLayer |
+| `src/Runtime/Audio/Public/AudioManager.h`          | SDL3 voice pool, handle-based playback, event registry, fade     |
+| `src/Runtime/Camera/Public/CameraManager.h`        | Per-Soul CameraLayer stack, slot resolution, orientation dispatch |
+| `src/Runtime/Math/Public/Fixed32.h`                | Fixed-point scalar (int32, 0.1mm precision, all arithmetic ops)  |
+| `src/Runtime/Math/Public/SimFloat.h`               | `SimFloat` alias — `SimFloatImpl<float>` or `<Fixed32>` via `TNX_DETERMINISM` |
+| `src/Runtime/Rendering/`                           | VulkanContext, VulkanMemory, VulkRender                          |
+| `shaders/`                                         | Slang compute shaders (predicate, prefix_sum, scatter)           |
+| `src/Editor/Public/EditorContext.h`                | Main editor UI manager — panels, scene I/O, PIE, undo/redo, gizmo |
+| `src/Editor/Public/EditorState.h`                  | Per-frame shared state (selection, gizmo op, scene metadata)     |
+| `src/Editor/Public/AssetDatabase.h`                | UUID↔path authority, .tnxid sidecars, .tnxdb persistence        |
+| `src/Editor/Public/Panels/`                        | 8 editor panels (Outliner, Details, ContentBrowser, Stats, Log, NodeScript, ComponentGenerator, Debugger) |
+| `docs/ARCHITECTURE.md`                             | Full architecture reference                                      |
+| `docs/EDITOR.md`                                   | Editor feature reference (panels, PIE, gizmo, shortcuts, asset DB) |
+| `docs/NETWORKING.md`                               | Networking architecture, ServerClientChannel, despawn design     |
+| `docs/PERFORMANCE_TARGETS.md`                      | Benchmark targets and testbed results                            |
+| `docs/RENDERING.md`                                | VizBuffer pipeline, GPU compute (predicate/prefix_sum/scatter)   |
 
 ---
 
@@ -541,3 +580,13 @@ constraint system, static entity tier, reflection robustness, `TNX_STRIP_NAMES` 
   The engine includes a minimal hand-rolled JSON parser (`Json.h`) — intentionally not a vendored library. Swap-ready
   API if needs outgrow it.
 - **R&D codebase.** Some areas are highly optimized to test a theory; others are deliberately left rough pending the cleanup pass. The dichotomy is intentional.
+- **Networking vocabulary is locked.** Use only these terms — never "server" or "client" as standalone nouns:
+  - `Authority` — dedicated server or the authoritative sim side of a Host
+  - `Owner` — the local player; the Soul that owns input for an entity
+  - `Host` — listen server; Soul with both `Authority + Owner` roles (`EngineMode::Host`)
+  - `Echo` — non-owning entity stance on a client (a remote player's representation)
+  - `Solo` — offline, no networking (`EngineMode::Standalone`, `SoloSim`)
+  - `AuthorityNet` / `OwnerNet` — net handler class names (files: `AuthorityNet.h`, `OwnerNet.h`)
+- **`ServerClientChannel` is the unit of per-client state.** It owns: `PlayerInputLog`, `Replicated[]`, `TentativeDestroys`, `PendingNetDespawns`, `NetChannel Send`, `ClientRepState`, `OwnerID`. Lives inside the World it belongs to for PIE isolation.
+- **Networked despawn is four-phase**, gated on `CommittedFrameHorizon`. The server cannot free a net slot until the CommittedFrameHorizon passes the death frame. See `docs/NETWORKING.md` for the full design.
+- **`LogicThread` is being templatized on `TSimMode`** (`AuthoritySim`/`OwnerSim`/`SoloSim`). Avoid adding new branching to `LogicThread` — it belongs in the sim mode instead.

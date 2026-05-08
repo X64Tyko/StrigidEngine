@@ -1,17 +1,19 @@
 #pragma once
 #include <cstdint>
+#include <RPC.h>
 
 #include "Input.h"
 #include "Logger.h"
 #include "RegistryTypes.h"
+#include "CameraManager.h"
 #ifdef TNX_ENABLE_NETWORK
 #include "NetChannel.h"
 #include "RPC.h"
 #endif
 
-class FlowManager;
+class FlowManagerBase;
 class Soul;
-class World;
+class WorldBase;
 
 // ---------------------------------------------------------------------------
 // SoulRole — bitmask flags describing a Soul's stance on a given machine.
@@ -71,6 +73,15 @@ public:
 	uint8_t GetOwnerID() const { return OwnerID; }
 	uint32_t GetInputLead() const { return InputLead; }
 
+	CameraManager& GetCameraManager() { return CamManager; }
+
+	// Route an orientation delta through the camera layer stack.
+	// Called by Soul input layers (see CameraInputMix.h) — do not call directly.
+	void DispatchOrientationDelta(SimFloat dyaw, SimFloat dpitch)
+	{
+		CamManager.DispatchOrientationDelta(dyaw, dpitch);
+	}
+
 	SoulRole GetRole() const { return Role; }
 	void SetRole(SoulRole role) { Role = role; }
 	/// Add one or more role flags without clearing existing ones.
@@ -94,8 +105,8 @@ public:
 	//   Authority only   → injected net buf  (GetPlayerSimInput(ownerID) / GetPlayerVizInput(ownerID))
 	//   Echo (0)         → nullptr
 	// -------------------------------------------------------------------------
-	InputBuffer* GetSimInput(World* world) const;
-	InputBuffer* GetVizInput(World* world) const;
+	InputBuffer* GetSimInput(WorldBase* world) const;
+	InputBuffer* GetVizInput(WorldBase* world) const;
 
 	/// Called by the GameMode (via WithSpawnManagement or directly) after the
 	/// server confirms a spawn. Stores the handle and fires OnBodyConfirmed().
@@ -148,7 +159,7 @@ public:
 	NetChannel& GetNetChannel() { return Channel; }
 #endif
 
-	FlowManager* GetFlowManager() { return FlowMgr; }
+	FlowManagerBase* GetFlowManager() { return FlowMgr; }
 
 	// -------------------------------------------------------------------------
 	// Engine-reserved Soul RPCs — PlayerBegin lifecycle.
@@ -163,18 +174,19 @@ public:
 #endif
 
 private:
-	friend class FlowManager;
+	friend class FlowManagerBase;
 
-	uint8_t OwnerID                  = 0; // Assigned at connection — stable for session
-	uint32_t InputLead               = 0; // Frames client leads the server
-	SoulRole Role                    = SoulRole::Authority;
-	ConstructRef ConfirmedBodyHandle = {}; // Valid once ClaimBody() is called
+	uint8_t OwnerID                  = 0;
+	uint32_t InputLead               = 0;
+	SoulRole Role                    = SoulRole::Echo;
+	ConstructRef ConfirmedBodyHandle = {};
+	CameraManager CamManager;
 
 #ifdef TNX_ENABLE_NETWORK
 	// Set by FlowManager at creation and refreshed on every RPC dispatch.
 	NetChannel Channel   = {};
 #endif
-	FlowManager* FlowMgr = nullptr;
+	FlowManagerBase* FlowMgr = nullptr;
 };
 
 // ---------------------------------------------------------------------------

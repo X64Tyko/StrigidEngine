@@ -6,18 +6,19 @@
 
 #include "GNSContext.h"
 #include "NetConnectionManager.h"
-#include "ServerNetThread.h"
+#include "AuthorityNet.h"
+#include "ReplicationSystem.h"
 #include "PlayerInputLog.h"
 #include "EngineConfig.h"
 
 #include <SDL3/SDL_timer.h>
 #include <cstring>
 
-// Validates InputFrame routing from a GNS client through a ServerNetThread into
+// Validates InputFrame routing from a GNS client through a AuthorityNet into
 // the server-side PlayerInputLog for that player. Tests: inline Tick(),
 // InputFrame deserialization, PlayerInputLog.Store(), first-write-wins correctness.
 //
-// Real-world flow: client sends InputFrame → ServerNetThread::HandleMessage dispatches
+// Real-world flow: client sends InputFrame → AuthorityNet::HandleMessage dispatches
 // it to PlayerInputLog::Store → LogicThread reads it via ConsumeFrame each fixed step.
 // The test directly inspects the PlayerInputLog entry rather than InputBuffer (which
 // is for local keyboard input, not network-received input).
@@ -34,7 +35,7 @@ TEST(Net_InputFrameRouting)
 	config.NetworkUpdateHz = 30;
 	config.ApplyDefaults();
 
-	ServerNetThread net;
+	AuthorityNet net;
 	net.Initialize(&gnsLocal, &config);
 
 	NetConnectionManager* mgr = net.GetConnectionManager();
@@ -70,6 +71,12 @@ TEST(Net_InputFrameRouting)
 	ASSERT(serverSideConn != 0);
 	mgr->AssignOwnerID(serverSideConn, 1);
 
+	// CreateInputLog now goes through ReplicationSystem::OpenChannel.
+	// Wire a minimal ReplicationSystem (no World — this test has no sim) before calling it.
+	ReplicationSystem repl;
+	repl.Initialize(nullptr);
+	net.SetReplicationSystem(&repl);
+
 	// Allocate the PlayerInputLog for ownerID=1 (normally created by GenerateNetID after
 	// the full handshake; we call it directly here since we bypassed the handshake).
 	net.CreateInputLog(1);
@@ -80,17 +87,18 @@ TEST(Net_InputFrameRouting)
 	constexpr uint32_t kSimFrame = 10;
 	constexpr uint8_t kWScancode = 26;
 
-	InputFramePayload payload{};
-	payload.State.KeyState[kWScancode >> 3] |= (1u << (kWScancode & 7));
-	payload.State.MouseDX                   = 1.5f;
-	payload.State.MouseDY                   = -0.5f;
-	payload.FirstClientFrame                = kSimFrame;
-	payload.LastClientFrame                 = kSimFrame;
+	InputWindowPacket payload{};
+	payload.FirstFrame                                = kSimFrame;
+	payload.FrameCount                                = 1;
+	payload.Frames[0].Frame                           = kSimFrame;
+	payload.Frames[0].State.KeyState[kWScancode >> 3] |= (1u << (kWScancode & 7));
+	payload.Frames[0].State.MouseDX                   = 1.5f;
+	payload.Frames[0].State.MouseDY                   = -0.5f;
 
 	PacketHeader header{};
 	header.Type        = static_cast<uint8_t>(NetMessageType::InputFrame);
 	header.Flags       = PacketFlag::DefaultFlags;
-	header.PayloadSize = sizeof(InputFramePayload);
+	header.PayloadSize = sizeof(InputWindowPacket);
 	header.SequenceNum = 1;
 	header.FrameNumber = kSimFrame;
 	header.SenderID    = kOwnerID;

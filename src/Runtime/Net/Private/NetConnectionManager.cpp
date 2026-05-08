@@ -10,6 +10,7 @@
 #include <steam/steamnetworkingtypes.h>
 
 #include "Logger.h"
+#include "Soul.h"
 
 // GNS constant aliases — clearer names without the k_/k prefixes
 namespace GNS
@@ -27,8 +28,9 @@ namespace GNS
 	constexpr auto ResultOK = k_EResultOK;
 
 	// Send flags
-	constexpr auto SendReliable   = k_nSteamNetworkingSend_Reliable;
-	constexpr auto SendUnreliable = k_nSteamNetworkingSend_Unreliable;
+	constexpr auto SendReliable          = k_nSteamNetworkingSend_Reliable;
+	constexpr auto SendUnreliable        = k_nSteamNetworkingSend_Unreliable;
+	constexpr auto SendUnreliableNoNagle = k_nSteamNetworkingSend_Unreliable | k_nSteamNetworkingSend_NoNagle;
 
 	// Polling
 	constexpr int MaxMessagesPerPoll = 64;
@@ -44,7 +46,7 @@ NetConnectionManager::~NetConnectionManager()
 
 void NetConnectionManager::Initialize(GNSContext* gns)
 {
-	Sockets    = gns->GetInterface();
+	Sockets    = gns->GetInterface().Sockets;
 	s_Instance = this;
 
 	// Create a poll group so we can receive from all connections in one call
@@ -64,7 +66,7 @@ void NetConnectionManager::Shutdown()
 	// Close all active connections
 	for (auto& ci : Connections)
 	{
-		if (ci.Handle != 0)
+		if (ci.Handle != 0 && Sockets)
 		{
 			Sockets->CloseConnection(ci.Handle, 0, "Shutdown", false);
 		}
@@ -86,6 +88,15 @@ void NetConnectionManager::Shutdown()
 // ---------------------------------------------------------------------------
 // Server API
 // ---------------------------------------------------------------------------
+
+static void ApplySendRate(HSteamNetConnection conn, int minRate, int maxRate)
+{
+	if (minRate <= 0 && maxRate <= 0) return;
+	ISteamNetworkingUtils* utils = SteamNetworkingUtils();
+	if (!utils) return;
+	if (minRate > 0) utils->SetConnectionConfigValueInt32(conn, k_ESteamNetworkingConfig_SendRateMin, minRate);
+	if (maxRate > 0) utils->SetConnectionConfigValueInt32(conn, k_ESteamNetworkingConfig_SendRateMax, maxRate);
+}
 
 bool NetConnectionManager::Listen(uint16_t port)
 {
@@ -137,8 +148,10 @@ void NetConnectionManager::AcceptConnection(HSteamNetConnection conn)
 		Sockets->SetConnectionPollGroup(conn, PollGroup);
 	}
 
+
 	AddConnection(conn);
-	if (ConnectionInfo* ci = FindConnection(conn)) ci->bServerSide = true;
+	if (ConnectionInfo* ci = FindConnection(conn)) ci->bAuthoritySide = true;
+	ApplySendRate(conn, SendRateMin, SendRateMax);
 	LOG_ENG_INFO_F("[NetConnectionManager] Accepted connection %u (server-side)", conn);
 }
 
@@ -177,7 +190,8 @@ HSteamNetConnection NetConnectionManager::Connect(const char* address, uint16_t 
 	}
 
 	AddConnection(conn);
-	if (ConnectionInfo* ci = FindConnection(conn)) ci->bClientInitiated = true;
+	if (ConnectionInfo* ci = FindConnection(conn)) ci->bOwnerInitiated = true;
+	ApplySendRate(conn, SendRateMin, SendRateMax);
 	LOG_ENG_INFO_F("[NetConnectionManager] Connecting to %s:%u (handle %u)", address, port, conn);
 	return conn;
 }
@@ -249,7 +263,7 @@ int NetConnectionManager::PollIncoming(std::vector<ReceivedMessage>& outMessages
 }
 
 bool NetConnectionManager::Send(HSteamNetConnection conn, const PacketHeader& header,
-								const uint8_t* payload, bool reliable)
+								const uint8_t* payload, bool reliable, bool noNagle)
 {
 	// Payload pointer must be present when PayloadSize > 0 — a mismatch means
 	// the caller stamped the wrong size or forgot to pass the buffer.
@@ -258,11 +272,11 @@ bool NetConnectionManager::Send(HSteamNetConnection conn, const PacketHeader& he
 
 	uint8_t buf[sizeof(PacketHeader) + 65535]; // Stack buffer — PayloadSize is uint16
 	uint32_t totalSize = PacketHeader::Serialize(buf, header, payload);
-	return SendRaw(conn, buf, totalSize, reliable);
+	return SendRaw(conn, buf, totalSize, reliable, noNagle);
 }
 
 bool NetConnectionManager::SendRaw(HSteamNetConnection conn, const uint8_t* data,
-								   uint32_t size, bool reliable)
+								   uint32_t size, bool reliable, bool noNagle)
 {
 	if (!Sockets) return false;
 
@@ -270,7 +284,10 @@ bool NetConnectionManager::SendRaw(HSteamNetConnection conn, const uint8_t* data
 	assert(size <= static_cast<uint32_t>(k_cbMaxSteamNetworkingSocketsMessageSizeSend) &&
 		   "SendRaw: message exceeds GNS maximum send size (512 KB)");
 
-	int flags = reliable ? GNS::SendReliable : GNS::SendUnreliable;
+	int flags;
+	if (reliable) flags = GNS::SendReliable;
+	else if (noNagle || bGlobalNoNagle) flags = GNS::SendUnreliableNoNagle;
+	else flags                                = GNS::SendUnreliable;
 
 	EResult result = Sockets->SendMessageToConnection(conn, data, size, flags, nullptr);
 	return result == GNS::ResultOK;
@@ -304,7 +321,7 @@ void NetConnectionManager::AssignOwnerID(HSteamNetConnection conn, uint8_t owner
 	{
 		ci->OwnerID = ownerID;
 #if defined(TNX_TESTING) || defined(TNX_ENABLE_EDITOR)
-		if (ci->bClientInitiated) LocalOwnerID.store(ownerID, std::memory_order_release);
+		if (ci->bOwnerInitiated) LocalOwnerID.store(ownerID, std::memory_order_release);
 #endif
 		LOG_ENG_INFO_F("[NetConnectionManager] Assigned OwnerID %u to connection %u", ownerID, conn);
 	}
@@ -379,7 +396,7 @@ void NetConnectionManager::OnConnectionStatusChanged(SteamNetConnectionStatusCha
 					ci->bConnected = true;
 					LOG_ENG_INFO_F("[NetConnectionManager] Connection %u established", info->m_hConn);
 
-					if (ci->bServerSide)
+					if (ci->bAuthoritySide)
 					{
 						mgr->OnClientConnected(*ci);
 					}

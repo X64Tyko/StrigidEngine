@@ -5,7 +5,7 @@
 
 #include "EngineConfig.h"
 #include "Events.h"
-#include "FlowManager.h"
+#include "FlowManagerBase.h"
 #include "TrinyxJobs.h"
 #include "World.h"
 #ifdef TNX_ENABLE_NETWORK
@@ -14,23 +14,24 @@
 #include "PIENetThread.h"
 using NetThreadType = PIENetThread;
 #elif defined(TNX_NET_MODEL_SERVER)
-#include "ServerNetThread.h"
-using NetThreadType = ServerNetThread;
+#include "AuthorityNet.h"
+using NetThreadType = AuthorityNet;
 #else
-#include "ClientNetThread.h"
-using NetThreadType = ClientNetThread;
+#include "OwnerNet.h"
+using NetThreadType = OwnerNet;
 #endif
 #endif
 #ifndef TNX_HEADLESS
 #include "VulkanContext.h"
 #include "VulkanMemory.h"
 #include "../../Rendering/Private/FramePacer.h"
+#include "AudioManager.h"
 #endif
 
 class RenderThread;
 // Forward declarations
 class Registry;
-class LogicThread;
+class LogicThreadBase;
 class JoltPhysics;
 #ifdef TNX_ENABLE_NETWORK
 class NetConnectionManager;
@@ -92,8 +93,8 @@ public:
 	}
 
 	// --- World access ---
-	World* GetDefaultWorld() const { return DefaultWorld; }
-	FlowManager* GetFlowManager() const { return Flow.get(); }
+	WorldBase* GetDefaultWorld() const { return DefaultWorld; }
+	FlowManagerBase* GetFlowManager() const { return Flow.get(); }
 
 	// Convenience: access the default world's registry.
 	Registry* GetRegistry() const;
@@ -114,6 +115,7 @@ public:
 #ifndef TNX_HEADLESS
 	RendererType* GetRenderer() const { return Render.get(); }
 	SDL_Window* GetWindow() const { return EngineWindow; }
+	AudioManager* GetAudio() const { return Audio.get(); }
 #endif
 
 #ifdef TNX_ENABLE_NETWORK
@@ -127,16 +129,16 @@ public:
 
 	// Game-level PIE hooks — game code binds these in PostInitialize.
 	// EditorContext fires them during StartPIE/StopPIE and Play/Stop.
-	Callback<void, World*, NetConnectionManager*> OnPIEStarted;
+	Callback<void, WorldBase*, NetConnectionManager*> OnPIEStarted;
 	Callback<void, NetConnectionManager*> OnPIEStopped;
 #endif
 
-	Callback<void, World*> OnPlayStarted; // Fired when Play (Local) is clicked
+	Callback<void, WorldBase*> OnPlayStarted; // Fired when Play (Local) is clicked
 	Callback<void> OnPlayStopped;         // Fired when Stop (Local) is clicked
 
 	// Input routing — when set, PumpEvents writes to this world instead of DefaultWorld.
 	// EditorContext sets this during PIE/Play to route input to the active world.
-	World* InputTargetWorld = nullptr;
+	WorldBase* InputTargetWorld = nullptr;
 
 private:
 #ifdef TNX_ENABLE_EDITOR
@@ -181,6 +183,7 @@ private:
 	// --- Renderer (shared, reads from active world) ---
 #ifndef TNX_HEADLESS
 	std::unique_ptr<RendererType> Render;
+	std::unique_ptr<AudioManager> Audio;
 #endif
 
 	// --- Config ---
@@ -188,12 +191,12 @@ private:
 	EngineConfig GameConfig; // Pure game config (no editor overrides) — used by PIE for server/client worlds
 
 	// --- World (owned by FlowManager, cached here for fast access) ---
-	World* DefaultWorld = nullptr;
+	WorldBase* DefaultWorld = nullptr;
 
 	// --- Lifecycle ---
 	std::atomic<bool> bIsRunning{false};
 	std::atomic<bool> bJobsInitialized{false};
-	std::unique_ptr<FlowManager> Flow;
+	std::unique_ptr<FlowManagerBase> Flow;
 
 	// --- Frame timing ---
 	uint64_t LastFrameCounter = 0; // SDL performance counter from previous frame
@@ -208,11 +211,8 @@ void TrinyxEngine::Run(GameClass& game)
 	StartThreadsAndJobs(); // Pin Logic/Render, init workers
 	game.PostStart(*this); // Spawns via Engine.Spawn() — syncs with Brain
 
-	// Auto-load the default flow state if configured.
-	// World already exists (created in Initialize), so EnforceRequirements is a no-op
-	// for NeedsWorld states. The state's OnEnter drives level loading and mode activation.
-	// In editor builds the EditorContext drives flow/level loading — skip the auto-load
-	// here to prevent a double load into the editor DefaultWorld.
+	// Editor builds skip the auto-load — EditorContext drives flow/level startup
+	// and would double-load into the editor DefaultWorld.
 #if !TNX_ENABLE_EDITOR
 	if (Config.DefaultState[0] != '\0')
 	{

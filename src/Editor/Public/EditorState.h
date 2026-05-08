@@ -11,7 +11,8 @@ class AssetDatabase;
 class EditorContext;
 class MeshManager;
 class Registry;
-class LogicThread;
+class LogicThreadBase;
+class ReplicationSystem;
 class TrinyxEngine;
 struct Chunk;
 struct EngineConfig;
@@ -23,7 +24,7 @@ struct EditorState
 	// --- Engine pointers (set once at init, never null after that) ---
 	Registry* RegistryPtr         = nullptr;
 	const EngineConfig* ConfigPtr = nullptr;
-	LogicThread* LogicPtr         = nullptr;
+	LogicThreadBase* LogicPtr     = nullptr;
 
 	// --- Selection ---
 	enum class SelectionType : uint8_t { None, Archetype, Entity };
@@ -70,6 +71,9 @@ struct EditorState
 
 	// --- Engine access (for Spawn handshake, scene load, etc.) ---
 	TrinyxEngine* EnginePtr = nullptr;
+
+	// --- Networking (null when PIE is not active) ---
+	ReplicationSystem* ReplicatorPtr = nullptr;
 
 	// --- Asset database (editor only, set by EditorContext) ---
 	AssetDatabase* AssetDB   = nullptr;

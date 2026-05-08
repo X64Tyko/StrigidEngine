@@ -485,11 +485,10 @@ Runtime compilation via C++ API planned for hot-reload.
 - 3-pass compute: predicate → prefix_sum (Option-B subgroup scan) → scatter (GPU interpolation + InstanceBuffer SoA)
 - 5 PersistentMapped field slabs cycle independently of 2 GPU frame-in-flight slots
 - `DrawIndexedIndirect` driven by scatter pass `DrawArgs.instanceCount`
-- Full-slab copy per new logic frame; dirty-bit-driven partial upload is next
+- ~~Full-slab copy per new logic frame~~ → Dirty-bit-driven partial upload operational (2026-03-29)
 
 **Remaining work:**
 
-- Wire cumulative dirty bit array to GPU upload path (partial upload)
 - Frustum culling compute pass
 - State-sorted rendering (64-bit sort keys, GPU radix sort)
 - Slang runtime compilation for hot-reload

@@ -106,11 +106,12 @@ This ensures that free order is not affected by thread scheduling or timing jitt
 
 Simulation code should use the engine's canonical numeric alias types:
 
-- `SimFloat` — currently aliased to `float`. Designed to map to `Fixed32` in deterministic builds,
-  but `Fixed32` is not yet implemented. This is a hardening-phase task.
+- `SimFloat` — aliases `SimFloatImpl<Fixed32>` under `TNX_DETERMINISM`, `SimFloatImpl<float>` otherwise.
+  `Fixed32`, `FieldProxy<Fixed32>`, and the Jolt bridge are fully wired. The engine runs deterministically.
 
-> **Status:** `Fixed32` is designed but not yet wired. See `docs/ARCHITECTURE.md` Fixed-Point section
-> for the design. Jolt determinism is already byte-perfect via `CROSS_PLATFORM_DETERMINISTIC`.
+> **Status:** Complete. `Fixed32` is implemented and wired into all position, velocity, and force fields
+> via `FieldProxy<Fixed32, WIDTH>`. Jolt determinism via `CROSS_PLATFORM_DETERMINISTIC` + validated
+> int32↔float32 bridge at the cell boundary.
 
 ---
 

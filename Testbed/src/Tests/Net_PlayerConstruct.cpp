@@ -17,7 +17,7 @@
 // Compare with: Spawn_PlayerConstruct (standalone, no replication)
 RUNTIME_TEST(Net_PlayerConstruct)
 {
-	World* world = Engine.GetDefaultWorld();
+	WorldBase* world = Engine.GetDefaultWorld();
 	ASSERT(world != nullptr);
 
 	ReplicationSystem* repl     = world->GetReplicationSystem();
@@ -31,7 +31,7 @@ RUNTIME_TEST(Net_PlayerConstruct)
 	 * replicates to a client and produces a matching ConstructRef on both sides.
 	 *
 	 * Steps (once PIE loopback session management is stable):
-	 *   1. Start a loopback PIE session (ServerNetThread + ClientNetThread in-process).
+	 *   1. Start a loopback PIE session (AuthorityNet + OwnerNet in-process).
 	 *   2. Fire a PlayerBeginRequest from the client soul.
 	 *   3. Server's TestNetGameMode::OnPlayerBeginRequest runs:
 	 *      - Creates PlayerConstruct at (2, 5, 0)
@@ -45,10 +45,7 @@ RUNTIME_TEST(Net_PlayerConstruct)
 	 */
 
 	(void)repl; (void)reg; (void)typeHash;
-	LOG_ENG_ALWAYS("[Net_PlayerConstruct] Networked PlayerConstruct test — pending PIE session bootstrap");
-
-	// Placeholder: at minimum assert world is ready for replication
-	ASSERT(repl != nullptr);
+	throw tnx::Testing::TestSkipped("Pending PIE session bootstrap API stabilization");
 }
 
 #endif // TNX_ENABLE_NETWORK

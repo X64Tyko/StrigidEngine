@@ -1,0 +1,14 @@
+{
+	"assets": [
+		{
+			"uuid": 256.0,
+			"name": "DeterminismFloor",
+			"path": "DeterminismFloor.tnxscene",
+			"type": 8.0,
+			"contentHash": 78013962790524448
+		}
+	],
+	"counters": {
+		"8": 2.0
+	}
+}

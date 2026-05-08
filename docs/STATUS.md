@@ -1,4 +1,4 @@
-# Current Status (2026-04)
+# Current Status (2026-05)
 
 > **Navigation:
 ** [← Back to README](../README.md) | [← Configuration](CONFIGURATION.md) | [Game Flow →](FLOW.md) | [Networking →](NETWORKING.md)
@@ -8,8 +8,8 @@
 ## Timeline Context
 
 **Project Start:** ~2026-02-01 (Week 1)
-**Current Date:** 2026-04-03
-**Phase:** Game Flow (Foundation Stage 3 — Construct/View + Networking proven, building gameplay layer)
+**Current Date:** 2026-05-07
+**Phase:** Replication reliability fix + Animation (Foundation Stage 5 — fixing client entity rendering, then skeletal animation)
 
 ---
 
@@ -21,13 +21,15 @@ begins.
 
 ### Stage 1: Foundation (current)
 
-| # | Milestone               | Status      | Notes                                                                                                                                                                            |
-|---|-------------------------|-------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| 1 | **Editor (bare-bones)** | Complete    | Scene hierarchy, entity inspection, reflected properties, save/load. ImGui docking, 6 panels. JSON serialization.                                                                |
-| 2 | **Construct/View OOP**  | Complete    | `Construct<T>`, `Owned<T>`, `ConstructView<TEntity>`, `ConstructBatch` tick dispatch. PlayerConstruct proven with JoltCharacter.                                                 |
-| 3 | **Networking**          | In Progress | GNS wrapper, PIE loopback, entity replication, clock sync, client input routing. Soul + NetChannel + SpawnRequest pipeline in progress. See [NETWORKING.md](NETWORKING.md).      |
-| 4 | **Audio**               | Not started | SDL3 thin wrapper first (handle-based for Anti-Event compatibility). Minimal — just enough for gameplay feedback.                                                                |
-| 5 | **Game Flow**           | In Progress | FlowManager, FlowState, GameMode, Soul, NetChannel implemented. Audio not started. ModeMixin system, WithSpawnManagement, SpawnRequest pipeline pending. See [FLOW.md](FLOW.md). |
+| # | Milestone               | Status      | Notes                                                                                                                                                                                          |
+|---|-------------------------|-------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| 1 | **Editor (bare-bones)** | Complete    | 8 panels: World Outliner, Details, Content Browser, Engine Stats, Log, Node Script, Component Generator, Debugger. ImGuizmo gizmo, undo/redo, PIE (local + networked), scene snapshot/restore, asset database (.tnxid sidecars, .tnxdb), JSON .tnxscene format. See [EDITOR.md](EDITOR.md). |
+| 2 | **Construct/View OOP**  | Complete    | `Construct<T>`, `Owned<T>`, `ConstructView<TEntity>`, `ConstructBatch` tick dispatch. PlayerConstruct proven with JoltCharacter.                                                               |
+| 3 | **Networking**          | In Progress | GNS wrapper, PIE loopback, entity replication, clock sync, client input routing, delta compression. `LogicThread<TNet,TRollback,TFrame>`, `ServerClientChannel`, `AuthoritySim`/`OwnerSim` done. See [NETWORKING.md](NETWORKING.md). |
+| 4 | **Audio**               | Complete    | SDL3 AudioManager: voice pool, handle-based playback, event registry, per-voice fade, priority-based voice stealing. Compatible with Anti-Event design (handle-based FadeOut). See [AUDIO.md](AUDIO.md). |
+| 5 | **Camera System**       | Complete    | `CameraManager` (per-Soul layer stack), `CameraSlot` enum (5 slots), `CameraLayer` + mixins (`CameraStateMix`, `CameraBlendMix`, `CameraOrientationMix`), `ECameraNode` (cold, lobby cameras), `ECamera` (hot SoA), `CurveHandle`. |
+| 6 | **Game Flow**           | In Progress | FlowManager, FlowState, GameMode, Soul, NetChannel implemented. `WithSpawnManagement`, `WithLobby`, `WithTeamAssignment` ModeMixins done. `ClientRepState` 7-state machine done. See [FLOW.md](FLOW.md). |
+| 7 | **Animation**           | Planned     | Skeletal animation: pose sampling, bone hierarchy, GPU skinning. Follows replication reliability fix. |
 
 ### Stage 2: Hardening
 
@@ -38,9 +40,9 @@ gameplay systems on top of the proven Construct/View foundation.
 **Hardening targets (non-exhaustive):**
 
 - ~~Wire cumulative dirty bit array to GPU upload~~ ✅ Implemented (2026-03-29)
-- Migrate `GetTemporalFieldWritePtr` from Archetype to TemporalComponentCache
-- Remove duplicated `TemporalFrameStride` from Archetype
-- Fixed-point coordinate system (`Fixed32`, `SimFloat` alias, Jolt bridge validation)
+- ~~Migrate `GetTemporalFieldWritePtr` from Archetype to TemporalComponentCache~~ ✅ Done (2026-04-21) — `GetWriteFramePtr`/`GetReadFramePtr` on `ComponentCacheBase`
+- ~~Remove duplicated `TemporalFrameStride` from Archetype~~ ✅ Done (2026-04-21) — `BuildFieldArrayTable` moved out-of-line, queries cache directly
+- ~~Fixed-point coordinate system (`Fixed32`, `SimFloat` alias, Jolt bridge validation)~~ ✅ Complete — fully wired, engine runs deterministically
 - Audit hot-path data structures for cache efficiency
 - Archetype field allocation and meta storage cleanup
 - ConstraintEntity system (constraint pool, rigid attachment pass, physics root determination)
@@ -165,7 +167,7 @@ in the long run.
 - `ConstructView<TEntity>` — generic view template, creates a backing ECS entity of any EntityView type,
   auto-rehydrates FieldProxy cursors on frame advance and defrag. Partition auto-derived from entity's components.
 - `ConstructRegistry` — type-erased registry of live Constructs, deferred destruction
-- `CameraConstruct` — in-world camera (LogicView, yaw/pitch/FOV state), swappable ActiveCamera on LogicThread
+- `CameraConstruct` — in-world camera (yaw/pitch/FOV state, owned by Soul via CameraManager — see camera system design in NETWORKING.md)
 - `JoltCharacter` — Jolt CharacterVirtual wrapper for Construct-driven character controllers (capsule shape,
   grounding, stair stepping, slope sliding). Decoupled from JoltBody component — no Jolt body in the ECS.
 - `JoltLayers` — shared header for Jolt object/broadphase layer constants (extracted from JoltPhysics.cpp)
@@ -200,7 +202,7 @@ in the long run.
 **Networking (2026-03 — in progress):**
 
 - `GNSContext` — GameNetworkingSockets wrapper (header isolation, static link)
-- `NetConnectionManager` — server/client socket API, Listen/Connect, per-connection state (RTT, OwnerID, sequence
+- `NetConnectionManager` — socket API (Listen/Connect), per-connection state (RTT, OwnerID, sequence
   tracking)
 - `NetThread` — dedicated network poller at NetworkUpdateHz (default 30Hz), routes InputFrame messages to correct World
 - `ReplicationSystem` — server-side entity replication:
@@ -212,13 +214,13 @@ in the long run.
 - `World` abstraction — self-contained simulation (Registry + Physics + Logic + Input + SpawnSync)
 - PIE loopback: server + N client Worlds in same process, loopback GNS connections
 - Focus-based input routing: `InputTargetWorld` pointer routes PumpEvents to focused PIE viewport
-- Known gaps: no delta compression, no interest management, no entity destruction replication, no ownership camera
+- Known gaps: no interest management
 
 **Architecture & Config Fixes:**
 - `MAX_FIELDS_PER_ARCHETYPE = 256` in Types.h
 - `DualArrayTableBuffer[MAX_FIELDS_PER_ARCHETYPE * 2]` moved from 256 KB stack to Registry member
 - `Archetype::BuildFieldArrayTable` with dual-pointer interleave
-- `Archetype::GetTemporalFieldWritePtr` (note: should eventually migrate to TemporalComponentCache)
+- ~~`Archetype::GetTemporalFieldWritePtr`~~ → migrated to `ComponentCacheBase::GetWriteFramePtr(void*)` / `GetReadFramePtr(void*)` ✅ Done (2026-04-21)
 - VulkanContext::CreateInstance suppresses unused `window` param with `/*window*/`
 - Tracy TRACY_SOURCES compiled with `-w` (suppress all upstream warnings)
 
@@ -296,28 +298,83 @@ in the long run.
 - [x] Input buffering (double-buffered, lock-free polling, event + bitstate querying)
 - [x] VecMath / QuatMath / FieldMath libraries
 - [x] Component validation: no vtable + all fields must be FieldProxy (SchemaValidation.h)
+- [x] **Editor** — 8-panel ImGui editor (`TNX_ENABLE_EDITOR`): World Outliner (entity browser, delete, prefab drop),
+  Details (field editing, asset ref combos, mesh drop), Content Browser (asset table, type filter, drag-drop source),
+  Engine Stats (FPS / entity counts / config dump), Log (level filter, color-coded ring buffer), Node Script (25-node
+  visual scripting, C++ codegen, determinism validation), Component Generator (SoA macro codegen), Debugger (net stats
+  plots, logic frame time history). `EditorContext`: scene load/save (.tnxscene JSON + metadata), undo/redo (50-command
+  merge stack), PIE local + networked (1–4 clients, headless server option, scene snapshot/restore). `AssetDatabase`:
+  UUID sidecar (.tnxid), hash reconciliation, .tnxdb persistence. ImGuizmo gizmo (W/E/R, world/local, snap, undo
+  integration). GPU picking (R32_UINT pick target per viewport, `TNX_GPU_PICKING`). (2026-03)
 - [x] **Construct/View OOP layer** — `Construct<T>`, `Owned<T>`, `ConstructView<TEntity>`, `ConstructBatch`,
   `TickGroup`, JoltCharacter, defrag listeners, spawn handshake integration (2026-04)
-- [x] **Rollback substrate** — LogicThread ExecuteRollback/ExecuteRollbackTest, JoltPhysics SaveSnapshot/RestoreSnapshot
-  ring buffer (TNX_ENABLE_ROLLBACK). Byte-perfect ECS + Jolt determinism verified (2026-03-29).
+- [x] **Rollback netcode** — fully integrated with the network layer (2026-05). `AuthoritySim::OnSimInput` calls
+  `logic.RequestRollback(frame)` on server-detected input mismatch. `OwnerNet::HandleStateCorrections` enqueues
+  `EntityTransformCorrection` objects (with `ResimFrameDelta` for server-annotated resim roots) into
+  `world->EnqueueCorrections`, feeding `RollbackSim::IncomingCorrections`. `RollbackSim::ProcessRollback` drains,
+  finds the earliest correction frame, calls `ExecuteRollback`: Jolt snapshot restore → ECS slab rewind →
+  per-frame resim loop with per-frame correction injection → `CheckAndCorrectEntityTransform`. Gated by
+  `TNX_ENABLE_ROLLBACK`; non-rollback path patches directly. `ExecuteRollbackTest` verifies byte-perfect
+  determinism (ECS slab + Jolt state memcmp). (2026-03-29 substrate, 2026-05 network integration)
 - [x] **Game Flow (partial)** — FlowManager state stack + travel primitives, FlowState base class, GameMode base class,
   Soul class (OwnerID identity, ClaimBody/ReleaseBody, RPC dispatch), NetChannel typed send wrapper,
   ConstructRegistry lifetime-bucketed storage (Level/World/Session/Persistent) (2026-04)
-- [x] **Networking** — GNS, GNSContext, NetConnectionManager, NetThreadBase (
-  ClientNetThread/ServerNetThread/PIENetThread),
-  entity spawn replication, ConstructSpawn replication, state corrections, PIE loopback,
-  PlayerInputLog per-player ring buffer, clock sync, Soul RPC system (PlayerBegin/Confirm/Reject) (2026-04)
+- [x] **ModeMixin system** — `WithSpawnManagement`, `WithLobby`, `WithTeamAssignment` (engine-detected via dynamic_cast,
+  MixinID compile-time constants, registered in ReflectionRegistry) (2026-05)
+- [x] **Networking refactor** — `LogicThread<TNet, TRollback, TFrame>` three-axis policy template; `AuthoritySim`
+  (server-side OnSimInput/OnFramePublished, rollback trigger, CommittedHorizon advance); `OwnerSim` (client-side
+  input snapshot into InputAccumRing); `PIENetThread`; `AuthorityNet` + `OwnerNet` (renamed from Server/ClientNetThread)
+  (2026-05)
+- [x] **ServerClientChannel** — per-client state: `PlayerInputLog`, `Replicated[]`, `PendingActivations`, `NetChannel`,
+  `PendingPacketQueue` (lock-free MPSC); `AdvanceCommittedHorizon` on AuthoritySim (2026-05)
+- [x] **Delta compression** — `EntityDelta` (component-level dirty field patches) and `InputFrameDelta` (delta-encoded
+  input window with `InputDeltaFlags` bitmask — KeyState/MouseDX/MouseDY/MouseButtons/Events each optional per frame).
+  Wire types, decoder, `InputDeltaPacketHeader` all done (2026-05)
+- [x] **Entity destruction replication** — `EntityDestroy` (N × uint32_t net handle values) and `ConstructDestroy`
+  (N × uint32_t construct handle values) wire types and handlers (2026-05)
+- [x] **Entity activation pipeline** — `EntityActivate` (Alive→Active batch), `StreamLoad` / `StreamReady` /
+  `ChunkActivate` (background chunk load with optional auto-activate) wire types and `ClientRepState` 7-state machine
+  (PendingHandshake→Synchronizing→Loading→LevelLoading→LevelLoaded→Loaded→Playing) (2026-05)
+- [x] **Audio system** — `AudioManager`: SDL3 device, fixed voice pool (configurable max), handle-based (`SoundHandle`)
+  playback, `PlayParams` (volume/pitch/loop/bus/priority), `AudioEventEntry` registry, per-voice `FadeOut` / `SetVolume`,
+  voice stealing by priority, lazy-load + auto-unload, pinned slots. `Audio.h` namespace wrapper (2026-05)
+- [x] **Fixed-point math layer** — `Fixed32` (int32, 1 unit = 0.1mm, all arithmetic ops, `FixedSqrt`); `FixedUnit`
+  (trig output, 1<<20 scale, cross-multiply with `Fixed32` via right-shift); `SimFloat = SimFloatImpl<float|Fixed32>`
+  alias toggled by `TNX_DETERMINISM`; `FixedTrig` (`FixedSin`/`FixedCos` LUT); `FastSin`/`FastCos`/`Sqrt`/`Rsqrt`
+  in `SimFloat.h` (2026-05)
+- [x] **Camera system** — `CameraManager` (per-Soul layer stack, 5 slots, `AddLayer<T>` concept detection for mixins,
+  `DispatchOrientationDelta`, `Resolve()`); `CameraSlot` enum; `CameraLayer` (alpha transitions, `ConsumeScope`);
+  `CameraStateMix` / `CameraBlendMix` / `CameraOrientationMix` CRTP mixins; `WorldCameraState` / `CameraRenderState`
+  (2026-05)
+- [x] **Camera entity types** — `ECameraNode` (cold archetype, lobby/loading cameras, `CNodeTransform` + `CCameraLayer`);
+  `ECamera` (hot SoA, Construct-driven cameras, `CTransform` + `CCameraLayer`) (2026-05)
+- [x] **`TemporalFlagBits` typed enum** — all entity flags in one place: `Active`, `Dirty`, `DirtiedFrame`, `Replicated`,
+  `Alive`, `Tombstone`, `NetConfirmedDead`, `depthMask` (4-bit attachment depth), `PrePhysSkip`, `PostPhysSkip`,
+  `ScalarSkip`, `ASleep`; typed `|=` / `&=` operators on `CacheSlotMeta` (2026-05)
+- [x] **`PredictionLedger`** — client-side in-flight spawn prediction tracker (PredictionID, RequestFrame, LocalRef,
+  PrefabUUID); keyed by echoed PredictionID in PlayerBeginConfirm/Reject (2026-05)
+- [x] **`StateCorrectionEntry` ResimFrameDelta extension** — `ResimFrameDelta` + `ResimPos/Rot` fields for server-annotated
+  rollback corrections; client patches the slab at the resim root frame rather than only the current frame (2026-05)
+- [x] **`EInterpEntity<Derived>`** — CRTP base for interpolated entity types; `CVisualTransform` component (VisPosXYZ,
+  VisBlend); `PostPhysics` lerps visual position toward authoritative position each tick (2026-05)
+- [x] **`ESpawnPoint`** — entity type for designer-placed spawn locations (2026-05)
+- [x] **GameModeManifest / ClientModeManifest CRTP payloads** — typed game-layer context publish (mode name, level name,
+  max players, sequence ID for reply correlation) with `BaseNetPayload<T>` trivially-copyable enforcement (2026-05)
+- [x] **`FlowEventID` enum** — `TravelNotify`, `ServerReady`, `PlayerBeginConfirm`, `PlayerBeginReject`; carried in
+  `FlowEventPayload` (reliable NetMessageType::FlowEvent) (2026-05)
 
 ### Not Yet Implemented
 
-- [ ] **Fixed-point coordinate system** — `Fixed32` value type (1 unit = 0.1mm), `FieldProxy<Fixed32, WIDTH>`, render thread conversion to camera-relative float32 at upload, Jolt bridge (int32↔float32 at cell boundary)
-- [ ] **ConstraintEntity system** — constraint entities in LOGIC partition, `ConstraintType` enum (Rigid/Hinge/BallSocket/Prismatic/Distance/Spring), render thread rigid attachment pass (2-pass depth ordering), physics root determination
-- [ ] **Space partition cell registry** — cell world origins as float64/int64, cell assignment at entity spawn, cross-cell reparenting
+- [ ] **Phase 0 (Tentative despawn)** — no per-frame `TentativeDestroys` ring buffer. Entities dying in speculative
+  sim during rollback are not explicitly tracked until `CommittedHorizon` advances. The `CommittedHorizon` gate
+  prevents incorrect early send, but explicit tentative→commit graduation is needed once rollback netcode is wired.
+- [ ] **ConstraintEntity system** — constraint entities in LOGIC partition, `ConstraintType` enum
+  (Rigid/Hinge/BallSocket/Prismatic/Distance/Spring), render thread rigid attachment pass (2-pass depth ordering),
+  physics root determination
+- [ ] **Space partition cell registry** — cell world origins as float64/int64, cell assignment at entity spawn,
+  cross-cell reparenting
 - [ ] **Presentation Reconciler** — Anti-Events (RapidFadeOut, SoftCancel, RapidDecay) for rollback-driven effect
-  correction
-- [ ] **Audio** — SDL3 thin wrapper (handle-based for Anti-Event compatibility)
-- [ ] `GetTemporalFieldWritePtr` migration from Archetype to TemporalComponentCache
-- [ ] `TemporalFrameStride` removal from Archetype (duplicated from cache)
+  correction. Audio system's `FadeOut` is Anti-Event-compatible; the reconciler diff logic is not implemented.
 
 ### Known Issues / Technical Debt
 
@@ -361,11 +418,9 @@ in the long run.
 
 #### ECS / Memory
 
-8. **`TemporalFrameStride` duplicated on Archetype.** Should call `cache->GetFrameStride()` instead.
-   Currently cached redundantly on every Archetype instance.
+8. ~~**`TemporalFrameStride` duplicated on Archetype.**~~ ✅ Fixed (2026-04-21) — `BuildFieldArrayTable` moved out-of-line to Archetype.cpp; queries `cache->GetFrameStride()` directly.
 
-9. **`GetTemporalFieldWritePtr` lives on Archetype, not TemporalComponentCache.** Logically belongs on the
-   cache. Moving it is mechanical but touches several call sites — deferred to hardening pass.
+9. ~~**`GetTemporalFieldWritePtr` lives on Archetype, not TemporalComponentCache.**~~ ✅ Fixed (2026-04-21) — `GetWriteFramePtr(void*)` and `GetReadFramePtr(void*)` added to `ComponentCacheBase`; all call sites updated.
 
 10. **Reflection system relies on static initialisation order.** `TNX_REGISTER_COMPONENT`,
     `TNX_TEMPORAL_FIELDS`, `TNX_REGISTER_SCHEMA` etc. are all driven by static constructors. Cross-TU
@@ -382,11 +437,12 @@ in the long run.
 
 ### Planned (Next Phase)
 
-- [ ] **Delta compression** — send only changed fields instead of full state corrections
-- [ ] **Owned entity camera** — client detects its owned entity via NetOwnerID, attaches follow camera
+- [ ] **Replication reliability** — client entities appear then vanish; root cause in the `ClientRepState` / activation pipeline
+- [ ] **Animation** — skeletal animation: pose sampling, bone hierarchy, GPU skinning pass
+- [ ] **Phase 0 (Tentative despawn)** — per-frame TentativeDestroys ring buffer for rollback-safe entity death (see Not Yet Implemented above)
 - [ ] **Frustum culling** — SIMD 6-plane test, GPU-side predicate enhancement
 - [ ] **State-sorted rendering** — 64-bit sort keys, GPU radix sort after scatter
-- [ ] **Rollback netcode** — network integration using proven rollback substrate + dirty resimulation
+- [ ] **Standalone Soul synthesis** — synthesise a local Soul per player in `FlowManager` for offline play (Known Issue #6)
 
 ---
 

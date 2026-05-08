@@ -3,18 +3,29 @@
 #include <Jolt/Jolt.h>
 #include <Jolt/Physics/PhysicsSystem.h>
 #include <Jolt/Physics/Body/BodyID.h>
-#include <Jolt/Physics/Body/BodyCreationSettings.h>
 #include <Jolt/Core/TempAllocator.h>
+#include <cstdint>
 #include <memory>
-#include <vector>
+#include <optional>
 #include <string>
+#include <vector>
 
+#include "Events.h"
+#include "PhysicsEvents.h"
+#include "PhysicsTypes.h"
+#include "Registry.h"
 #include "TrinyxJobs.h"
+#include "TrinyxMPSCRing.h"
 
 JPH_SUPPRESS_WARNINGS
 
+DEFINE_MULTICAST_CALLBACK(OnHitCB, PhysicsOnHitData)
+DEFINE_MULTICAST_CALLBACK(OnOverlapBeginCB, PhysicsOverlapData)
+DEFINE_MULTICAST_CALLBACK(OnOverlapEndCB, PhysicsOverlapData)
+
+class JoltCharacter;
+class JoltContactListener;
 class JoltJobSystemAdapter;
-class Registry;
 struct EngineConfig;
 
 // JoltPhysics — engine-level wrapper around JPH::PhysicsSystem.
@@ -69,6 +80,20 @@ public:
 	uint32_t GetEntityIndex(JPH::BodyID bodyID) const;
 	bool HasBody(uint32_t entityIndex) const;
 
+	// --- Body ownership registration ---
+	// Single gateway for registering any body into the sim's owner table.
+	// FlushPendingBodies (CJoltBody driver) and wrappers like JoltCharacter
+	// both funnel through these — they are the only writers of BodyToEntity.
+	void RegisterBody(JPH::BodyID id, EntityCacheHandle owner);
+	void UnregisterBody(JPH::BodyID id);
+	EntityCacheHandle GetBodyOwner(JPH::BodyID id) const;
+
+	// --- JoltCharacter lifetime tracking ---
+	// Shutdown() iterates these and calls ch->Shutdown() before PhysSystem.reset(),
+	// ensuring CharacterVirtual::~CharacterVirtual() never touches a dead mSystem.
+	void RegisterCharacter(JoltCharacter* ch);
+	void UnregisterCharacter(JoltCharacter* ch);
+
 	// --- Accessors ---
 
 	JPH::PhysicsSystem* GetPhysicsSystem() { return PhysSystem.get(); }
@@ -77,6 +102,47 @@ public:
 	const JPH::BodyInterface& GetBodyInterfaceNoLock() const;
 	TrinyxJobs::JobCounter* GetJoltPhysCounter() { return &JoltPhysCounter; }
 	uint32_t GetBodyCount() const { return PhysSystem->GetNumBodies(); }
+	void ProcessContacts(const Registry* Reg);
+
+	// --- Contact callbacks (keyed by EntityCacheHandle, bound via EntityHandle) ---
+	// Bind at any time after entity creation. No Jolt body required.
+	// Resolves EntityHandle → CacheEntityIndex internally.
+
+	template <typename T, void(T::*MemFn)(PhysicsOnHitData)>
+	void BindOnHit(EntityHandle handle, Registry* reg, T* obj)
+	{
+		EntityCacheHandle idx = reg->GetRecord(handle).CacheEntityIndex;
+		EnsureCallbackSize(idx);
+		OnHitCallbacks[idx].Bind<T, MemFn>(obj);
+	}
+
+	template <typename T, void(T::*MemFn)(PhysicsOverlapData)>
+	void BindOnOverlapBegin(EntityHandle handle, Registry* reg, T* obj)
+	{
+		EntityCacheHandle idx = reg->GetRecord(handle).CacheEntityIndex;
+		EnsureCallbackSize(idx);
+		OnOverlapBeginCallbacks[idx].Bind<T, MemFn>(obj);
+	}
+
+	template <typename T, void(T::*MemFn)(PhysicsOverlapData)>
+	void BindOnOverlapEnd(EntityHandle handle, Registry* reg, T* obj)
+	{
+		EntityCacheHandle idx = reg->GetRecord(handle).CacheEntityIndex;
+		EnsureCallbackSize(idx);
+		OnOverlapEndCallbacks[idx].Bind<T, MemFn>(obj);
+	}
+
+	void UnbindContacts(EntityHandle handle, Registry* reg, void* ctx)
+	{
+		EntityCacheHandle idx = reg->GetRecord(handle).CacheEntityIndex;
+		if (idx < OnHitCallbacks.size()) OnHitCallbacks[idx].UnbindByContext(ctx);
+		if (idx < OnOverlapBeginCallbacks.size()) OnOverlapBeginCallbacks[idx].UnbindByContext(ctx);
+		if (idx < OnOverlapEndCallbacks.size()) OnOverlapEndCallbacks[idx].UnbindByContext(ctx);
+	}
+
+	// --- Contact event ring ---
+	// JoltContactListener pushes PhysicsContactEvents from Jolt worker threads
+	std::optional<TrinyxMPSCRing<PhysicsContactEvent>::Consumer> ContactConsumer;
 
 #ifdef TNX_ENABLE_ROLLBACK
 	// --- State snapshot ring buffer ---
@@ -86,13 +152,21 @@ public:
 	// Restore physics to the exact state saved at frameNumber.
 	// Returns false if the requested frame is no longer in the ring buffer.
 	bool RestoreSnapshot(uint32_t frameNumber);
+
+	// Returns the oldest frame number in the snapshot ring, or UINT32_MAX if empty.
+	// Used by LogicThread to clamp rollback targets to the range we can actually restore.
+	uint32_t GetOldestSnapshotFrame() const;
 #endif
+	bool GetIsActive() const { return bActive.load(std::memory_order_acquire); }
 
 private:
 	// Jolt subsystems (order matters for destruction)
 	std::unique_ptr<JoltJobSystemAdapter> JobSystem;
 	std::unique_ptr<JPH::TempAllocatorImpl> TempAllocator;
 	std::unique_ptr<JPH::PhysicsSystem> PhysSystem;
+	std::unique_ptr<JoltContactListener> ContactListener;
+	TrinyxMPSCRing<PhysicsContactEvent> ContactEventRing;
+	std::atomic_bool bActive{false};
 
 	// Entity ↔ Body mapping arrays.
 	// EntityToBody: indexed by archetype global index → JPH::BodyID
@@ -101,11 +175,28 @@ private:
 	std::vector<JPH::BodyID> EntityToBody;
 	std::vector<uint32_t> BodyToEntity;
 
+	// Contact callbacks indexed by EntityCacheHandle.
+	std::vector<OnHitCB> OnHitCallbacks;
+	std::vector<OnOverlapBeginCB> OnOverlapBeginCallbacks;
+	std::vector<OnOverlapEndCB> OnOverlapEndCallbacks;
+
+	void EnsureCallbackSize(EntityCacheHandle idx)
+	{
+		size_t needed = static_cast<size_t>(idx) + 1;
+		if (OnHitCallbacks.size() < needed) OnHitCallbacks.resize(needed);
+		if (OnOverlapBeginCallbacks.size() < needed) OnOverlapBeginCallbacks.resize(needed);
+		if (OnOverlapEndCallbacks.size() < needed) OnOverlapEndCallbacks.resize(needed);
+	}
+
 	static constexpr uint32_t InvalidEntityIndex = UINT32_MAX;
+
+	// All JoltCharacter objects currently initialized against this physics system.
+	// Drained in Shutdown() before PhysSystem is destroyed.
+	std::vector<JoltCharacter*> ActiveCharacters;
 
 	const EngineConfig* ConfigPtr = nullptr;
 	std::vector<uint64_t> LiveEntityBits; // Bitplane: 1 bit per entity index, reused across FlushPendingBodies calls
-	alignas(16) std::vector<float> fieldScratch[7];
+	alignas(FIELD_ARRAY_ALIGNMENT) std::vector<float> fieldScratch[7];
 	TrinyxJobs::JobCounter JoltPhysCounter;
 
 	struct SyncPair

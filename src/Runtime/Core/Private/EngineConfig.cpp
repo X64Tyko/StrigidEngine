@@ -92,6 +92,11 @@ static void FillFromFile(const char* path, EngineConfig& cfg)
 		else if (key == "DefaultState" && cfg.DefaultState[0] == '\0') snprintf(cfg.DefaultState, sizeof(cfg.DefaultState), "%s", val.c_str());
 		else if (key == "EngineLogLevel" && cfg.EngineLogLevel == EngineConfig::Unset) cfg.EngineLogLevel = ParseLogLevel(val);
 		else if (key == "GameLogLevel" && cfg.GameLogLevel == EngineConfig::Unset) cfg.GameLogLevel = ParseLogLevel(val);
+		else if (key == "AudioUpdateHz" && cfg.AudioUpdateHz == EngineConfig::Unset) cfg.AudioUpdateHz = std::stoi(val);
+		else if (key == "MaxAudioVoices" && cfg.MaxAudioVoices == EngineConfig::Unset) cfg.MaxAudioVoices = std::stoi(val);
+		else if (key == "NoNagle" && !cfg.NoNagle) cfg.NoNagle = (val == "1" || val == "true" || val == "True");
+		else if (key == "SendRateMin" && cfg.SendRateMin == EngineConfig::Unset) cfg.SendRateMin = std::stoi(val);
+		else if (key == "SendRateMax" && cfg.SendRateMax == EngineConfig::Unset) cfg.SendRateMax = std::stoi(val);
 	}
 }
 
@@ -140,6 +145,17 @@ void EngineConfig::ApplyDefaults()
 	if (MAX_JOLT_BODIES == Unset) MAX_JOLT_BODIES = 11000;
 	if (TemporalFrameCount == Unset) TemporalFrameCount = 32;
 	if (JobCacheSize == Unset) JobCacheSize = 16 * 1024;
+	if (AudioUpdateHz == Unset) AudioUpdateHz = 250;
+	if (MaxAudioVoices == Unset) MaxAudioVoices = 64;
+	// TODO: bring SendRate down as we characterize real-network bandwidth needs.
+	// 1MB/s default — well above GNS's 256KB/s floor to avoid pacing the input stream.
+	if (SendRateMin == Unset) SendRateMin = 1024 * 1024;
+	if (SendRateMax == Unset) SendRateMax = 1024 * 1024;
+
+#ifdef TNX_ENABLE_EDITOR
+	// Multiple worlds run concurrently in PIE — pinning causes oversubscription.
+	EnableThreadPinning = false;
+#endif
 }
 
 void EngineConfig::FillFrom(const EngineConfig& other)
@@ -158,6 +174,11 @@ void EngineConfig::FillFrom(const EngineConfig& other)
 
 	if (DefaultScene[0] == '\0' && other.DefaultScene[0] != '\0') snprintf(DefaultScene, sizeof(DefaultScene), "%s", other.DefaultScene);
 	if (DefaultState[0] == '\0' && other.DefaultState[0] != '\0') snprintf(DefaultState, sizeof(DefaultState), "%s", other.DefaultState);
+	if (AudioUpdateHz == Unset && other.AudioUpdateHz != Unset) AudioUpdateHz = other.AudioUpdateHz;
+	if (MaxAudioVoices == Unset && other.MaxAudioVoices != Unset) MaxAudioVoices = other.MaxAudioVoices;
+	if (!NoNagle && other.NoNagle) NoNagle = other.NoNagle;
+	if (SendRateMin == Unset && other.SendRateMin != Unset) SendRateMin = other.SendRateMin;
+	if (SendRateMax == Unset && other.SendRateMax != Unset) SendRateMax = other.SendRateMax;
 }
 
 EngineConfig EngineConfig::LoadProjectConfig(const char* projectDir)

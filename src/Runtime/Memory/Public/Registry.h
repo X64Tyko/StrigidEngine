@@ -1,11 +1,15 @@
 #pragma once
 #include <atomic>
+#include <cstdint>
+#include <functional>
 #include <queue>
 #include <span>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
 #include "Archetype.h"
+#include "AssetRegistry.h"
+#include "DefragSystem.h"
 #include "EntityRecord.h"
 #include "FlatMap.h"
 #include "ReflectionRegistry.h"
@@ -18,26 +22,25 @@
 struct EngineConfig;
 class JoltPhysics;
 
-// Registry — Central entity management system.
-//
-// Manages three independent handle/index spaces:
-//   GHandle  (GlobalEntityHandle) — internal record identity, indexes into Records[]
-//   LHandle  (EntityHandle)       — OOP/Construct-facing handle, indexes into LocalToRecord[]
-//   NetHandle (EntityNetHandle)   — network replication handle, indexes into NetToRecord[]
-//
-// Index 0 is reserved/invalid in all three spaces.
-//
-// Creation flow:
-//   CreateInternal(classID, span<GHandle>)  — allocates records + archetype slots
-//   MakeEntityHandle(GHandle, classID)      — allocates a local index, wires LocalToRecord
-//   Public API (Create<T>, CreateByClassID) — wraps the above, returns EntityHandle (LHandle)
-//
-// Destruction flow:
-//   Destroy(LHandle)            — defers GHandle to PendingDestructions
-//   ProcessDeferredDestructions — removes from archetype, calls FreeGlobalHandle
-//   FreeGlobalHandle            — reclaims record index, requests local/net handle recycling
-//   ConfirmLocalRecycles/ConfirmNetRecycles — moves pending → free (call after safety window)
-//
+/// @brief Central entity management system.
+///
+/// Manages three independent handle spaces:
+/// - @c GlobalEntityHandle (GHandle) — internal record identity; indexes @c Records[].
+/// - @c EntityHandle (LHandle) — OOP / Construct-facing handle; indexes @c LocalToRecord[].
+/// - @c EntityNetHandle (NetHandle) — network replication handle; indexes @c NetToRecord[].
+///
+/// Index 0 is reserved / invalid in all three spaces.
+///
+/// **Creation flow:**
+/// 1. @c CreateInternal(classID, span<GHandle>) — allocates records and archetype slots.
+/// 2. @c MakeEntityHandle(GHandle, classID) — allocates a local index, wires @c LocalToRecord.
+/// 3. Public API (@c Create<T>, @c CreateByClassID) — wraps the above, returns @c EntityHandle.
+///
+/// **Destruction flow:**
+/// 1. @c Destroy(LHandle) — defers @c GHandle to @c PendingDestructions.
+/// 2. @c ProcessDeferredDestructions — removes from archetype, calls @c FreeGlobalHandle.
+/// 3. @c FreeGlobalHandle — reclaims record index, queues local / net handle recycling.
+/// 4. @c ConfirmLocalRecycles / @c ConfirmNetRecycles — moves pending → free after the safety window.
 class Registry
 {
 public:
@@ -49,8 +52,16 @@ public:
 
 	template <typename T>
 	EntityHandle Create();
+	template <typename T, std::invocable<T&> Fn>
+	EntityHandle Create(Fn&& fn);
 	template <typename T>
 	std::vector<EntityHandle> Create(size_t count);
+
+	// Type-erased init-lambda create — used by EntityBuilder for runtime ClassID spawning.
+	// fn receives (record, fieldArrayTable) immediately after entity allocation; pending
+	// asset checkouts registered during fn are drained automatically before returning.
+	template <std::invocable<EntityRecord&, void**> Fn>
+	EntityHandle CreateByClassID(ClassID classID, Fn&& fn);
 
 	// Destroy + recreate at the same ClassID, reusing the handle slot
 	void Recreate(EntityHandle& inHandle);
@@ -64,7 +75,12 @@ public:
 
 	void Destroy(EntityHandle lHandle);
 	void DestroyByGlobalHandle(GlobalEntityHandle gHandle);
+	void ForceDestroyByGlobalHandle(GlobalEntityHandle gHandle);
 	void ProcessDeferredDestructions();
+
+	// --- Tombstone API ---
+	void ConfirmTombstone(uint32_t recordIndex);
+	bool IsTombstoned(uint32_t recordIndex) const;
 
 	// --- Component access ---
 
@@ -84,6 +100,15 @@ public:
 	void InvokePrePhys(SimFloat dt);
 	void InvokePostPhys(SimFloat dt);
 
+	// --- Defrag (Brain thread) ---
+	// Call once per Logic frame (after ProcessDeferredDestructions). On the
+	// analysis cadence, scans archetypes and posts WorldQueue move jobs.
+	void TickDefrag(TrinyxJobs::WorldQueueHandle wq);
+
+	// Synchronous defrag — bypasses the analysis cadence and runs all compaction
+	// inline on the calling thread. No WorldQueue needed. Use for tests only.
+	void ForceDefragSync();
+
 	// --- Slab accessors (used by LogicThread/RenderThread at init time) ---
 
 	ComponentCache<CacheTier::Volatile>* GetVolatileCache() { return &VolatileSlab; }
@@ -91,6 +116,41 @@ public:
 	ComponentCache<CacheTier::Temporal>* GetTemporalCache() { return &HistorySlab; }
 #else
 	ComponentCache<CacheTier::Volatile>* GetTemporalCache() { return &VolatileSlab; }
+#endif
+
+	// --- Replication helpers ---
+
+	// Promote all Alive-but-not-Active entities to Active in the temporal cache.
+	// Must be called on the Logic thread. Returns the count of entities promoted.
+	int SweepAliveFlagsToActive();
+
+#ifdef TNX_ENABLE_ROLLBACK
+	// During rollback resim: re-read this entity's current write-frame position and compare
+	// against the server-authoritative value in correction. If still divergent, overwrite
+	// all CTransform fields (pos + rot) and return true. Returns false if converged.
+	bool CheckAndCorrectEntityTransform(const EntityTransformCorrection& correction);
+
+	// Server-driven discrete events (spawns, sweeps) that must be replayed during rollback
+	// resim so the corrected timeline stays deterministically consistent with the server.
+	//
+	// Push once on the logic thread when the event first executes (inside SpawnAndWait /
+	// PostAndWait lambdas). During resim, ReplayServerEventsAt replays all events whose
+	// frame matches the current resim frame. PruneServerEvents drops events that have aged
+	// out of the temporal ring — they can never be targeted by a rollback.
+	struct ServerEventEntry
+	{
+		uint32_t Frame;
+		std::function<void()> Replay;
+	};
+
+	void PushServerEvent(ServerEventEntry entry);
+	void ReplayServerEventsAt(uint32_t frame);
+	void PruneServerEvents(uint32_t oldestFrame);
+
+	// Snapshot all SoA field values for a newly spawned entity and register a server
+	// event at 'frame' that restores them during resim. Used by FlowManager::LoadLevel
+	// so that rollback across a level-load frame re-hydrates level entity slab slots.
+	void PushEntityReinitEvent(GlobalEntityHandle gHandle, uint32_t frame);
 #endif
 
 	// --- Diagnostics ---
@@ -131,15 +191,25 @@ public:
 	uint32_t LastPublishedFrame = 0;
 	bool RenderHasAcked         = false; // false until render publishes its first ack
 
+	// Track if we should auto-confirm deat entities.
+#ifdef TNX_ENABLE_NETWORK
+	bool ReplicationActive = true;
+#else
+	bool ReplicationActive = false;
+#endif
+
 private:
 	friend class Archetype;
-	friend class LogicThread;
+	friend class DefragSystem;
+	template <typename, typename, typename> friend class LogicThread;
+	friend struct RollbackSim;
 	friend class ReplicationSystem;
+	friend class OwnerNet;
 	friend struct EntityBuilder;
 	friend struct EntityRecord;
 	friend struct EntityArchive;
 	friend class TrinyxEngine;
-	friend class World;
+	friend class WorldBase;
 	friend class EditorContext;
 
 	void SetPhysics(JoltPhysics* physics) { PhysicsPtr = physics; }
@@ -170,6 +240,19 @@ private:
 	bool DestroyRecord(GlobalEntityHandle& gHandle);
 	bool DestroyRecord(EntityRecord& record);
 
+	// --- Defrag internals (called by DefragSystem) ---
+
+	// Move a single live entity from src to dst within arch, updating EntityRecord,
+	// CacheToRecord, ChunkLiveCounts, and firing OnCacheSlotChange.
+	// DefragSystem::ProcessMoves is responsible for updating InactiveEntitySlots.
+	void ExecuteDefragMove(Archetype* arch,
+	                       const Archetype::EntitySlot& src,
+	                       const Archetype::EntitySlot& dst);
+
+	// Free trailing chunks in arch whose ChunkLiveCounts entry is 0, decrementing
+	// AllocatedEntityCount so future iteration scans shrink accordingly.
+	void TrimTailChunks(Archetype* arch);
+
 	// --- Slab tier dispatch ---
 	// When TNX_ENABLE_ROLLBACK is off, Temporal falls back to the Volatile slab
 	// so no HistorySlab member exists and no memory is wasted.
@@ -195,7 +278,21 @@ private:
 	// Propagate SoA data from frame T to T+1.
 	// After propagation: clears DirtiedFrame (bit 29) unconditionally,
 	// clears Dirty (bit 30) if render has acknowledged the last published frame.
-	void PropagateFrame(uint32_t currentFrame);
+	// When bPreserveDirtiedFrame is true (rollback resim), bit 29 is NOT cleared so it
+	// accumulates across all resim steps — every entity touched by the resim stays marked.
+	void PropagateFrame(uint32_t currentFrame, bool bPreserveDirtiedFrame = false);
+
+#ifdef TNX_ENABLE_ROLLBACK
+	// Clear DirtiedFrame (bit 29) on all entities in the current write frame.
+	// Called at the start of rollback resim to establish a clean tracking baseline before
+	// PropagateFrame calls with bPreserveDirtiedFrame=true accumulate touched entities.
+	void ClearDirtiedFrameBits();
+
+	// Set/clear resim mode. When active, InvokePrePhys/InvokePostPhys dispatch to the
+	// scalar dirty-filtered variants instead of the wide SIMD variants, and
+	// PropagateFrame uses scatter copy instead of full memcpy for the temporal slab.
+	void SetResimMode(bool bActive) { bResimMode = bActive; }
+#endif
 
 	// =========================================================================
 	// Data members
@@ -227,13 +324,26 @@ private:
 	std::vector<uint32_t> PendingNetRecycles;
 
 	FlatMap<Archetype::ArchetypeKey, Archetype*> Archetypes;
-	std::vector<GlobalEntityHandle> PendingDestructions;
+	DefragSystem Defrag;
+
+	// Tombstoned record indices (not yet confirmed for destruction)
+	std::vector<uint32_t> TombstoneRecordIndices;
+
+	// Confirmed destructions (moved from TombstoneRecordIndices)
+	std::vector<GlobalEntityHandle> PendingConfirmedDestructions;
 
 #ifdef TNX_ENABLE_ROLLBACK
 	TemporalComponentCache HistorySlab;
+	bool bResimMode = false; // set during rollback resim to redirect sweeps to dirty-filtered variants
 #endif
 	VolatileComponentCache VolatileSlab;
 	JoltPhysics* PhysicsPtr = nullptr;
+
+#ifdef TNX_ENABLE_ROLLBACK
+	// All calls to PushServerEvent execute on the logic thread (inside PostAndWait /
+	// SpawnAndWait lambdas). No cross-thread access — no lock needed.
+	std::vector<ServerEventEntry> ServerEvents;
+#endif
 
 	// --- Handle allocation/recycling methods ---
 
@@ -259,7 +369,119 @@ EntityHandle Registry::Create()
 	ClassID classID = T::StaticClassID();
 	GlobalEntityHandle GHandle;
 	CreateInternal(classID, {&GHandle, 1});
-	return MakeEntityHandle(GHandle, classID);
+	EntityHandle lHandle = MakeEntityHandle(GHandle, classID);
+
+	EntityRecord record = GetRecord(lHandle);
+	if (record.IsValid())
+	{
+		uint32_t temporalWrite = GetTemporalCache()->GetActiveWriteFrame();
+		uint32_t volatileWrite = GetVolatileCache()->GetActiveWriteFrame();
+
+		void* fieldArrayTable[MAX_FIELDS_PER_ARCHETYPE];
+		record.Arch->BuildFieldArrayTable(record.TargetChunk, fieldArrayTable, temporalWrite, volatileWrite);
+
+		T view;
+		view.Hydrate(fieldArrayTable, fieldArrayTable[0], record.LocalIndex);
+
+		view.InitializeInternal();
+
+		// Warn about mesh-ref fields still at 0 — slot 0 is the invalid sentinel.
+		// Material refs are excluded: MaterialID=0 means "no material", which is valid.
+		for (const auto& [fkey, fdesc] : record.Arch->ArchetypeFieldLayout)
+		{
+			if (fdesc.refAssetType != AssetType::StaticMesh &&
+				fdesc.refAssetType != AssetType::SkeletalMesh)
+				continue;
+			auto* arr    = static_cast<uint32_t*>(fieldArrayTable[fdesc.fieldSlotIndex]);
+			uint32_t val = arr[record.LocalIndex];
+			if (val == 0)
+				LOG_ENG_WARN("Registry::Create - MeshID not set (slot 0 is invalid; use SetMesh in your init lambda)");
+		}
+
+		AssetRegistry::Get().DrainPendingCheckouts();
+	}
+
+	return lHandle;
+}
+
+// Create<T>(fn) — entity creation with an init lambda.
+//
+// Hydrates a transient Scalar view bound to the entity's live slab slot, then calls
+// fn(view). Component assignment operators (e.g., CMeshRef::SetMesh, CMeshRef::operator=)
+// push to a thread-local pending checkout list during the lambda. After fn returns, all
+// pending checkouts are drained: OnLoaded/OnEvicted callbacks are bound with the field's
+// stable slab pointer as the context. The view is discarded after initialization.
+//
+// If any asset-ref fields remain at slot 0 after the lambda, a warning is logged per field.
+template <typename T, std::invocable<T&> Fn>
+EntityHandle Registry::Create(Fn&& fn)
+{
+	ClassID classID = T::StaticClassID();
+	GlobalEntityHandle GHandle;
+	CreateInternal(classID, {&GHandle, 1});
+	EntityHandle lHandle = MakeEntityHandle(GHandle, classID);
+
+	EntityRecord record = GetRecord(lHandle);
+	if (record.IsValid())
+	{
+		uint32_t temporalWrite = GetTemporalCache()->GetActiveWriteFrame();
+		uint32_t volatileWrite = GetVolatileCache()->GetActiveWriteFrame();
+
+		void* fieldArrayTable[MAX_FIELDS_PER_ARCHETYPE];
+		record.Arch->BuildFieldArrayTable(record.TargetChunk, fieldArrayTable, temporalWrite, volatileWrite);
+
+		T view;
+		view.Hydrate(fieldArrayTable, fieldArrayTable[0], record.LocalIndex);
+
+		view.InitializeInternal();
+		fn(view);
+
+		// Warn about mesh-ref fields still at 0 — slot 0 is the invalid sentinel.
+		// Material refs are excluded: MaterialID=0 means "no material", which is valid.
+		for (const auto& [fkey, fdesc] : record.Arch->ArchetypeFieldLayout)
+		{
+			if (fdesc.refAssetType != AssetType::StaticMesh &&
+				fdesc.refAssetType != AssetType::SkeletalMesh)
+				continue;
+			auto* arr    = static_cast<uint32_t*>(fieldArrayTable[fdesc.fieldSlotIndex]);
+			uint32_t val = arr[record.LocalIndex];
+			if (val == 0)
+				LOG_ENG_WARN("Registry::Create - MeshID not set (slot 0 is invalid; use SetMesh in your init lambda)");
+		}
+
+		AssetRegistry::Get().DrainPendingCheckouts();
+	}
+
+	return lHandle;
+}
+
+// CreateByClassID(classID, fn) — type-erased init-lambda create.
+//
+// Allocates an entity by runtime ClassID, builds the field array table, and invokes
+// fn(record, fieldArrayTable). The caller (e.g. EntityBuilder) can write raw field data
+// and call RegisterPendingCheckout for asset-ref fields. Pending checkouts are drained
+// after fn returns. Mesh-ref fields still at 0 emit a warning (slot 0 is the invalid sentinel).
+template <std::invocable<EntityRecord&, void**> Fn>
+EntityHandle Registry::CreateByClassID(ClassID classID, Fn&& fn)
+{
+	GlobalEntityHandle GHandle;
+	CreateInternal(classID, {&GHandle, 1});
+	EntityHandle lHandle = MakeEntityHandle(GHandle, classID);
+
+	EntityRecord record = GetRecord(lHandle);
+	if (record.IsValid())
+	{
+		void* fieldArrayTable[MAX_FIELDS_PER_ARCHETYPE];
+		record.Arch->BuildFieldArrayTable(record.TargetChunk, fieldArrayTable,
+										  GetTemporalCache()->GetActiveWriteFrame(),
+										  GetVolatileCache()->GetActiveWriteFrame());
+
+		fn(record, fieldArrayTable);
+
+		AssetRegistry::Get().DrainPendingCheckouts();
+	}
+
+	return lHandle;
 }
 
 template <typename T>
@@ -291,7 +513,6 @@ template <typename... Components>
 Signature Registry::BuildSignature()
 {
 	Signature Sig;
-	// Fold expression to set all component bits
 	((Sig.Set(Components::StaticTypeID() - 1)), ...);
 	return Sig;
 }
@@ -415,7 +636,12 @@ inline void Registry::InvokePrePhys(SimFloat dt)
 
 	for (auto& [sig, arch] : Archetypes)
 	{
+#ifdef TNX_ENABLE_ROLLBACK
+		const EntityMeta& meta = ReflectionRegistry::Get().EntityGetters[sig.ID];
+		UpdateFunc prePhys = (bResimMode && meta.PrePhysResim) ? meta.PrePhysResim : meta.PrePhys;
+#else
 		UpdateFunc prePhys = ReflectionRegistry::Get().EntityGetters[sig.ID].PrePhys;
+#endif
 		if (!prePhys) continue;
 
 		// Capture only what fits in 48 bytes: 5 pointers/values = 40 bytes
@@ -473,7 +699,12 @@ inline void Registry::InvokePostPhys(SimFloat dt)
 
 	for (auto& [sig, arch] : Archetypes)
 	{
+#ifdef TNX_ENABLE_ROLLBACK
+		const EntityMeta& meta = ReflectionRegistry::Get().EntityGetters[sig.ID];
+		UpdateFunc PostPhys = (bResimMode && meta.PostPhysResim) ? meta.PostPhysResim : meta.PostPhys;
+#else
 		UpdateFunc PostPhys = ReflectionRegistry::Get().EntityGetters[sig.ID].PostPhys;
+#endif
 		if (!PostPhys) continue;
 
 		size_t size = arch->Chunks.size();

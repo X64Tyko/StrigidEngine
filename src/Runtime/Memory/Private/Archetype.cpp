@@ -41,7 +41,7 @@ Archetype::~Archetype()
 
 // Populates ArchetypeFieldLayout from the component list and computes TotalChunkDataSize.
 // For each field: queries its CacheTier from ComponentFieldRegistry, then records a FieldDescriptor
-// with the appropriate frame count and stride (cold fields get frameCount=1, frameStride=0).
+// with the appropriate cache tier (cold fields are CacheTier::None, stride queried from cache at use time).
 // Called exactly once per archetype by Registry::GetOrCreateArchetype / InitializeArchetypes.
 void Archetype::BuildLayout(Registry* reg, const std::vector<ComponentMetaEx>& components, SystemID inArchSystemID)
 {
@@ -90,8 +90,6 @@ void Archetype::BuildLayout(Registry* reg, const std::vector<ComponentMetaEx>& c
 													  field.ValueType,
 													  field.RefAssetType,
 													  field.Size,
-													  temporalCache ? temporalCache->GetTotalFrameCount() : 1, // 1 frame for cold — makes frame % 1 == 0, no branch needed
-													  temporalCache ? temporalCache->GetFrameStride() : 0,
 													  temporalCache ? true : false
 												  });
 		}
@@ -107,7 +105,60 @@ void Archetype::BuildLayout(Registry* reg, const std::vector<ComponentMetaEx>& c
 	assert(ArchetypeFieldLayout.count() <= Chunk::MAX_CHUNK_FIELDS);
 }
 
-// Returns the number of allocated slots in a specific chunk (includes tombstoned).
+// Build interleaved dual field array table (read T, write T+1) for FieldProxy::Bind().
+// Frame stride and count are queried from the cache once — not stored per-field.
+// Cold fields (tier == None): stride=0, count=1, so math degenerates to base+0.
+void Archetype::BuildFieldDualArrayTable(Chunk* chunk, void** outDualArrayTable,
+										 uint32_t absoluteFrame, uint32_t volatileAbsoluteFrame) const
+{
+	// Hoist cache queries outside the loop — all fields sharing a tier use the same stride/count.
+	const auto* tc    = Reg->GetCache(CacheTier::Temporal);
+	const auto* vc    = Reg->GetCache(CacheTier::Volatile);
+	const size_t tStr = tc ? tc->GetFrameStride() : 0;
+	const size_t vStr = vc ? vc->GetFrameStride() : 0;
+	const uint32_t tN = tc ? tc->GetTotalFrameCount() : 1;
+	const uint32_t vN = vc ? vc->GetTotalFrameCount() : 1;
+
+	for (const auto& [fkey, fdesc] : ArchetypeFieldLayout)
+	{
+		const size_t idx   = fdesc.fieldSlotIndex;
+		auto* base         = static_cast<uint8_t*>(chunk->Header.FieldPtrs[idx]);
+		const bool isTemporal = (fdesc.tier == CacheTier::Temporal);
+		const uint32_t frame  = isTemporal ? absoluteFrame : volatileAbsoluteFrame;
+		const size_t stride   = fdesc.bIsTemporal ? (isTemporal ? tStr : vStr) : 0;
+		const uint32_t count  = fdesc.bIsTemporal ? (isTemporal ? tN : vN) : 1;
+
+		outDualArrayTable[idx * 2]     = base + (frame % count) * stride;
+		outDualArrayTable[idx * 2 + 1] = base + ((frame + 1) % count) * stride;
+	}
+}
+
+// Build single field array table for a specific frame (update dispatch, serialization).
+// Cold fields resolve to base+0.
+void Archetype::BuildFieldArrayTable(Chunk* chunk, void** outFieldArrayTable,
+									 uint32_t absoluteFrame, uint32_t volatileAbsoluteFrame) const
+{
+	const auto* tc    = Reg->GetCache(CacheTier::Temporal);
+	const auto* vc    = Reg->GetCache(CacheTier::Volatile);
+	const size_t tStr = tc ? tc->GetFrameStride() : 0;
+	const size_t vStr = vc ? vc->GetFrameStride() : 0;
+	const uint32_t tN = tc ? tc->GetTotalFrameCount() : 1;
+	const uint32_t vN = vc ? vc->GetTotalFrameCount() : 1;
+
+	for (const auto& [fkey, fdesc] : ArchetypeFieldLayout)
+	{
+		const size_t idx      = fdesc.fieldSlotIndex;
+		auto* base            = static_cast<uint8_t*>(chunk->Header.FieldPtrs[idx]);
+		const bool isTemporal = (fdesc.tier == CacheTier::Temporal);
+		const uint32_t frame  = isTemporal ? absoluteFrame : volatileAbsoluteFrame;
+		const size_t stride   = fdesc.bIsTemporal ? (isTemporal ? tStr : vStr) : 0;
+		const uint32_t count  = fdesc.bIsTemporal ? (isTemporal ? tN : vN) : 1;
+
+		outFieldArrayTable[idx] = base + (frame % count) * stride;
+	}
+}
+
+
 // Use for iteration bounds — callers rely on bitplane/masked-store to skip dead slots.
 uint32_t Archetype::GetAllocatedChunkCount(size_t chunkIndex) const
 {
@@ -122,21 +173,10 @@ uint32_t Archetype::GetAllocatedChunkCount(size_t chunkIndex) const
 	return EntitiesPerChunk;
 }
 
-// Returns the number of live (non-tombstoned) entities in a specific chunk.
-// TODO: Currently an approximation — derives per-chunk count from a global TotalEntityCount
-// counter, which doesn't track which chunks the removals came from. Needs per-chunk live
-// counters or Active flag scanning to be accurate.
 uint32_t Archetype::GetLiveChunkCount(size_t chunkIndex) const
 {
-	if (Chunks.empty() || chunkIndex >= Chunks.size() || EntitiesPerChunk == 0) return 0;
-
-	if (chunkIndex == Chunks.size() - 1)
-	{
-		uint32_t remainder = TotalEntityCount % EntitiesPerChunk;
-		return (remainder == 0 && TotalEntityCount > 0) ? EntitiesPerChunk : remainder;
-	}
-
-	return EntitiesPerChunk;
+	if (chunkIndex >= ChunkLiveCounts.size()) return 0;
+	return ChunkLiveCounts[chunkIndex];
 }
 
 // Allocates entity slots, filling outSlots with chunk/index/cache information.
@@ -154,6 +194,7 @@ void Archetype::PushEntities(std::span<EntitySlot> outSlots)
 	{
 		Chunk* NewChunk = AllocateChunk();
 		Chunks.push_back(NewChunk);
+		ChunkLiveCounts.push_back(0);
 		ActiveEntitySlots.resize(Chunks.size() * EntitiesPerChunk);
 	}
 
@@ -181,6 +222,7 @@ void Archetype::PushEntities(std::span<EntitySlot> outSlots)
 		}
 
 		ActiveEntitySlots[Slot.ArchIndex] = Slot;
+		ChunkLiveCounts[Slot.ChunkIndex]++;
 		TotalEntityCount++;
 	}
 }
@@ -198,7 +240,10 @@ void Archetype::RemoveEntity(size_t chunkIndex, uint32_t localIndex, uint32_t ar
 	if (chunkIndex >= Chunks.size()) return;
 	if (localIndex >= EntitiesPerChunk) return;
 
-	// Write Dirty into the Flags field so the GPU predicate shader stops drawing this entity.
+	ChunkLiveCounts[chunkIndex]--;
+
+	// Tombstone: clear Active+Alive, set Dirty+Tombstoned. GPU predicate stops drawing,
+	// sweep skips, and replication can distinguish "dead" from "temporarily inactive."
 	{
 		Chunk* chunk                = Chunks[chunkIndex];
 		ComponentTypeID flagsTypeID = CacheSlotMeta<>::StaticTypeID();
@@ -211,12 +256,12 @@ void Archetype::RemoveEntity(size_t chunkIndex, uint32_t localIndex, uint32_t ar
 		// Offset into the correct write frame for temporal/volatile fields
 		if (flagDesc->bIsTemporal)
 		{
-			uint32_t writeFrame = Reg->GetCache(flagDesc->tier)->GetActiveWriteFrame();
-			flagsBase           += writeFrame * flagDesc->fieldFrameStride;
+			auto* cache = Reg->GetCache(flagDesc->tier);
+			flagsBase   = static_cast<uint8_t*>(cache->GetWriteFramePtr(flagsBase));
 		}
 
 		auto* metaInfo = reinterpret_cast<uint32_t*>(flagsBase) + localIndex;
-		*metaInfo      = static_cast<uint32_t>(TemporalFlagBits::Dirty);
+		*metaInfo      = static_cast<uint32_t>(0);
 	}
 
 	InactiveEntitySlots.push_back(ActiveEntitySlots[archetypeIdx]);
@@ -279,24 +324,52 @@ Chunk* Archetype::AllocateChunk()
 	size_t currentOffset = Chunk::HEADER_SIZE;
 	auto* chunkBase      = reinterpret_cast<uint8_t*>(NewChunk);
 
+	// Phase-2 slab defrag: prefer a freed slab from the same archetype over fresh allocation.
+	// TryReuseFreedSlab wires FieldPtrs[] for every tracked field in its cache and returns the
+	// recycled CacheIndexStart. When rollback is enabled the two caches track their own tier's
+	// fields independently, so both must be queried: an archetype whose fields are all Temporal
+	// has nothing in VolatileSlab.FreedChunkSlabs but everything in HistorySlab.FreedChunkSlabs,
+	// and vice versa for all-Volatile archetypes.
+	ComponentCacheBase* volatileCache = Reg->GetVolatileCache();
+	size_t recycledCacheStart         = volatileCache->TryReuseFreedSlab(NewChunk, this);
+
+#ifdef TNX_ENABLE_ROLLBACK
+	ComponentCacheBase* temporalCache = Reg->GetTemporalCache();
+	if (temporalCache != volatileCache)
+	{
+		const size_t temporalResult = temporalCache->TryReuseFreedSlab(NewChunk, this);
+		if (recycledCacheStart == SIZE_MAX)
+			recycledCacheStart = temporalResult; // volatile had nothing; use temporal's CacheStart
+	}
+#endif
+
+	const bool bRecycled = (recycledCacheStart != SIZE_MAX);
+
+	if (bRecycled)
+		NewChunk->Header.CacheIndexStart = recycledCacheStart;
+
 	// Wire each field's FieldPtrs[] entry:
-	//   Temporal/Volatile → allocated in the slab (pointer into ring buffer)
+	//   Temporal/Volatile → slab (recycled above, or fresh via AllocateFieldArray)
 	//   Cold              → packed inline after the chunk header
 	for (const auto& [fkey, fdesc] : ArchetypeFieldLayout)
 	{
 		largestSize = std::max(largestSize, fdesc.fieldSize);
 		if (fdesc.bIsTemporal)
 		{
-			ComponentCacheBase* TemporalCache                = Reg->GetCache(fdesc.tier);
-			NewChunk->Header.FieldPtrs[fdesc.fieldSlotIndex] = TemporalCache->AllocateFieldArray(
-				this,
-				NewChunk,
-				fdesc.temporalComponentIndex,
-				fdesc.componentSlotIndex,
-				"",
-				EntitiesPerChunk,
-				fdesc.fieldSize,
-				ArchSystemID);
+			if (!bRecycled)
+			{
+				ComponentCacheBase* fieldCache                   = Reg->GetCache(fdesc.tier);
+				NewChunk->Header.FieldPtrs[fdesc.fieldSlotIndex] = fieldCache->AllocateFieldArray(
+					this,
+					NewChunk,
+					fdesc.temporalComponentIndex,
+					fdesc.componentSlotIndex,
+					"",
+					EntitiesPerChunk,
+					fdesc.fieldSize,
+					ArchSystemID);
+			}
+			// else: FieldPtrs[] already wired by TryReuseFreedSlab
 		}
 		else
 		{
@@ -306,14 +379,18 @@ Chunk* Archetype::AllocateChunk()
 		}
 	}
 
-	// Advance ALL caches so entityCacheIDs stay globally synchronized.
-	// An archetype may only store fields in one cache, but the allocator index
-	// must advance in every cache so that entityCacheID N refers to the same
-	// entity slot regardless of which cache you look at.
-	NewChunk->Header.CacheIndexStart = Reg->GetVolatileCache()->AdvanceAllocator(ArchSystemID, EntitiesPerChunk, largestSize);
+	if (!bRecycled)
+	{
+		// Advance ALL caches so entityCacheIDs stay globally synchronized.
+		// An archetype may only store fields in one cache, but the allocator index
+		// must advance in every cache so that entityCacheID N refers to the same
+		// entity slot regardless of which cache you look at.
+		NewChunk->Header.CacheIndexStart = volatileCache->AdvanceAllocator(ArchSystemID, EntitiesPerChunk, largestSize);
 #ifdef TNX_ENABLE_ROLLBACK
-	Reg->GetTemporalCache()->AdvanceAllocator(ArchSystemID, EntitiesPerChunk, largestSize);
+		if (temporalCache != volatileCache)
+			temporalCache->AdvanceAllocator(ArchSystemID, EntitiesPerChunk, largestSize);
 #endif
+	}
 
 	LOG_ENG_INFO_F("Allocated chunk with %i entities at cache index %zi", EntitiesPerChunk, NewChunk->Header.CacheIndexStart);
 
@@ -356,6 +433,47 @@ Chunk* Archetype::AllocateChunk()
 	return NewChunk;
 }
 
+// Copy all field data for one entity from src slot to dst slot.
+// For temporal/volatile fields, copies across every frame in the slab ring buffer.
+// For cold fields, copies the inline chunk array element.
+// Registry::ExecuteDefragMove must update all bookkeeping before or after this call.
+void Archetype::MoveEntitySlot(const EntitySlot& src, const EntitySlot& dst,
+                                ComponentCacheBase* temporalCache,
+                                ComponentCacheBase* volatileCache)
+{
+	const size_t tStr = temporalCache ? temporalCache->GetFrameStride()     : 0;
+	const size_t vStr = volatileCache ? volatileCache->GetFrameStride()     : 0;
+	const size_t tN   = temporalCache ? temporalCache->GetTotalFrameCount() : 1;
+	const size_t vN   = volatileCache ? volatileCache->GetTotalFrameCount() : 1;
+
+	for (const auto& [fkey, fdesc] : ArchetypeFieldLayout)
+	{
+		auto* srcBase = static_cast<uint8_t*>(src.TargetChunk->Header.FieldPtrs[fdesc.fieldSlotIndex]);
+		auto* dstBase = static_cast<uint8_t*>(dst.TargetChunk->Header.FieldPtrs[fdesc.fieldSlotIndex]);
+
+		if (fdesc.bIsTemporal)
+		{
+			const bool   isTemporal = (fdesc.tier == CacheTier::Temporal);
+			const size_t stride     = isTemporal ? tStr : vStr;
+			const size_t frames     = isTemporal ? tN   : vN;
+
+			for (size_t f = 0; f < frames; ++f)
+			{
+				const size_t off = f * stride;
+				std::memcpy(dstBase + off + dst.LocalIndex * fdesc.fieldSize,
+				            srcBase + off + src.LocalIndex * fdesc.fieldSize,
+				            fdesc.fieldSize);
+			}
+		}
+		else
+		{
+			std::memcpy(dstBase + dst.LocalIndex * fdesc.fieldSize,
+			            srcBase + src.LocalIndex * fdesc.fieldSize,
+			            fdesc.fieldSize);
+		}
+	}
+}
+
 // Hard reset — frees all chunk memory and clears slot tracking.
 // Used by Registry::ResetRegistry. After this, new entities go through AllocateChunk
 // which re-wires slab field arrays at correct allocator offsets.
@@ -373,6 +491,7 @@ void Archetype::FreeAllChunks()
 	Chunks.clear();
 	ActiveEntitySlots.clear();
 	InactiveEntitySlots.clear();
+	ChunkLiveCounts.clear();
 	AllocatedEntityCount = 0;
 	TotalEntityCount     = 0;
 }

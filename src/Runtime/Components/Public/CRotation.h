@@ -2,6 +2,7 @@
 #include <FieldProxy.h>
 #include "ComponentView.h"
 #include "SchemaReflector.h"
+#include "NetDelta.h"
 #include "QuatMath.h"
 
 // Rotation Component — quaternion only.
@@ -21,3 +22,4 @@ struct CRotation : ComponentView<CRotation, WIDTH>
 };
 
 TNX_REGISTER_COMPONENT(CRotation)
+TNX_NET_TEMPORAL(CRotation)

@@ -30,7 +30,11 @@ option(GENERATE_ASSEMBLY "Generate assembly listings (.cod files)" OFF)
 option(VECTORIZATION_REPORTS "Enable compiler vectorization reports" OFF)
 option(ENABLE_AVX2 "Enable AVX2 instruction set" ON)
 option(TNX_ALIGN_64 "Use 64-byte alignment for field arrays (zero cache line splits, more memory)" OFF)
+option(TNX_FIXED_IMPLICIT_FLOAT
+        "Enable implicit float/double constructors for Fixed32"
+        OFF)
 option(TNX_ENABLE_ROLLBACK "Enable N-frame rollback history. Off = TNX_TEMPORAL_FIELDS components use Volatile (5-frame) storage." OFF)
+option(TNX_DETERMINISM "Enable cross-platform determinism: disables FMA/fast-math in the engine and Jolt (JPH_CROSS_PLATFORM_DETERMINISTIC). Automatically forced ON by TNX_ENABLE_ROLLBACK." OFF)
 option(TNX_DETAILED_METRICS "Log per-frame latency breakdown (Buffer/Pipeline/Scanout). Noisy." OFF)
 if (TNX_DETAILED_METRICS)
     add_compile_definitions(TNX_DETAILED_METRICS)
@@ -41,16 +45,27 @@ endif ()
 option(TNX_ENABLE_EDITOR "Enable editor UI (ImGui integration). Adds editor panels and overlay." OFF)
 option(TNX_ENABLE_NETWORK "Enable networking (GameNetworkingSockets + Protobuf). Required for multiplayer." ON)
 # TNX_NET_MODEL selects the networking role baked into the build.
-#   PIE    — Editor in-process: one ServerNetThread + N ClientNetThread, ticked by PIENetThread.
+#   PIE    — Editor in-process: one AuthorityNet + N OwnerNet, ticked by PIENetThread.
 #            Automatically selected when TNX_ENABLE_EDITOR is ON.
-#   Server — Dedicated server: ServerNetThread only. Implies TNX_HEADLESS (no window, no GPU).
-#   Client — Standalone client: ClientNetThread only.
+#   Server — Dedicated server: AuthorityNet only. Implies TNX_HEADLESS (no window, no GPU).
+#   Client — Standalone client: OwnerNet only.
 set(TNX_NET_MODEL "Client" CACHE STRING "Networking role: PIE | Server | Client")
 set_property(CACHE TNX_NET_MODEL PROPERTY STRINGS "PIE" "Server" "Client")
 option(TNX_TESTING "Enable test harnesses (rollback determinism test, etc.). Debug/profiling tool." OFF)
 option(TNX_GPU_PICKING "Enable GPU-based entity picking (click-to-select). Requires editor." OFF)
 option(TNX_GPU_PICKING_FAST "Enable fast GPU picking mode (picks every frame at mouse cursor). Requires TNX_GPU_PICKING." OFF)
 option(TNX_HEADLESS "Headless build: no window, no GPU/Vulkan. Implied by TNX_NET_MODEL=Server. Also used standalone for CI/CD." OFF)
+
+# Nsight integration:
+#   TNX_ENABLE_NSIGHT     — Compile in VK_EXT_debug_utils object names + command-buffer
+#                           debug labels. Cost is a few function pointer calls per frame
+#                           and some const string storage. Safe to leave on for any
+#                           non-shipping build; compiles to nothing when OFF.
+#   TNX_ENABLE_AFTERMATH  — Enable NVIDIA Nsight Aftermath GPU crash dumps. Requires the
+#                           Aftermath SDK at TNX_AFTERMATH_SDK_PATH. Implies _NSIGHT.
+option(TNX_ENABLE_NSIGHT "Compile in Vulkan debug-utils object naming + command-buffer labels for Nsight Graphics." ON)
+option(TNX_ENABLE_AFTERMATH "Enable NVIDIA Nsight Aftermath GPU crash dumps. Requires Aftermath SDK." OFF)
+set(TNX_AFTERMATH_SDK_PATH "" CACHE PATH "Path to NVIDIA Nsight Aftermath SDK root (only used when TNX_ENABLE_AFTERMATH=ON).")
 
 # Dedicated server implies headless — a server never needs a window or GPU.
 if (TNX_NET_MODEL STREQUAL "Server" AND NOT TNX_HEADLESS)
@@ -75,6 +90,11 @@ if (TNX_ENABLE_EDITOR)
     message(STATUS "Editor UI: ENABLED (ImGui)")
     # Editor always implies PIE networking model
     set(TNX_NET_MODEL "PIE" CACHE STRING "" FORCE)
+    # PIE server always runs with rollback for server-side reconciliation.
+    if (NOT TNX_ENABLE_ROLLBACK)
+        message(STATUS "TNX_ENABLE_EDITOR forces TNX_ENABLE_ROLLBACK=ON (PIE server requires rollback)")
+        set(TNX_ENABLE_ROLLBACK ON CACHE BOOL "" FORCE)
+    endif ()
 else ()
     message(STATUS "Editor UI: DISABLED")
 endif ()
@@ -83,13 +103,13 @@ if (TNX_ENABLE_NETWORK)
     add_compile_definitions(TNX_ENABLE_NETWORK)
     if (TNX_NET_MODEL STREQUAL "PIE")
         add_compile_definitions(TNX_NET_MODEL_PIE)
-        message(STATUS "Networking: ENABLED — PIE model (ServerNetThread + ClientNetThread)")
+        message(STATUS "Networking: ENABLED — PIE model (AuthorityNet + OwnerNet)")
     elseif (TNX_NET_MODEL STREQUAL "Server")
         add_compile_definitions(TNX_NET_MODEL_SERVER)
-        message(STATUS "Networking: ENABLED — Server model (ServerNetThread)")
+        message(STATUS "Networking: ENABLED — Server model (AuthorityNet)")
     else ()
         add_compile_definitions(TNX_NET_MODEL_CLIENT)
-        message(STATUS "Networking: ENABLED — Client model (ClientNetThread)")
+        message(STATUS "Networking: ENABLED — Client model (OwnerNet)")
     endif ()
 else ()
     message(STATUS "Networking: DISABLED (standalone builds only)")
@@ -98,8 +118,21 @@ endif ()
 if (TNX_ENABLE_ROLLBACK)
     add_compile_definitions(TNX_ENABLE_ROLLBACK)
     message(STATUS "Rollback history: ENABLED")
+    # Rollback requires bit-identical simulation — force determinism on.
+    if (NOT TNX_DETERMINISM)
+        message(STATUS "TNX_ENABLE_ROLLBACK forces TNX_DETERMINISM=ON")
+        #set(TNX_DETERMINISM ON CACHE BOOL "" FORCE)
+    endif ()
 else ()
     message(STATUS "Rollback history: DISABLED (Temporal fields stored in Volatile slab)")
+endif ()
+
+if (TNX_DETERMINISM)
+    add_compile_definitions(TNX_DETERMINISM)
+    add_compile_definitions(TNX_USE_FAST_TRIG)
+    message(STATUS "Determinism: ENABLED (FMA disabled, fast trig forced on, fp:precise / -ffp-contract=off applied to engine and Jolt)")
+else ()
+    message(STATUS "Determinism: DISABLED (fast-math allowed)")
 endif ()
 
 if (TNX_TESTING)
@@ -107,6 +140,47 @@ if (TNX_TESTING)
     message(STATUS "Test harnesses: ENABLED")
 else ()
     message(STATUS "Test harnesses: DISABLED")
+endif ()
+
+# Aftermath always implies the Nsight debug-utils path (we want object names on
+# any handle that ends up in a crash dump).
+if (TNX_ENABLE_AFTERMATH AND NOT TNX_ENABLE_NSIGHT)
+    message(STATUS "TNX_ENABLE_AFTERMATH forces TNX_ENABLE_NSIGHT=ON")
+    set(TNX_ENABLE_NSIGHT ON CACHE BOOL "" FORCE)
+endif ()
+
+# Nsight is meaningless in a headless build (no GPU work to capture).
+if (TNX_ENABLE_NSIGHT AND TNX_HEADLESS)
+    message(STATUS "TNX_HEADLESS overrides TNX_ENABLE_NSIGHT — disabling")
+    set(TNX_ENABLE_NSIGHT OFF CACHE BOOL "" FORCE)
+    if (TNX_ENABLE_AFTERMATH)
+        message(WARNING "TNX_ENABLE_AFTERMATH is meaningless in headless builds — disabling")
+        set(TNX_ENABLE_AFTERMATH OFF CACHE BOOL "" FORCE)
+    endif ()
+endif ()
+
+if (TNX_ENABLE_NSIGHT)
+    add_compile_definitions(TNX_ENABLE_NSIGHT)
+    message(STATUS "Nsight Graphics integration: ENABLED (debug-utils object names + cmd-buffer labels)")
+else ()
+    message(STATUS "Nsight Graphics integration: DISABLED")
+endif ()
+
+if (TNX_ENABLE_AFTERMATH)
+    if (NOT TNX_AFTERMATH_SDK_PATH OR NOT EXISTS "${TNX_AFTERMATH_SDK_PATH}/include/GFSDK_Aftermath.h")
+        message(WARNING
+                "TNX_ENABLE_AFTERMATH=ON but TNX_AFTERMATH_SDK_PATH does not point to a valid Aftermath SDK.\n"
+                "Set -DTNX_AFTERMATH_SDK_PATH=<path-to-aftermath-sdk> or download from\n"
+                "  https://developer.nvidia.com/nsight-aftermath\n"
+                "Aftermath will compile as a no-op stub until the SDK is provided.")
+        # Keep the define on so the stub plumbing compiles; runtime initialization is a no-op.
+        add_compile_definitions(TNX_ENABLE_AFTERMATH TNX_AFTERMATH_SDK_MISSING)
+    else ()
+        add_compile_definitions(TNX_ENABLE_AFTERMATH)
+        message(STATUS "Nsight Aftermath: ENABLED (SDK at ${TNX_AFTERMATH_SDK_PATH})")
+    endif ()
+else ()
+    message(STATUS "Nsight Aftermath: DISABLED")
 endif ()
 
 if (TNX_ENABLE_EDITOR)
@@ -139,10 +213,10 @@ set(GNS_PATH "${CMAKE_SOURCE_DIR}/libs/gns")
 # Nothing in the engine links it yet; the target exists so rendering code can
 # do: target_link_libraries(MyTarget PRIVATE Slang::Compiler)
 add_library(Slang::Compiler SHARED IMPORTED GLOBAL
-        src/Runtime/Core/Public/TrinyxJobs.h
-        src/Runtime/Core/Public/ThreadPinning.h
-        src/Runtime/Core/Public/TrinyxRingBuffer.h
-        src/Runtime/Core/Public/RegistryTypes.h
+        src/Runtime/Threading/Public/TrinyxJobs.h
+        src/Runtime/Threading/Public/ThreadPinning.h
+        src/Runtime/Containers/Public/TrinyxRingBase.h
+        src/Runtime/ECS/Public/RegistryTypes.h
         src/Runtime/Core/Public/Events.h
         src/Runtime/Entities/Public/EInstanced.h
         src/Runtime/Entities/Public/EPoint.h
@@ -150,7 +224,10 @@ add_library(Slang::Compiler SHARED IMPORTED GLOBAL
         src/Runtime/Physics/Public/JoltLayers.h
         src/Runtime/Physics/Private/JoltCharacter.cpp
         src/Runtime/Entities/Public/EPlayer.h
-        src/Runtime/Flow/Public/GameState.h)
+        src/Runtime/Flow/Public/GameState.h
+        src/Runtime/Math/Public/Fixed32.h
+        src/Runtime/Entities/Private/EInterpEntity.cpp
+        src/Runtime/Entities/Public/EInterpEntity.h)
 set_target_properties(Slang::Compiler PROPERTIES
         IMPORTED_LOCATION             "${SLANG_PATH}/lib/libslang-compiler.so"
         INTERFACE_INCLUDE_DIRECTORIES "${SLANG_PATH}/include"
@@ -237,6 +314,11 @@ if(MSVC)
     # Optional: Ensure __cplusplus macro reports the correct version6
     add_compile_options(/Zc:__cplusplus)
 
+    # Determinism: use fp:precise to suppress FMA fusion on MSVC.
+    if (TNX_DETERMINISM)
+        add_compile_options(/fp:precise)
+    endif ()
+
 else()
     add_compile_options(-Wall -Wextra -Wpedantic -Werror -Wno-ignored-attributes -Wno-missing-field-initializers)
 
@@ -262,6 +344,12 @@ else()
         add_compile_definitions(TNX_HAS_AVX2)
         message(STATUS "Native architecture instructions enabled")
     endif()
+
+    # Determinism: disable FMA and float contraction so the engine produces
+    # bit-identical results across GCC/Clang builds and platforms.
+    if (TNX_DETERMINISM)
+        add_compile_options(-ffp-contract=off)
+    endif ()
 endif()
 
 # -----------------------------------------------------------------------------
@@ -287,8 +375,8 @@ else ()
     set(DEBUG_RENDERER_IN_DEBUG_AND_RELEASE OFF CACHE BOOL "" FORCE)
     set(PROFILER_IN_DEBUG_AND_RELEASE       OFF CACHE BOOL "" FORCE)
 
-    # Rollback requires cross-platform determinism (disables FMA, sets fp:precise).
-    if (TNX_ENABLE_ROLLBACK)
+    # Determinism: propagates JPH_CROSS_PLATFORM_DETERMINISTIC via Jolt's PUBLIC interface.
+    if (TNX_DETERMINISM)
         set(CROSS_PLATFORM_DETERMINISTIC ON CACHE BOOL "" FORCE)
     endif ()
 
@@ -444,5 +532,12 @@ endif () # TNX_ENABLE_NETWORK
 # 9. SUBDIRECTORIES (Projects in Solution)
 # -----------------------------------------------------------------------------
 add_subdirectory(Trinyx)
+# Propagate the TNX_FIXED_IMPLICIT_FLOAT define to the engine library
+if (TARGET Trinyx)
+    target_compile_definitions(Trinyx PRIVATE
+            $<IF:$<BOOL:${TNX_FIXED_IMPLICIT_FLOAT}>,TNX_FIXED_IMPLICIT_FLOAT,>
+    )
+endif ()
 add_subdirectory(Testbed)
 add_subdirectory(Playground)
+add_subdirectory(DeterminismTest)

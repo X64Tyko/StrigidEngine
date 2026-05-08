@@ -119,6 +119,9 @@ jobs:
               -DTNX_ALIGN_64=OFF
             needs_openssl: false
 
+    env:
+      SCCACHE_GHA_ENABLED: "true"
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4

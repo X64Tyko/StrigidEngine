@@ -8,6 +8,7 @@
 #include "Types.h"
 #include "EngineConfig.h"
 #include "Logger.h"
+#include "QuatMath.h"
 
 namespace TrinyxJobs
 {
@@ -21,6 +22,11 @@ class Archetype;
 using FnGetNextWriteFramePtr = uint32_t (*)(const class ComponentCacheBase*);
 using FnPropagateFramePtr = void (*)(class ComponentCacheBase*, TrinyxJobs::JobCounter&);
 
+/// @brief Cache-line-aligned per-frame metadata stored at the start of each ring-buffer slot.
+///
+/// Holds ownership flags for concurrent read/write coordination, the simulation frame number,
+/// camera and lighting state for the render thread, and (under rollback) the input snapshot
+/// needed to replay a frame deterministically.
 struct alignas(64) TemporalFrameHeader
 {
 	// Ownership tracking (atomic bitfield)
@@ -38,14 +44,17 @@ struct alignas(64) TemporalFrameHeader
 	uint32_t FrameNumber;
 
 	// Camera/View data
-	Matrix4 ViewMatrix;
-	Matrix4 ProjectionMatrix;
 	Vector3 CameraPosition;
+	Vector3 PrevCameraPosition;
+	Quat CameraRotation;
+	Quat PrevCameraRotation;
+	SimFloat CameraFoV;
+	SimFloat PrevCameraFoV;
 
 	// Scene/Lighting data
 	Vector3 SunDirection;
 	Vector3 SunColor;
-	float AmbientIntensity;
+	SimFloat AmbientIntensity;
 
 #if TNX_DEV_METRICS
 	// Input-to-photon latency tracking
@@ -60,51 +69,55 @@ struct alignas(64) TemporalFrameHeader
 	// Input snapshot for deterministic replay during rollback.
 	// Recorded after ProcessSimInput each tick; replayed during resimulation.
 	uint8_t InputKeyState[64];
-	float InputMouseDX;
-	float InputMouseDY;
+	SimFloat InputMouseDX;
+	SimFloat InputMouseDY;
 #endif
 
 	// Padding to cache line
 #if defined(TNX_ENABLE_ROLLBACK) && TNX_DEV_METRICS
 	char _padding[64 - (sizeof(std::atomic<uint8_t>) + sizeof(uint8_t) + sizeof(uint64_t) + sizeof(uint32_t) * 3
-		+ sizeof(Vector3) * 3 + sizeof(Matrix4) * 2 + sizeof(float) + 64 + sizeof(float) * 2) % 64];
+		+ sizeof(Vector3) * 3 + sizeof(SimFloat) + 64 + sizeof(SimFloat) * 2) % 64];
 #elif defined(TNX_ENABLE_ROLLBACK)
 	char _padding[64 - (sizeof(std::atomic<uint8_t>) + sizeof(uint8_t) + sizeof(uint32_t) * 3
-		+ sizeof(Vector3) * 3 + sizeof(Matrix4) * 2 + sizeof(float) + 64 + sizeof(float) * 2) % 64];
+		+ sizeof(Vector3) * 3 + sizeof(SimFloat) + 64 + sizeof(SimFloat) * 2) % 64];
 #elif TNX_DEV_METRICS
-	char _padding[64 - (sizeof(std::atomic<uint8_t>) + sizeof(uint8_t) + sizeof(uint64_t) + sizeof(uint32_t) * 3 + sizeof(Vector3) * 3 + sizeof(Matrix4) * 2 + sizeof(float)) % 64];
+	char _padding[64 - (sizeof(std::atomic<uint8_t>) + sizeof(uint8_t) + sizeof(uint64_t) + sizeof(uint32_t) * 3 + sizeof(Vector3) * 3 + sizeof(SimFloat)) % 64];
 #else
-	char _padding[64 - (sizeof(std::atomic<uint8_t>) + sizeof(uint8_t) + sizeof(uint32_t) * 3 + sizeof(Vector3) * 3 + sizeof(Matrix4) * 2 + sizeof(float)) % 64];
+	char _padding[64 - (sizeof(std::atomic<uint8_t>) + sizeof(uint8_t) + sizeof(uint32_t) * 3 + sizeof(Vector3) * 3 + sizeof(SimFloat)) % 64];
 #endif
 };
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Non-template concrete base — all data and all method implementations.
-// Archetype, LogicThread, and RenderThread store ComponentCacheBase*.
-// No virtual functions: Initialize is not on this class; all other methods are
-// concrete and shared between Volatile and Temporal tiers.
-// ─────────────────────────────────────────────────────────────────────────────
+/// @brief Non-template concrete base for all SoA ring-buffer caches.
+///
+/// Owns all slab memory, frame headers, field allocation tables, and the frame
+/// locking protocol. @c Archetype, @c LogicThread, and @c RenderThread all
+/// store a @c ComponentCacheBase* so they are decoupled from the tier template.
+///
+/// No virtual functions — @c Initialize is on the CRTP middle layer; all runtime
+/// methods here are concrete and shared between Volatile and Temporal tiers.
+///
+/// @see ComponentCache for the concrete typed instantiation.
 class ComponentCacheBase
 {
 public:
 	ComponentCacheBase();
 	~ComponentCacheBase();
 
-	// O(1) frame header access - external systems manage locking
+	/// @brief O(1) frame header access. External systems are responsible for locking.
+	/// @param frameNum Ring-buffer slot index; -1 returns the active write frame.
 	TemporalFrameHeader* GetFrameHeader(int32_t frameNum = -1) const
 	{
 		frameNum = frameNum == -1 ? ActiveWriteFrame : frameNum;
 		return FrameHeaders[frameNum % TemporalFrameCount];
 	}
 
-	// Frame locking for multi-threaded access
-	// We assume that after propagating the next frame is locked for writing until propagated again.
-	// outWriteFrame is the actual frame we're writing to, for field data collection
+	/// @brief Try to claim the next write slot. After propagation the frame remains locked until propagated again.
+	/// @param[out] outWriteFrame The slot index being written to (for field data access).
 	bool TryLockFrameForWrite(uint32_t& outWriteFrame);
-	bool VerifyFrameReadable(uint32_t bufferIndex) const;
-	void UnlockFrameWrite();
-	bool TryLockFrameForRead(uint32_t frameNum);
-	void UnlockFrameRead(uint32_t frameNum);
+	bool VerifyFrameReadable(uint32_t bufferIndex) const; ///< @return @c true if no writer holds @p bufferIndex.
+	void UnlockFrameWrite();                              ///< Release the current write lock.
+	bool TryLockFrameForRead(uint32_t frameNum);          ///< Try to acquire a shared read lock on @p frameNum.
+	void UnlockFrameRead(uint32_t frameNum);              ///< Release a previously acquired read lock.
 
 	uint32_t GetActiveWriteFrame() const { return ActiveWriteFrame; }
 	uint32_t GetActiveReadFrame() const { return LastWrittenFrame; }
@@ -120,8 +133,39 @@ public:
 	void ResetAllocators();
 	void ClearFrameData();
 
+	// Phase-2 slab defrag: called by TrimTailChunks before the chunk struct is freed.
+	// Records per-field slab regions into FreedChunkSlabs and decrements CurrentUsed,
+	// making the space available for reuse by the next AllocateChunk for the same archetype.
+	void NotifyChunkFreed(Chunk* chunk);
+
+	// Called at the top of AllocateChunk (before AllocateFieldArray).
+	// If a previously freed slab from the same archetype is available, wires FieldPtrs[] in
+	// newChunk for every temporal/volatile field that belongs to this cache, re-registers the
+	// allocations under newChunk, and returns the recycled CacheIndexStart.
+	// Returns SIZE_MAX when no suitable freed slab exists (caller must use AllocateFieldArray).
+	size_t TryReuseFreedSlab(Chunk* newChunk, Archetype* owner);
+
 	// Get the stride between frames (for calculating frame N from frame 0 pointer)
 	FORCE_INLINE size_t GetFrameStride() const { return sizeof(TemporalFrameHeader) + FrameDataCapacity; }
+
+	// Advance a frame-0 base pointer to the current write or read frame.
+	// Use these instead of manually computing base + frame * stride.
+	FORCE_INLINE void* GetWriteFramePtr(void* frame0Base) const
+	{
+		return static_cast<uint8_t*>(frame0Base) + ActiveWriteFrame * GetFrameStride();
+	}
+	FORCE_INLINE void* GetReadFramePtr(void* frame0Base) const
+	{
+		return static_cast<uint8_t*>(frame0Base) + LastWrittenFrame * GetFrameStride();
+	}
+	// Advance a frame-0 base pointer to the ring buffer slot that holds a specific
+	// simulation frame number. The caller is responsible for ensuring absoluteSimFrame
+	// is within the live ring window (i.e. not overwritten by newer frames).
+	FORCE_INLINE void* GetFramePtrAtAbsoluteFrame(void* frame0Base, uint32_t absoluteSimFrame) const
+	{
+		uint32_t slot = absoluteSimFrame % static_cast<uint32_t>(TemporalFrameCount);
+		return static_cast<uint8_t*>(frame0Base) + slot * GetFrameStride();
+	}
 
 	// Copy field data from fromFrame into toFrame before dispatch.
 	// Called once per logic tick so all FieldProxy writes start from the previous frame's state.
@@ -133,7 +177,7 @@ public:
 
 	uint32_t GetTotalFrameCount() const { return static_cast<uint32_t>(TemporalFrameCount); }
 	CacheTier GetTier() const { return Tier_; }
-	uint32_t GetMaxCachedEntityCount() const { return static_cast<uint32_t>(MaxCachedBoundary / sizeof(float)); }
+	uint32_t GetMaxCachedEntityCount() const { return static_cast<uint32_t>(MaxCachedBoundary / sizeof(SimFloat)); }
 
 	// Returns [start, end) cache index range for the contiguous DUAL+PHYS partition.
 	// Physics systems iterate this as a single dense scan with no gap.
@@ -163,6 +207,12 @@ public:
 	}
 
 #ifdef TNX_ENABLE_ROLLBACK
+	// During rollback resim: advance the ring frame pointer and scatter-copy only entities
+	// with DirtiedFrameBit set. Non-dirty entities in the destination slot retain their
+	// original-timeline data — no full memcpy is performed. Caller's WaitForCounter
+	// returns immediately (no async jobs dispatched).
+	void PropagateFrameResim(TrinyxJobs::JobCounter& counter);
+
 	// Rollback test support — direct manipulation of frame pointers and slab access.
 	void SetActiveWriteFrame(uint32_t frame) { ActiveWriteFrame = frame; }
 	void SetLastWrittenFrame(uint32_t frame) { LastWrittenFrame = frame; }
@@ -251,6 +301,24 @@ private:
 
 	std::vector<TemporalAllocation> ActiveAllocations;
 
+	// Freed slab regions available for reuse when a new chunk of the same archetype is allocated.
+	// Populated by NotifyChunkFreed; consumed by TryReuseFreedSlab.
+	struct FreedChunkSlab
+	{
+		Archetype* Owner;
+		size_t     CacheStart; // chunk->Header.CacheIndexStart at time of free
+
+		struct FieldRegion
+		{
+			uint16_t TableIndex;     // FieldAllocations[] index
+			uint8_t  FieldSlotIndex; // Chunk::Header::FieldPtrs[] slot to wire on reuse
+			size_t   OffsetInZone;   // Byte offset within this field's slab zone
+			size_t   Size;           // Bytes (= AlignSize(entitiesPerChunk * fieldSize))
+		};
+		std::vector<FieldRegion> Fields;
+	};
+	std::vector<FreedChunkSlab> FreedChunkSlabs;
+
 	// One large slab storing multiple frames of history
 	void* SlabPtr             = nullptr;
 	size_t FrameDataCapacity  = 0; // Max size per frame (all field allocations)
@@ -263,13 +331,14 @@ private:
 	static size_t AlignSize(size_t size);
 };
 
-// ─────────────────────────────────────────────────────────────────────────────
-// CRTP middle layer.  Routes Initialize() to the derived class for:
-//   GetFrameCount(Config)  — how many history frames to allocate
-//   GetCacheTier()         — which CacheTier enum value this instance is
-//   GetLabel()             — human-readable name for logging
-// Everything else (all data, all frame/lock/alloc methods) lives in the base.
-// ─────────────────────────────────────────────────────────────────────────────
+/// @brief CRTP middle layer that routes @c Initialize() to tier-specific overrides.
+///
+/// Each derived class (@c ComponentCache<Tier>) provides:
+/// - @c GetFrameCount(Config) — how many ring-buffer frames to allocate.
+/// - @c GetCacheTier() — the @c CacheTier enum value for this instance.
+/// - @c GetLabel() — human-readable name for logging.
+///
+/// All data and frame/lock/alloc methods live in @ref ComponentCacheBase.
 template <typename Derived>
 class ComponentCacheImpl : public ComponentCacheBase
 {
@@ -286,15 +355,16 @@ protected:
 	friend Derived;
 };
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Concrete cache type.  Registry instantiates these; Archetype/LogicThread/
-// RenderThread use the ComponentCacheBase* pointer.
-//
-// The 3 CRTP overrides that differ between tiers:
-//   GetFrameCount  — Volatile: 3 (fixed, triple-buffer), Temporal: Config->TemporalFrameCount
-//   GetCacheTier   — returns the CacheTier enum value
-//   GetLabel       — "Volatile" or "Temporal" for logging
-// ─────────────────────────────────────────────────────────────────────────────
+/// @brief Concrete SoA ring-buffer cache parameterised by storage tier.
+///
+/// @ref Registry instantiates @c ComponentCache<Volatile> and
+/// @c ComponentCache<Temporal>. All callers use the @ref ComponentCacheBase*
+/// interface so they are decoupled from the tier template.
+///
+/// CRTP overrides per tier:
+/// - @c GetFrameCount — Volatile: 3 (triple-buffer); Temporal: @c Config->TemporalFrameCount.
+/// - @c GetCacheTier — returns the @c CacheTier enum value.
+/// - @c GetLabel — @c "Volatile" or @c "Temporal" for logging.
 template <CacheTier Tier>
 class ComponentCache final : public ComponentCacheImpl<ComponentCache<Tier>>
 {

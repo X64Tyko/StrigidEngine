@@ -2,6 +2,7 @@
 
 #include <cassert>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
 #include <fstream>
 #include <vector>
@@ -20,6 +21,8 @@
 #include "CMeshRef.h"
 #include "CScale.h"
 #include "CTransform.h"
+#include "CVisualTransform.h"
+#include "VulkanDebug.h"
 
 #include <immintrin.h>
 #include "LogicThread.h"
@@ -30,18 +33,6 @@
 // Helpers
 // -----------------------------------------------------------------------
 
-static void MultMat4(float* out, const float* A, const float* B)
-{
-	for (int col = 0; col < 4; ++col)
-	{
-		for (int row = 0; row < 4; ++row)
-		{
-			float sum = 0.0f;
-			for (int k = 0; k < 4; ++k) sum += A[k * 4 + row] * B[col * 4 + k];
-			out[col * 4 + row] = sum;
-		}
-	}
-}
 
 static std::vector<uint32_t> ReadSPIRV(const char* path)
 {
@@ -69,7 +60,7 @@ static std::vector<uint32_t> ReadSPIRV(const char* path)
 
 template <typename Derived>
 void RendererCore<Derived>::Initialize(Registry* registry,
-									   LogicThread* logic,
+									   LogicThreadBase* logic,
 									   const EngineConfig* config,
 									   VulkanContext* vkCtx,
 									   VulkanMemory* vkMem,
@@ -148,6 +139,10 @@ void RendererCore<Derived>::Start()
 		return;
 	}
 #endif
+
+	// Tag every per-frame buffer + field slab so Nsight Graphics can list
+	// them by name in the Resources panel during a frame capture.
+	NameRenderResources();
 
 #if TNX_DEV_METRICS
 	SDL_DisplayID displayId     = SDL_GetDisplayForWindow(WindowPtr);
@@ -401,8 +396,8 @@ int RendererCore<Derived>::RenderFrame()
 		LatencyAccumMs += totalMs;
 		++LatencySamples;
 #if TNX_DEV_METRICS_DETAILED
-	LOG_ENG_DEBUG_F("[Latency] Pipeline: %.2fms | Scanout: %.2fms | Total: %.2fms",
-					pipelineMs, DisplayRefreshMs, totalMs);
+		LOG_ENG_DEBUG_F("[Latency] Pipeline: %.2fms | Scanout: %.2fms | Total: %.2fms",
+						pipelineMs, DisplayRefreshMs, totalMs);
 #endif
 	}
 #endif
@@ -438,9 +433,9 @@ void RendererCore<Derived>::RecordCommandBuffer(FrameSync& frame, uint32_t image
 	int logicalW = 0, physicalW = 0;
 	SDL_GetWindowSize(WindowPtr, &logicalW, nullptr);
 	SDL_GetWindowSizeInPixels(WindowPtr, &physicalW, nullptr);
-	const float dpiScale = (logicalW > 0) ? static_cast<float>(physicalW) / static_cast<float>(logicalW) : 1.0f;
-	const int32_t pickX  = static_cast<int32_t>(mx * dpiScale);
-	const int32_t pickY  = static_cast<int32_t>(my * dpiScale);
+	const SimFloat dpiScale = (logicalW > 0) ? static_cast<SimFloat>(physicalW) / static_cast<float>(logicalW) : 1.0f;
+	const int32_t pickX     = static_cast<int32_t>((mx * dpiScale).ToFloat());
+	const int32_t pickY     = static_cast<int32_t>((my * dpiScale).ToFloat());
 
 	// Debug logging (every 60 frames to avoid spam)
 	static uint32_t pickDebugFrameCounter = 0;
@@ -469,8 +464,11 @@ void RendererCore<Derived>::RecordCommandBuffer(FrameSync& frame, uint32_t image
 	beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
 	vkBeginCommandBuffer(cmd, &beginInfo);
 
+	TNX_VKDBG_SCOPE(cmd, "Trinyx::Frame", VulkanDebug::ColorRaster);
+
 	// Barriers: UNDEFINED → attachment optimal
 	{
+		TNX_VKDBG_SCOPE(cmd, "BarrierToRender", VulkanDebug::ColorBarrier);
 		TNX_ZONE_COARSE_NC("Render_BarrierToRender", TNX_COLOR_RENDERING)
 
 #if defined(TNX_GPU_PICKING_FAST)
@@ -542,6 +540,7 @@ void RendererCore<Derived>::RecordCommandBuffer(FrameSync& frame, uint32_t image
 
 	// Compute: predicate → prefix_sum → scatter
 	{
+		TNX_VKDBG_SCOPE(cmd, "Compute(predicate->prefix->scatter)", VulkanDebug::ColorCompute);
 		TNX_ZONE_COARSE_NC("Render_Compute", TNX_COLOR_RENDERING)
 
 		const uint64_t gpuDataAddr = frame.GpuData.DeviceAddr;
@@ -584,41 +583,62 @@ void RendererCore<Derived>::RecordCommandBuffer(FrameSync& frame, uint32_t image
 		vkCmdPushConstants(cmd, *PipelineLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_COMPUTE_BIT,
 						   0, sizeof(uint64_t), &gpuDataAddr);
 
-		vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, PredicatePipeline);
-		vkCmdDispatch(cmd, dispatchX, 1, 1);
+		// Pass 1: predicate — Active flag → ScanBuffer (0 or 1 per entity)
+		{
+			TNX_VKDBG_SCOPE(cmd, "Predicate (Active->Scan)", VulkanDebug::ColorCompute);
+			vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, PredicatePipeline);
+			vkCmdDispatch(cmd, dispatchX, 1, 1);
+		}
 		ComputeBarrier();
 
-		vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, PrefixSumPipeline);
-		vkCmdDispatch(cmd, dispatchX, 1, 1);
+		// Pass 2: prefix_sum — in-place exclusive scan over ScanBuffer
+		{
+			TNX_VKDBG_SCOPE(cmd, "PrefixSum (Scan->OutIdx)", VulkanDebug::ColorCompute);
+			vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, PrefixSumPipeline);
+			vkCmdDispatch(cmd, dispatchX, 1, 1);
+		}
 		ComputeBarrier();
 
+		// Pass 3: scatter — read FieldSlab[curr]+FieldSlab[prev], lerp, write
+		// compacted instance SoA into UnsortedInstancesBuffer. This is the
+		// dispatch to inspect in Nsight when the on-screen result looks wrong:
+		// click it and view UnsortedInstances[FrameN] to see the per-entity
+		// ECS data the GPU just received.
+		{
+			TNX_VKDBG_SCOPE(cmd, "Scatter (FieldSlab->UnsortedInstances)", VulkanDebug::ColorCompute);
 #if defined(TNX_GPU_PICKING_FAST)
-		// FAST: always use pick scatter (writes entity cache index)
-		vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, ScatterPickPipeline);
+			vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, ScatterPickPipeline);
 #elif defined(TNX_GPU_PICKING)
-		vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
-						  bDoPick ? ScatterPickPipeline : ScatterPipeline);
+			vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
+							  bDoPick ? ScatterPickPipeline : ScatterPipeline);
 #else
-		vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, ScatterPipeline);
+			vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, ScatterPipeline);
 #endif
-		vkCmdDispatch(cmd, dispatchX, 1, 1);
+			vkCmdDispatch(cmd, dispatchX, 1, 1);
+		}
 		ComputeBarrier(); // scatter → build_draws
 
 		// Pass 4: build_draws — prefix-sum histogram → DrawArgs + MeshWriteIdx base offsets
-		vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, BuildDrawsPipeline);
-		vkCmdDispatch(cmd, 1, 1, 1); // single workgroup, 256 threads
-		ComputeBarrier();            // build_draws → sort_instances
+		{
+			TNX_VKDBG_SCOPE(cmd, "BuildDraws (Histogram->DrawArgs)", VulkanDebug::ColorCompute);
+			vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, BuildDrawsPipeline);
+			vkCmdDispatch(cmd, 1, 1, 1); // single workgroup, 256 threads
+		}
+		ComputeBarrier(); // build_draws → sort_instances
 
 		// Pass 5: sort_instances — reorder unsorted → sorted by MeshID
+		{
+			TNX_VKDBG_SCOPE(cmd, "SortInstances (Unsorted->Instances)", VulkanDebug::ColorCompute);
 #if defined(TNX_GPU_PICKING_FAST)
-		vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, SortPickPipeline);
+			vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, SortPickPipeline);
 #elif defined(TNX_GPU_PICKING)
-		vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
-						  bDoPick ? SortPickPipeline : SortInstancesPipeline);
+			vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
+							  bDoPick ? SortPickPipeline : SortInstancesPipeline);
 #else
-		vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, SortInstancesPipeline);
+			vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, SortInstancesPipeline);
 #endif
-		vkCmdDispatch(cmd, dispatchX, 1, 1);
+			vkCmdDispatch(cmd, dispatchX, 1, 1);
+		}
 
 		// Final barrier: sorted instances + draw args → vertex shader + indirect draw
 		VkMemoryBarrier2 sortDone{};
@@ -731,6 +751,7 @@ void RendererCore<Derived>::RecordCommandBuffer(FrameSync& frame, uint32_t image
 
 	// Draw
 	{
+		TNX_VKDBG_SCOPE(cmd, "Draw(opaque cubes)", VulkanDebug::ColorRaster);
 		TNX_ZONE_COARSE_NC("Render_Draw", TNX_COLOR_RENDERING)
 
 		VkViewport viewport{};
@@ -769,6 +790,7 @@ void RendererCore<Derived>::RecordCommandBuffer(FrameSync& frame, uint32_t image
 	// ImGui's pipeline was created with 1 color attachment — it can't run inside
 	// the 2-attachment pick render pass.
 	{
+		TNX_VKDBG_SCOPE(cmd, "EditorOverlay(ImGui)", VulkanDebug::ColorEditor);
 		VkRenderingAttachmentInfo overlayAttach{};
 		overlayAttach.sType       = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
 		overlayAttach.imageView   = swapView;
@@ -966,8 +988,8 @@ bool RendererCore<Derived>::CreateFrameSync()
 		// DrawArgs: one VkDrawIndexedIndirectCommand per mesh slot (256 max × 20 bytes = 5120 bytes)
 		constexpr VkDeviceSize DrawArgsSize = MaxMeshSlots * sizeof(VkDrawIndexedIndirectCommand);
 		Frames[i].DrawArgsBuffer            = VkMem->AllocateBuffer(DrawArgsSize,
-														 VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT,
-														 GpuMemoryDomain::PersistentMapped, /*requestDeviceAddress=*/ true);
+																	VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT,
+																	GpuMemoryDomain::PersistentMapped, /*requestDeviceAddress=*/ true);
 		if (!Frames[i].DrawArgsBuffer.IsValid())
 		{
 			LOG_ENG_ERROR_F("[Renderer] DrawArgsBuffer alloc failed (slot %d)", i);
@@ -1002,8 +1024,8 @@ bool RendererCore<Derived>::CreateFrameSync()
 		// Mesh histogram + write index buffers (256 uint32 each = 1 KB)
 		constexpr VkDeviceSize HistSize = MaxMeshSlots * sizeof(uint32_t);
 		Frames[i].MeshHistogramBuffer   = VkMem->AllocateBuffer(HistSize,
-															  VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-															  GpuMemoryDomain::DeviceLocal, /*requestDeviceAddress=*/ true);
+																VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+																GpuMemoryDomain::DeviceLocal, /*requestDeviceAddress=*/ true);
 		if (!Frames[i].MeshHistogramBuffer.IsValid())
 		{
 			LOG_ENG_ERROR_F("[Renderer] MeshHistogramBuffer alloc failed (slot %d)", i);
@@ -1198,21 +1220,21 @@ bool RendererCore<Derived>::CreateMeshBuffers()
 		return false;
 	}
 
-	uint32_t cubeSlot = Meshes.RegisterBuiltinCube();
+	uint32_t cubeSlot = Meshes.LoadBuiltinCube();
 	if (cubeSlot == UINT32_MAX)
 	{
-		LOG_ENG_ERROR("[Renderer] Failed to register built-in cube mesh");
+		LOG_ENG_ERROR("[Renderer] Failed to load built-in cube mesh");
 		return false;
 	}
 
-	uint32_t capsuleSlot = Meshes.RegisterBuiltinCapsule(0.4f, 0.9f, 16);
+	uint32_t capsuleSlot = Meshes.LoadBuiltinCapsule(0.4f, 0.9f, 16);
 	if (capsuleSlot == UINT32_MAX)
 	{
-		LOG_ENG_ERROR("[Renderer] Failed to register built-in capsule mesh");
+		LOG_ENG_ERROR("[Renderer] Failed to load built-in capsule mesh");
 		return false;
 	}
 
-	LOG_ENG_INFO_F("[Renderer] MeshManager ready — cube at slot %u, capsule at slot %u",
+	LOG_ENG_INFO_F("[Renderer] MeshManager ready — cube at slot %u, capsule at slot %u (slot 0 reserved as invalid)",
 				   cubeSlot, capsuleSlot);
 	return true;
 }
@@ -1231,7 +1253,31 @@ void RendererCore<Derived>::FillGpuFrameData(FrameSync& frame)
 
 	ComponentCacheBase* tc   = RegistryPtr->GetTemporalCache();
 	TemporalFrameHeader* hdr = tc->GetFrameHeader(LastTemporalFrame);
-	MultMat4(FrameData->ViewProj, hdr->ProjectionMatrix.m, hdr->ViewMatrix.m);
+
+	FrameData->Position[0] = hdr->CameraPosition.x.ToFloat();
+	FrameData->Position[1] = hdr->CameraPosition.y.ToFloat();
+	FrameData->Position[2] = hdr->CameraPosition.z.ToFloat();
+	FrameData->FoV         = hdr->CameraFoV.ToFloat();
+
+	const Quatf rot        = hdr->CameraRotation.ToFloat();
+	FrameData->Rotation[0] = rot.x;
+	FrameData->Rotation[1] = rot.y;
+	FrameData->Rotation[2] = rot.z;
+	FrameData->Rotation[3] = rot.w;
+
+	FrameData->OldPosition[0] = hdr->PrevCameraPosition.x.ToFloat();
+	FrameData->OldPosition[1] = hdr->PrevCameraPosition.y.ToFloat();
+	FrameData->OldPosition[2] = hdr->PrevCameraPosition.z.ToFloat();
+	FrameData->OldFoV         = hdr->PrevCameraFoV.ToFloat();
+
+	const Quatf oldRot        = hdr->PrevCameraRotation.ToFloat();
+	FrameData->OldRotation[0] = oldRot.x;
+	FrameData->OldRotation[1] = oldRot.y;
+	FrameData->OldRotation[2] = oldRot.z;
+	FrameData->OldRotation[3] = oldRot.w;
+
+	const vk::Extent2D ext = VkCtx->GetSwapchain().Extent;
+	FrameData->AspectRatio  = ext.height > 0 ? static_cast<float>(ext.width) / static_cast<float>(ext.height) : 1.0f;
 
 	FrameData->VerticesAddr          = Meshes.GetVertexBufferAddr();
 	FrameData->InstancesAddr         = frame.InstancesBuffer.DeviceAddr;
@@ -1277,6 +1323,29 @@ void RendererCore<Derived>::FillGpuFrameData(FrameSync& frame)
 #endif
 }
 
+void UploadSimFloatBuffer(const void* cpuData, void* gpuBuffer, size_t count)
+{
+	if constexpr (std::is_same_v<SimFloat, SimFloatImpl<float>>)
+	{
+		if (cpuData) memcpy(gpuBuffer, cpuData, count);
+		else memset(gpuBuffer, 0, count);
+	}
+	else // Fixed32
+	{
+		if (cpuData)
+		{
+			const Fixed32* src       = static_cast<const Fixed32*>(cpuData);
+			float* dst               = static_cast<float*>(gpuBuffer);
+			const size_t numElements = count / sizeof(Fixed32);
+			for (size_t i = 0; i < numElements; ++i) dst[i] = src[i].ToFloat();
+		}
+		else
+		{
+			memset(gpuBuffer, 0, count);
+		}
+	}
+}
+
 template <typename Derived>
 void RendererCore<Derived>::WriteToFrameSlab()
 {
@@ -1313,11 +1382,17 @@ void RendererCore<Derived>::WriteToFrameSlab()
 	TemporalFrameHeader* temporalHdr = temporalCache->GetFrameHeader(LastTemporalFrame);
 	TemporalFrameHeader* volatileHdr = volatileCache->GetFrameHeader(LastVolatileFrame);
 
-	const CacheSlotID transformSlot = CTransform<>::StaticTemporalIndex();
-	const CacheSlotID scaleSlot     = CScale<>::StaticTemporalIndex();
-	const CacheSlotID colorSlot     = CColor<>::StaticTemporalIndex();
-	const CacheSlotID flagsSlot     = CacheSlotMeta<>::StaticTemporalIndex();
-	const CacheSlotID meshRefSlot   = CMeshRef<>::StaticTemporalIndex();
+	const CacheSlotID transformSlot      = CTransform<>::StaticTemporalIndex();
+	const CacheSlotID scaleSlot          = CScale<>::StaticTemporalIndex();
+	const CacheSlotID colorSlot          = CColor<>::StaticTemporalIndex();
+	const CacheSlotID flagsSlot          = CacheSlotMeta<>::StaticTemporalIndex();
+	const CacheSlotID meshRefSlot        = CMeshRef<>::StaticTemporalIndex();
+	const CacheSlotID visualTransformSlot = CVisualTransform<>::StaticTemporalIndex();
+
+	// SimFloat fields go through .ToFloat() on Fixed32 builds; RawU32 fields are
+	// 4-byte-aligned scalar data (flags, mesh handle) that must be copied verbatim.
+	// The kind is a per-field constant so the branch lives outside the entity loop.
+	enum class GpuFieldKind : uint8_t { SimFloat, RawU32 };
 
 	struct FieldDescription
 	{
@@ -1326,24 +1401,25 @@ void RendererCore<Derived>::WriteToFrameSlab()
 		CacheSlotID slot;
 		size_t fi;
 		uint32_t sem;
+		GpuFieldKind kind;
 	};
 	const FieldDescription fieldDescs[GpuOutFieldCount] = {
-		{temporalCache, temporalHdr, flagsSlot, 0, SemFlags},
-		{temporalCache, temporalHdr, transformSlot, 0, SemPosX},
-		{temporalCache, temporalHdr, transformSlot, 1, SemPosY},
-		{temporalCache, temporalHdr, transformSlot, 2, SemPosZ},
-		{temporalCache, temporalHdr, transformSlot, 3, SemRotQx},
-		{temporalCache, temporalHdr, transformSlot, 4, SemRotQy},
-		{temporalCache, temporalHdr, transformSlot, 5, SemRotQz},
-		{temporalCache, temporalHdr, transformSlot, 6, SemRotQw},
-		{volatileCache, volatileHdr, scaleSlot, 0, SemScaleX},
-		{volatileCache, volatileHdr, scaleSlot, 1, SemScaleY},
-		{volatileCache, volatileHdr, scaleSlot, 2, SemScaleZ},
-		{volatileCache, volatileHdr, colorSlot, 0, SemColorR},
-		{volatileCache, volatileHdr, colorSlot, 1, SemColorG},
-		{volatileCache, volatileHdr, colorSlot, 2, SemColorB},
-		{volatileCache, volatileHdr, colorSlot, 3, SemColorA},
-		{volatileCache, volatileHdr, meshRefSlot, 0, SemMeshID},
+		{temporalCache, temporalHdr, flagsSlot,           0, SemFlags,  GpuFieldKind::RawU32},
+		{volatileCache, volatileHdr, visualTransformSlot, 0, SemPosX,   GpuFieldKind::SimFloat},
+		{volatileCache, volatileHdr, visualTransformSlot, 1, SemPosY,   GpuFieldKind::SimFloat},
+		{volatileCache, volatileHdr, visualTransformSlot, 2, SemPosZ,   GpuFieldKind::SimFloat},
+		{temporalCache, temporalHdr, transformSlot,       3, SemRotQx,  GpuFieldKind::SimFloat},
+		{temporalCache, temporalHdr, transformSlot,       4, SemRotQy,  GpuFieldKind::SimFloat},
+		{temporalCache, temporalHdr, transformSlot,       5, SemRotQz,  GpuFieldKind::SimFloat},
+		{temporalCache, temporalHdr, transformSlot,       6, SemRotQw,  GpuFieldKind::SimFloat},
+		{volatileCache, volatileHdr, scaleSlot,           0, SemScaleX, GpuFieldKind::SimFloat},
+		{volatileCache, volatileHdr, scaleSlot,           1, SemScaleY, GpuFieldKind::SimFloat},
+		{volatileCache, volatileHdr, scaleSlot,           2, SemScaleZ, GpuFieldKind::SimFloat},
+		{volatileCache, volatileHdr, colorSlot,           0, SemColorR, GpuFieldKind::SimFloat},
+		{volatileCache, volatileHdr, colorSlot,           1, SemColorG, GpuFieldKind::SimFloat},
+		{volatileCache, volatileHdr, colorSlot,           2, SemColorB, GpuFieldKind::SimFloat},
+		{volatileCache, volatileHdr, colorSlot,           3, SemColorA, GpuFieldKind::SimFloat},
+		{volatileCache, volatileHdr, meshRefSlot,         0, SemMeshID, GpuFieldKind::RawU32},
 	};
 
 	// ── Step 1: Scan slab Flags for dirty bit (bit 30) → build current dirty set ──
@@ -1387,7 +1463,7 @@ void RendererCore<Derived>::WriteToFrameSlab()
 
 	TrinyxJobs::JobCounter GPUTransferCounter;
 
-	if (fullCopy)
+	if (fullCopy) [[unlikely]]
 	{
 		// First time writing to this slab — full copy, all fields
 		for (uint32_t f = 0; f < GpuOutFieldCount; ++f)
@@ -1395,10 +1471,18 @@ void RendererCore<Derived>::WriteToFrameSlab()
 			const FieldDescription& fd = fieldDescs[f];
 			const void* src            = fd.cache->GetFieldData(fd.hdr, fd.slot, fd.fi);
 			uint8_t* dst               = slabPtr + static_cast<size_t>(f) * static_cast<size_t>(fieldStride);
-			TrinyxJobs::Dispatch([src, dst, fieldStride](uint32_t)
+			const GpuFieldKind kind    = fd.kind;
+			TrinyxJobs::Dispatch([src, dst, fieldStride, kind](uint32_t)
 			{
-				if (src) std::memcpy(dst, src, static_cast<size_t>(fieldStride));
-				else std::memset(dst, 0, static_cast<size_t>(fieldStride));
+				if (kind == GpuFieldKind::SimFloat)
+				{
+					UploadSimFloatBuffer(src, dst, fieldStride);
+				}
+				else // RawU32 — same width as float on the GPU side, copy verbatim.
+				{
+					if (src) std::memcpy(dst, src, static_cast<size_t>(fieldStride));
+					else std::memset(dst, 0, static_cast<size_t>(fieldStride));
+				}
 			}, &GPUTransferCounter, TrinyxJobs::Queue::Render);
 		}
 		FirstSlabWrite[nextSlab] = false;
@@ -1407,6 +1491,8 @@ void RendererCore<Derived>::WriteToFrameSlab()
 	{
 		// Selective upload: one job per field, each scatters only dirty entities.
 		// All jobs read the same bitplane (immutable until cleared after wait).
+		// The kind branch lives outside the per-entity loop — predicts perfectly
+		// (constant per field) and lets RawU32 fields bypass the .ToFloat() path.
 		for (uint32_t f = 0; f < GpuOutFieldCount; ++f)
 		{
 			const FieldDescription& fd = fieldDescs[f];
@@ -1417,18 +1503,40 @@ void RendererCore<Derived>::WriteToFrameSlab()
 
 			const uint64_t* dirtyPlane = plane;
 			const uint32_t wordCount   = DirtyWordCount;
+			const GpuFieldKind kind    = fd.kind;
 
-			TrinyxJobs::Dispatch([src, dst, dirtyPlane, wordCount](uint32_t)
+			TrinyxJobs::Dispatch([src, dst, dirtyPlane, wordCount, kind](uint32_t)
 			{
-				for (uint32_t w = 0; w < wordCount; ++w)
+				if (kind == GpuFieldKind::SimFloat)
 				{
-					uint64_t bits = dirtyPlane[w];
-					while (bits)
+					const SimFloat* ssrc = static_cast<const SimFloat*>(static_cast<const void*>(src));
+					float* fdst          = reinterpret_cast<float*>(dst);
+					for (uint32_t w = 0; w < wordCount; ++w)
 					{
-						uint32_t bit = TNX_CTZ64(bits);
-						uint32_t idx = w * 64 + bit;
-						std::memcpy(dst + idx * sizeof(float), src + idx * sizeof(float), sizeof(float));
-						bits &= bits - 1;
+						uint64_t bits = dirtyPlane[w];
+						while (bits)
+						{
+							uint32_t bit = TNX_CTZ64(bits);
+							uint32_t idx = w * 64 + bit;
+							fdst[idx]    = ssrc[idx].ToFloat();
+							bits         &= bits - 1;
+						}
+					}
+				}
+				else // RawU32 — copy 4 bytes per dirty entity, no conversion.
+				{
+					const uint32_t* usrc = reinterpret_cast<const uint32_t*>(src);
+					uint32_t* udst       = reinterpret_cast<uint32_t*>(dst);
+					for (uint32_t w = 0; w < wordCount; ++w)
+					{
+						uint64_t bits = dirtyPlane[w];
+						while (bits)
+						{
+							uint32_t bit = TNX_CTZ64(bits);
+							uint32_t idx = w * 64 + bit;
+							udst[idx]    = usrc[idx];
+							bits         &= bits - 1;
+						}
 					}
 				}
 			}, &GPUTransferCounter, TrinyxJobs::Queue::Render);
@@ -1612,6 +1720,123 @@ void RendererCore<Derived>::OnSwapchainResize()
 #ifdef TNX_GPU_PICKING
 	CreatePickImages();
 #endif
+	NameRenderResources();
+}
+
+// -----------------------------------------------------------------------
+// NameRenderResources
+//
+// Tags every renderer-owned Vulkan handle (per-frame buffers, the field
+// slabs we push ECS data into, depth/pick attachments, and sync objects)
+// with a human-readable name via VK_EXT_debug_utils. In Nsight Graphics
+// the Resources panel of a frame capture lists these by name instead of
+// raw VkBuffer addresses, so locating "Trinyx::FieldSlab[2]" or the
+// per-frame "Trinyx::InstancesBuffer[Frame0]" is a one-click affair.
+//
+// Idempotent: safe to call again after swapchain resize (depth/pick
+// attachments get reallocated and need their tags reapplied; the field
+// slabs and per-frame buffers persist so re-naming is a no-op).
+//
+// Compiles to nothing when TNX_ENABLE_NSIGHT is not defined.
+// -----------------------------------------------------------------------
+template <typename Derived>
+void RendererCore<Derived>::NameRenderResources()
+{
+#ifdef TNX_ENABLE_NSIGHT
+	if (!VulkanDebug::IsAvailable()) return;
+
+	char buf[64];
+
+	// --- Per-frame slot resources -------------------------------------
+	for (int i = 0; i < MaxFramesInFlight; ++i)
+	{
+		FrameSync& f = Frames[i];
+
+		std::snprintf(buf, sizeof(buf), "Trinyx::Cmd[Frame%d]", i);
+		VulkanDebug::Name(Device, f.Cmd, buf);
+
+		std::snprintf(buf, sizeof(buf), "Trinyx::Sem::Acquired[Frame%d]", i);
+		VulkanDebug::Name(Device, static_cast<VkSemaphore>(*f.Acquired), buf);
+
+		std::snprintf(buf, sizeof(buf), "Trinyx::Fence::InFlight[Frame%d]", i);
+		VulkanDebug::Name(Device, static_cast<VkFence>(*f.Fence), buf);
+
+		std::snprintf(buf, sizeof(buf), "Trinyx::GpuFrameData[Frame%d]", i);
+		VulkanDebug::Name(Device, static_cast<VkBuffer>(f.GpuData.Buffer), buf);
+
+		std::snprintf(buf, sizeof(buf), "Trinyx::ScanBuffer[Frame%d]", i);
+		VulkanDebug::Name(Device, static_cast<VkBuffer>(f.ScanBuffer.Buffer), buf);
+
+		std::snprintf(buf, sizeof(buf), "Trinyx::CompactCounter[Frame%d]", i);
+		VulkanDebug::Name(Device, static_cast<VkBuffer>(f.CompactCounterBuffer.Buffer), buf);
+
+		std::snprintf(buf, sizeof(buf), "Trinyx::DrawArgs[Frame%d]", i);
+		VulkanDebug::Name(Device, static_cast<VkBuffer>(f.DrawArgsBuffer.Buffer), buf);
+
+		std::snprintf(buf, sizeof(buf), "Trinyx::InstancesBuffer[Frame%d]", i);
+		VulkanDebug::Name(Device, static_cast<VkBuffer>(f.InstancesBuffer.Buffer), buf);
+
+		std::snprintf(buf, sizeof(buf), "Trinyx::UnsortedInstances[Frame%d]", i);
+		VulkanDebug::Name(Device, static_cast<VkBuffer>(f.UnsortedInstancesBuffer.Buffer), buf);
+
+		std::snprintf(buf, sizeof(buf), "Trinyx::MeshHistogram[Frame%d]", i);
+		VulkanDebug::Name(Device, static_cast<VkBuffer>(f.MeshHistogramBuffer.Buffer), buf);
+
+		std::snprintf(buf, sizeof(buf), "Trinyx::MeshWriteIdx[Frame%d]", i);
+		VulkanDebug::Name(Device, static_cast<VkBuffer>(f.MeshWriteIdxBuffer.Buffer), buf);
+
+		// Depth attachment (recreated on resize)
+		if (static_cast<VkImage>(f.DepthAttachment.Image) != VK_NULL_HANDLE)
+		{
+			std::snprintf(buf, sizeof(buf), "Trinyx::Depth[Frame%d]", i);
+			VulkanDebug::Name(Device, static_cast<VkImage>(f.DepthAttachment.Image), buf);
+			std::snprintf(buf, sizeof(buf), "Trinyx::Depth::View[Frame%d]", i);
+			VulkanDebug::Name(Device, static_cast<VkImageView>(f.DepthAttachment.View), buf);
+		}
+
+#ifdef TNX_GPU_PICKING
+		if (static_cast<VkImage>(f.PickAttachment.Image) != VK_NULL_HANDLE)
+		{
+			std::snprintf(buf, sizeof(buf), "Trinyx::Pick[Frame%d]", i);
+			VulkanDebug::Name(Device, static_cast<VkImage>(f.PickAttachment.Image), buf);
+			std::snprintf(buf, sizeof(buf), "Trinyx::Pick::View[Frame%d]", i);
+			VulkanDebug::Name(Device, static_cast<VkImageView>(f.PickAttachment.View), buf);
+		}
+		if (static_cast<VkBuffer>(f.PickReadbackBuffer.Buffer) != VK_NULL_HANDLE)
+		{
+			std::snprintf(buf, sizeof(buf), "Trinyx::PickReadback[Frame%d]", i);
+			VulkanDebug::Name(Device, static_cast<VkBuffer>(f.PickReadbackBuffer.Buffer), buf);
+		}
+#endif
+	}
+
+	// --- Field slabs --------------------------------------------------
+	// These hold the SoA ECS field data the render thread streams every
+	// frame and the compute pipeline (predicate→prefix→scatter) reads
+	// via BDA. The most useful buffers to inspect when something looks
+	// wrong on screen.
+	for (int i = 0; i < InstanceBufferCount; ++i)
+	{
+		std::snprintf(buf, sizeof(buf), "Trinyx::FieldSlab[%d]", i);
+		VulkanDebug::Name(Device, static_cast<VkBuffer>(FieldSlabs[i].Buffer), buf);
+	}
+
+	// --- Image-acquire semaphores (one per swapchain image) -----------
+	for (size_t i = 0; i < RenderedSems.size(); ++i)
+	{
+		std::snprintf(buf, sizeof(buf), "Trinyx::Sem::Rendered[%zu]", i);
+		VulkanDebug::Name(Device, static_cast<VkSemaphore>(*RenderedSems[i]), buf);
+	}
+
+	// --- Pipelines ----------------------------------------------------
+	if (PredicatePipeline) VulkanDebug::Name(Device, PredicatePipeline, "Trinyx::Pipeline::Predicate");
+	if (PrefixSumPipeline) VulkanDebug::Name(Device, PrefixSumPipeline, "Trinyx::Pipeline::PrefixSum");
+	if (ScatterPipeline) VulkanDebug::Name(Device, ScatterPipeline, "Trinyx::Pipeline::Scatter");
+	if (BuildDrawsPipeline) VulkanDebug::Name(Device, BuildDrawsPipeline, "Trinyx::Pipeline::BuildDraws");
+	if (SortInstancesPipeline) VulkanDebug::Name(Device, SortInstancesPipeline, "Trinyx::Pipeline::SortInstances");
+	if (*Pipeline) VulkanDebug::Name(Device, *Pipeline, "Trinyx::Pipeline::Cube");
+	if (*PipelineLayout) VulkanDebug::Name(Device, *PipelineLayout, "Trinyx::PipelineLayout::Cube");
+#endif // TNX_ENABLE_NSIGHT
 }
 
 template <typename Derived>
@@ -1629,14 +1854,14 @@ void RendererCore<Derived>::TrackFPS()
 		double avgLatencyMs = (LatencySamples > 0) ? (LatencyAccumMs / LatencySamples) : 0.0;
 		LOG_ENG_DEBUG_F("Render FPS: %d | Frame: %.2fms | Input→Photon: %.2fms",
 						static_cast<int>(RenderFrameCount / RenderFpsTimer),
-					(RenderFpsTimer / RenderFrameCount) * 1000.0,
-					avgLatencyMs);
+						(RenderFpsTimer / RenderFrameCount) * 1000.0,
+						avgLatencyMs);
 		LatencyAccumMs = 0.0;
 		LatencySamples = 0;
 #else
 		LOG_ENG_DEBUG_F("Render FPS: %d | Frame: %.2fms",
 						static_cast<int>(RenderFrameCount / RenderFpsTimer),
-					(RenderFpsTimer / RenderFrameCount) * 1000.0);
+						(RenderFpsTimer / RenderFrameCount) * 1000.0);
 #endif
 		RenderFrameCount = 0;
 		RenderFpsTimer   = 0.0;

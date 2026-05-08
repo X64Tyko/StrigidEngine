@@ -2,6 +2,7 @@
 
 #include "ComponentView.h"
 #include "SchemaReflector.h"
+#include "NetDelta.h"
 #include "VecMath.h"
 #include "QuatMath.h"
 
@@ -39,3 +40,4 @@ struct CTransform : ComponentView<CTransform, WIDTH>
 };
 
 TNX_REGISTER_COMPONENT(CTransform)
+TNX_NET_TEMPORAL(CTransform)

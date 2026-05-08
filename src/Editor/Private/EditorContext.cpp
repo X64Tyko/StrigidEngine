@@ -1,18 +1,23 @@
 #include "EditorContext.h"
 #include "EditorPanel.h"
+#include "UndoCommand.h"
 #include "EntityBuilder.h"
 #include "FlowManager.h"
+#include "Globals.h"
 #include "Json.h"
 #include "ReflectionRegistry.h"
 #include "JoltPhysics.h"
 #include "TrinyxEngine.h"
 #include "World.h"
+#include "WorldBase.h"
 #include "EditorRenderer.h"
 #include "imgui.h"
 #include "imgui_internal.h"
 #include "ImGuizmo.h"
 #include "Logger.h"
-#include "LogicThread.h"
+#include "LogicThreadBase.h"
+#include "AudioAsset.h"
+#include "AudioManager.h"
 #include "MeshAsset.h"
 #include "MeshImporter.h"
 #include "MeshManager.h"
@@ -38,6 +43,7 @@
 #include "Panels/ContentBrowserPanel.h"
 #include "Panels/NodeScriptPanel.h"
 #include "Panels/ComponentGeneratorPanel.h"
+#include "Panels/DebuggerPanel.h"
 
 EditorContext::EditorContext() = default;
 
@@ -46,11 +52,14 @@ EditorContext::~EditorContext()
 	if (bPIEActive) StopPIE();
 }
 
-void EditorContext::Initialize(TrinyxEngine* engine, LogicThread* logic, MeshManager* meshMgr)
+void EditorContext::Initialize(TrinyxEngine* engine, LogicThreadBase* logic, MeshManager* meshMgr)
 {
 	EnginePtr = engine;
 	LogicPtr  = logic;
 	MeshMgr   = meshMgr;
+#ifndef TNX_HEADLESS
+	AudioMgr = engine->GetAudio();
+#endif
 
 	// Populate shared state pointers for panels
 	State.EnginePtr   = engine;
@@ -79,6 +88,12 @@ void EditorContext::Initialize(TrinyxEngine* engine, LogicThread* logic, MeshMan
 		LoadScene(scenePath, false);
 	}
 
+	// Force one logic tick so the renderer gets a valid initial transform snapshot.
+	if (LogicPtr && !LogicPtr->IsRunning())
+	{
+		LogicPtr->TickOnce();
+	}
+
 	// Register all panels
 	AddPanel<WorldOutlinerPanel>();
 	AddPanel<DetailsPanel>();
@@ -87,6 +102,7 @@ void EditorContext::Initialize(TrinyxEngine* engine, LogicThread* logic, MeshMan
 	AddPanel<ContentBrowserPanel>();
 	AddPanel<NodeScriptPanel>();
 	AddPanel<ComponentGeneratorPanel>();
+	AddPanel<DebuggerPanel>();
 
 	LOG_ENG_INFO_F("[Editor] Initialized with %zu panels", Panels.size());
 }
@@ -146,13 +162,13 @@ void EditorContext::LoadScene(const std::string& path, bool bReset)
 // -----------------------------------------------------------------------
 
 /// Find a float field pointer by debug name in an archetype's field array table.
-static float* FindFieldFloat(Archetype* arch, void** fieldArrayTable, const char* name, uint32_t localIndex)
+static SimFloat* FindFieldFloat(Archetype* arch, void** fieldArrayTable, const char* name, uint32_t localIndex)
 {
 	const auto& cfr = ReflectionRegistry::Get();
 
 	for (const auto& [fkey, fdesc] : arch->ArchetypeFieldLayout)
 	{
-		if (fdesc.valueType != FieldValueType::Float32) continue;
+		if (fdesc.valueType != FieldValueType::Float32 && fdesc.valueType != FieldValueType::Fixed32) continue;
 		if (!fieldArrayTable[fdesc.fieldSlotIndex]) continue;
 
 		const auto* fields    = cfr.GetFields(fdesc.componentID);
@@ -162,42 +178,12 @@ static float* FindFieldFloat(Archetype* arch, void** fieldArrayTable, const char
 
 		if (fieldName && std::strcmp(fieldName, name) == 0)
 		{
-			return static_cast<float*>(fieldArrayTable[fdesc.fieldSlotIndex]) + localIndex;
+			return static_cast<SimFloat*>(fieldArrayTable[fdesc.fieldSlotIndex]) + localIndex;
 		}
 	}
 	return nullptr;
 }
 
-/// Build a column-major 4x4 model matrix from position, quaternion rotation, and scale.
-static void BuildModelMatrix(float* m, float px, float py, float pz,
-							 float qx, float qy, float qz, float qw,
-							 float sx, float sy, float sz)
-{
-	// Quaternion to rotation matrix (column-major)
-	float xx = qx * qx, yy = qy * qy, zz = qz * qz;
-	float xy = qx * qy, xz = qx * qz, yz = qy * qz;
-	float wx = qw * qx, wy = qw * qy, wz = qw * qz;
-
-	m[0] = (1.0f - 2.0f * (yy + zz)) * sx;
-	m[1] = (2.0f * (xy + wz)) * sx;
-	m[2] = (2.0f * (xz - wy)) * sx;
-	m[3] = 0.0f;
-
-	m[4] = (2.0f * (xy - wz)) * sy;
-	m[5] = (1.0f - 2.0f * (xx + zz)) * sy;
-	m[6] = (2.0f * (yz + wx)) * sy;
-	m[7] = 0.0f;
-
-	m[8]  = (2.0f * (xz + wy)) * sz;
-	m[9]  = (2.0f * (yz - wx)) * sz;
-	m[10] = (1.0f - 2.0f * (xx + yy)) * sz;
-	m[11] = 0.0f;
-
-	m[12] = px;
-	m[13] = py;
-	m[14] = pz;
-	m[15] = 1.0f;
-}
 
 void EditorContext::DrawGizmo()
 {
@@ -223,41 +209,113 @@ void EditorContext::DrawGizmo()
 	uint32_t li = State.SelectedLocalIndex;
 
 	// Read transform fields
-	float* pPosX = FindFieldFloat(arch, fieldArrayTable, "PosX", li);
-	float* pPosY = FindFieldFloat(arch, fieldArrayTable, "PosY", li);
-	float* pPosZ = FindFieldFloat(arch, fieldArrayTable, "PosZ", li);
+	SimFloat* pPosX = FindFieldFloat(arch, fieldArrayTable, "PosX", li);
+	SimFloat* pPosY = FindFieldFloat(arch, fieldArrayTable, "PosY", li);
+	SimFloat* pPosZ = FindFieldFloat(arch, fieldArrayTable, "PosZ", li);
 	if (!pPosX || !pPosY || !pPosZ) return; // No position — can't place gizmo
 
-	float* pRotQx = FindFieldFloat(arch, fieldArrayTable, "RotQx", li);
-	float* pRotQy = FindFieldFloat(arch, fieldArrayTable, "RotQy", li);
-	float* pRotQz = FindFieldFloat(arch, fieldArrayTable, "RotQz", li);
-	float* pRotQw = FindFieldFloat(arch, fieldArrayTable, "RotQw", li);
+	SimFloat* pRotQx = FindFieldFloat(arch, fieldArrayTable, "RotQx", li);
+	SimFloat* pRotQy = FindFieldFloat(arch, fieldArrayTable, "RotQy", li);
+	SimFloat* pRotQz = FindFieldFloat(arch, fieldArrayTable, "RotQz", li);
+	SimFloat* pRotQw = FindFieldFloat(arch, fieldArrayTable, "RotQw", li);
 
-	float* pScaleX = FindFieldFloat(arch, fieldArrayTable, "ScaleX", li);
-	float* pScaleY = FindFieldFloat(arch, fieldArrayTable, "ScaleY", li);
-	float* pScaleZ = FindFieldFloat(arch, fieldArrayTable, "ScaleZ", li);
+	SimFloat* pScaleX = FindFieldFloat(arch, fieldArrayTable, "ScaleX", li);
+	SimFloat* pScaleY = FindFieldFloat(arch, fieldArrayTable, "ScaleY", li);
+	SimFloat* pScaleZ = FindFieldFloat(arch, fieldArrayTable, "ScaleZ", li);
 
-	// Safe defaults
-	float qx = pRotQx ? *pRotQx : 0.0f;
-	float qy = pRotQy ? *pRotQy : 0.0f;
-	float qz = pRotQz ? *pRotQz : 0.0f;
-	float qw = pRotQw ? *pRotQw : 1.0f;
-	float sx = pScaleX ? *pScaleX : 1.0f;
-	float sy = pScaleY ? *pScaleY : 1.0f;
-	float sz = pScaleZ ? *pScaleZ : 1.0f;
+	// Read raw floats from the fields
+	float px = (*pPosX).ToFloat();
+	float py = (*pPosY).ToFloat();
+	float pz = (*pPosZ).ToFloat();
+	float qx = pRotQx ? (*pRotQx).ToFloat() : 0.0f;
+	float qy = pRotQy ? (*pRotQy).ToFloat() : 0.0f;
+	float qz = pRotQz ? (*pRotQz).ToFloat() : 0.0f;
+	float qw = pRotQw ? (*pRotQw).ToFloat() : 1.0f;
+	float sx = pScaleX ? (*pScaleX).ToFloat() : 1.0f;
+	float sy = pScaleY ? (*pScaleY).ToFloat() : 1.0f;
+	float sz = pScaleZ ? (*pScaleZ).ToFloat() : 1.0f;
+
+	// Build column-major transformation matrix from quaternion + scale + translation
+	float x2 = qx + qx, y2 = qy + qy, z2 = qz + qz;
+	float xx = qx * x2, xy = qx * y2, xz = qx * z2;
+	float yy = qy * y2, yz = qy * z2, zz = qz * z2;
+	float wx = qw * x2, wy = qw * y2, wz = qw * z2;
 
 	float modelMatrix[16];
-	BuildModelMatrix(modelMatrix, *pPosX, *pPosY, *pPosZ, qx, qy, qz, qw, sx, sy, sz);
+	modelMatrix[0] = (1.0f - (yy + zz)) * sx;
+	modelMatrix[1] = (xy + wz) * sx;
+	modelMatrix[2] = (xz - wy) * sx;
+	modelMatrix[3] = 0.0f;
+
+	modelMatrix[4] = (xy - wz) * sy;
+	modelMatrix[5] = (1.0f - (xx + zz)) * sy;
+	modelMatrix[6] = (yz + wx) * sy;
+	modelMatrix[7] = 0.0f;
+
+	modelMatrix[8]  = (xz + wy) * sz;
+	modelMatrix[9]  = (yz - wx) * sz;
+	modelMatrix[10] = (1.0f - (xx + yy)) * sz;
+	modelMatrix[11] = 0.0f;
+
+	modelMatrix[12] = px;
+	modelMatrix[13] = py;
+	modelMatrix[14] = pz;
+	modelMatrix[15] = 1.0f;
 
 	// Set ImGuizmo to cover the editor viewport panel
+	ImGuizmo::SetDrawlist(); // bind to the current window's draw list for correct hit-testing
 	ImGuizmo::SetRect(ViewportPanelPos.x, ViewportPanelPos.y, ViewportPanelSize.x, ViewportPanelSize.y);
 	ImGuizmo::SetOrthographic(false);
 
-	// ImGuizmo expects OpenGL-style projection (Y-up). Vulkan's projection has
-	// m[5] negated for Y-down NDC. Undo the flip for the gizmo.
-	float projFixup[16];
-	std::memcpy(projFixup, hdr->ProjectionMatrix.m, sizeof(projFixup));
-	projFixup[5] = -projFixup[5];
+	// Rebuild view and projection matrices from the frame header's quat+position+FoV.
+	// ImGuizmo expects column-major, OpenGL-style (no Vulkan Y-flip in projection).
+	const Quatf camRot = hdr->CameraRotation.ToFloat();
+	const float crx = camRot.x, cry = camRot.y, crz = camRot.z, crw = camRot.w;
+
+	// quatRotate(q, v): right = q*(1,0,0), up = q*(0,1,0), fwd = q*(0,0,-1)
+	auto qr = [&](float vx, float vy, float vz, float& ox, float& oy, float& oz)
+	{
+		float tx = 2.0f * (cry * vz - crz * vy);
+		float ty = 2.0f * (crz * vx - crx * vz);
+		float tz = 2.0f * (crx * vy - cry * vx);
+		ox = vx + crw * tx + (cry * tz - crz * ty);
+		oy = vy + crw * ty + (crz * tx - crx * tz);
+		oz = vz + crw * tz + (crx * ty - cry * tx);
+	};
+
+	float rx, ry, rz, ux, uy, uz, fx, fy, fz;
+	qr( 1,  0,  0, rx, ry, rz);  // right
+	qr( 0,  1,  0, ux, uy, uz);  // up
+	qr( 0,  0, -1, fx, fy, fz);  // forward (-Z)
+
+	const float cpx = hdr->CameraPosition.x.ToFloat();
+	const float cpy = hdr->CameraPosition.y.ToFloat();
+	const float cpz = hdr->CameraPosition.z.ToFloat();
+
+	// Column-major view matrix
+	Matrix4f viewFixup;
+	viewFixup[0]  = rx; viewFixup[1]  = ux; viewFixup[2]  = -fx; viewFixup[3]  = 0;
+	viewFixup[4]  = ry; viewFixup[5]  = uy; viewFixup[6]  = -fy; viewFixup[7]  = 0;
+	viewFixup[8]  = rz; viewFixup[9]  = uz; viewFixup[10] = -fz; viewFixup[11] = 0;
+	viewFixup[12] = -(rx*cpx + ry*cpy + rz*cpz);
+	viewFixup[13] = -(ux*cpx + uy*cpy + uz*cpz);
+	viewFixup[14] =  (fx*cpx + fy*cpy + fz*cpz);
+	viewFixup[15] = 1;
+
+	// Column-major projection (OpenGL-style, no Y-flip — ImGuizmo adds its own)
+	const float aspect = (ViewportPanelSize.y > 0.f) ? ViewportPanelSize.x / ViewportPanelSize.y : 1.0f;
+	const float fovRad  = hdr->CameraFoV.ToFloat() * 3.14159265f / 180.0f;
+	const float F       = 1.0f / std::tan(fovRad * 0.5f);
+	const float zNear   = 0.1f, zFar = 5000.0f;
+	const float dz      = zNear - zFar;
+
+	Matrix4f projFixup;
+	for (int i = 0; i < 16; ++i) projFixup[i] = 0.0f;
+	projFixup[0]  = F / aspect;
+	projFixup[5]  = F;               // Y-up (no Vulkan flip)
+	projFixup[10] = zFar / dz;
+	projFixup[11] = -1.0f;
+	projFixup[14] = (zFar * zNear) / dz;
 
 	// Map our enum to ImGuizmo operation
 	ImGuizmo::OPERATION op;
@@ -294,57 +352,63 @@ void EditorContext::DrawGizmo()
 
 	// Manipulate — modifies modelMatrix in-place if the user drags
 	bool manipulated = ImGuizmo::Manipulate(
-		hdr->ViewMatrix.m, projFixup,
+		viewFixup.m, projFixup.m,
 		op, mode, modelMatrix, nullptr, snapPtr);
 
 	if (manipulated)
 	{
-		// Decompose the modified matrix back into components
+	    // Original: decompose and write values
 		float translation[3], rotation[3], scale[3];
 		ImGuizmo::DecomposeMatrixToComponents(modelMatrix, translation, rotation, scale);
 
-		// Write position back
-		*pPosX = translation[0];
-		*pPosY = translation[1];
-		*pPosZ = translation[2];
+		// --- Undo: capture before state ---
+		auto cmd = std::make_unique<EntityTransformCommand>(
+			arch, State.SelectedChunk, State.SelectedLocalIndex, State.RegistryPtr);
 
-		// Convert Euler angles (degrees) back to quaternion
+		// Write new values (same as original)
+		*pPosX = SimFloat(translation[0]);
+		*pPosY = SimFloat(translation[1]);
+		*pPosZ = SimFloat(translation[2]);
 		if (pRotQx && pRotQy && pRotQz && pRotQw)
 		{
 			float rx = rotation[0] * (3.14159265358979f / 180.0f) * 0.5f;
 			float ry = rotation[1] * (3.14159265358979f / 180.0f) * 0.5f;
 			float rz = rotation[2] * (3.14159265358979f / 180.0f) * 0.5f;
-
 			float cx = std::cos(rx), sx2 = std::sin(rx);
 			float cy = std::cos(ry), sy2 = std::sin(ry);
 			float cz = std::cos(rz), sz2 = std::sin(rz);
-
-			*pRotQw = cx * cy * cz + sx2 * sy2 * sz2;
-			*pRotQx = sx2 * cy * cz - cx * sy2 * sz2;
-			*pRotQy = cx * sy2 * cz + sx2 * cy * sz2;
-			*pRotQz = cx * cy * sz2 - sx2 * sy2 * cz;
+			*pRotQw  = SimFloat(cx * cy * cz + sx2 * sy2 * sz2);
+			*pRotQx  = SimFloat(sx2 * cy * cz - cx * sy2 * sz2);
+			*pRotQy  = SimFloat(cx * sy2 * cz + sx2 * cy * sz2);
+			*pRotQz  = SimFloat(cx * cy * sz2 - sx2 * sy2 * cz);
 		}
+		if (pScaleX) *pScaleX = SimFloat(scale[0]);
+		if (pScaleY) *pScaleY = SimFloat(scale[1]);
+		if (pScaleZ) *pScaleZ = SimFloat(scale[2]);
 
-		// Write scale back
-		if (pScaleX) *pScaleX = scale[0];
-		if (pScaleY) *pScaleY = scale[1];
-		if (pScaleZ) *pScaleZ = scale[2];
-
-		State.bSceneDirty = true;
-
-		// Mark entity dirty for GPU upload via CacheSlotMeta::Flags (bit 30)
-		Archetype::FieldKey flagKey{CacheSlotMeta<>::StaticTypeID(), ReflectionRegistry::Get().GetCacheSlotIndex(CacheSlotMeta<>::StaticTypeID()), 0};
-		auto* flagDesc = State.SelectedArchetype->ArchetypeFieldLayout.find(flagKey);
+		// --- Original dirty marking (restored from pre-undo code) ---
+	    Archetype::FieldKey flagKey{
+	        CacheSlotMeta<>::StaticTypeID(),
+			ReflectionRegistry::Get().GetCacheSlotIndex(CacheSlotMeta<>::StaticTypeID()),
+			0
+		};
+		auto* flagDesc = arch->ArchetypeFieldLayout.find(flagKey);
 		if (flagDesc)
 		{
 			auto* base = static_cast<uint8_t*>(State.SelectedChunk->GetFieldPtr(flagDesc->fieldSlotIndex));
 			if (base)
 			{
-				uint32_t writeFrame             = State.RegistryPtr->GetCache(flagDesc->tier)->GetActiveWriteFrame();
-				auto* flags                     = reinterpret_cast<int32_t*>(base + writeFrame * flagDesc->fieldFrameStride);
+				auto* cache                     = State.RegistryPtr->GetTemporalCache();
+				auto* flags                     = reinterpret_cast<int32_t*>(cache->GetWriteFramePtr(base));
 				flags[State.SelectedLocalIndex] |= static_cast<int32_t>(TemporalFlagBits::Dirty);
 			}
 		}
+
+		// --- Undo: capture after state ---
+		cmd->SetAfter(SerializeEntityFields(State.RegistryPtr, arch, State.SelectedChunk, State.SelectedLocalIndex));
+		PushCommand(std::move(cmd));
+
+		State.bSceneDirty = true;
 	}
 }
 
@@ -354,8 +418,9 @@ void EditorContext::ConsumePick()
 	if (!EnginePtr || !EnginePtr->Render) return;
 
 #ifndef TNX_GPU_PICKING_FAST
-	// On-demand mode: request a pick when the user clicks in the viewport
-	if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !ImGui::GetIO().WantCaptureMouse
+	// On-demand mode: request a pick when the user clicks inside the 3D viewport panel.
+	// WantCaptureMouse is always true over ImGui::Image(), so we use ViewportPanelHovered instead.
+	if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && ViewportPanelHovered
 		&& !ImGuizmo::IsOver())
 	{
 		ImVec2 mousePos = ImGui::GetMousePos();
@@ -366,8 +431,10 @@ void EditorContext::ConsumePick()
 		SDL_GetWindowSizeInPixels(EnginePtr->GetWindow(), &physicalW, nullptr);
 		const float dpiScale = (logicalW > 0) ? static_cast<float>(physicalW) / static_cast<float>(logicalW) : 1.0f;
 
-		int32_t pickX = static_cast<int32_t>(mousePos.x * dpiScale);
-		int32_t pickY = static_cast<int32_t>(mousePos.y * dpiScale);
+		// Convert from global window coords to viewport-panel-relative coords,
+		// then DPI-scale to match the offscreen pick target resolution.
+		int32_t pickX = static_cast<int32_t>((mousePos.x - ViewportPanelPos.x) * dpiScale);
+		int32_t pickY = static_cast<int32_t>((mousePos.y - ViewportPanelPos.y) * dpiScale);
 
 		EnginePtr->Render->RequestPick(pickX, pickY);
 	}
@@ -381,7 +448,7 @@ void EditorContext::ConsumePick()
 	{
 		// Only clear on explicit click (not passive mouse movement in FAST mode).
 		// In FAST mode the result updates every frame — only act on left-click.
-		if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !ImGui::GetIO().WantCaptureMouse
+		if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && ViewportPanelHovered
 			&& !ImGuizmo::IsOver())
 		{
 			State.ClearSelection();
@@ -391,7 +458,7 @@ void EditorContext::ConsumePick()
 
 	// Only select on left-click, not passive hover
 	if (!ImGui::IsMouseClicked(ImGuiMouseButton_Left)) return;
-	if (ImGui::GetIO().WantCaptureMouse) return;
+	if (!ViewportPanelHovered) return;
 	if (ImGuizmo::IsOver()) return;
 
 	// Resolve cache index → entity record via O(1) registry lookup
@@ -415,6 +482,12 @@ void EditorContext::BuildFrame()
 {
 	BuildDockspace();
 
+	// Refresh replication system pointer — valid only during PIE, null otherwise.
+	{
+		WorldBase* serverWorld = (bPIEActive && ServerFlow) ? ServerFlow->GetWorld() : nullptr;
+		State.ReplicatorPtr = serverWorld ? serverWorld->GetReplicationSystem() : nullptr;
+	}
+
 	// Consume GPU pick results and update selection
 	ConsumePick();
 
@@ -427,21 +500,22 @@ void EditorContext::BuildFrame()
 		panel->Tick(State);
 	}
 
-	// Gizmo hotkeys (W=Translate, E=Rotate, R=Scale) — only when editor owns keyboard
-	if (!ImGui::GetIO().WantTextInput)
+	// Editor hotkeys — all gated behind WantTextInput so they don't fire inside text fields
+	const ImGuiIO& io = ImGui::GetIO();
+	if (!io.WantTextInput)
 	{
 		if (ImGui::IsKeyPressed(ImGuiKey_W)) State.CurrentGizmoOp = EditorState::GizmoOp::Translate;
 		if (ImGui::IsKeyPressed(ImGuiKey_E)) State.CurrentGizmoOp = EditorState::GizmoOp::Rotate;
 		if (ImGui::IsKeyPressed(ImGuiKey_R)) State.CurrentGizmoOp = EditorState::GizmoOp::Scale;
+		if (ImGui::IsKeyPressed(ImGuiKey_Z) && io.KeyCtrl && !io.KeyShift) Undo();
+		if (ImGui::IsKeyPressed(ImGuiKey_Y) && io.KeyCtrl) Redo();
 	}
-
-	// Gizmo overlay on selected entity
-	DrawGizmo();
 
 	// Modals / overlays
 	DrawFileDialog();
 	DrawImportDialog();
 	DrawUnsavedWarning();
+	DrawPrefabSaveDialog();
 
 	// PIE viewport panels
 	if (bPIEActive)
@@ -461,9 +535,8 @@ void EditorContext::BuildFrame()
 
 	// Tell Sentinel whether the engine should own input.
 	// Engine gets input when: right-click held in viewport, or Play is running.
-	const ImGuiIO& io         = ImGui::GetIO();
 	bool rightClickInViewport = ImGui::IsMouseDown(ImGuiMouseButton_Right) && ViewportPanelHovered;
-	bool playing              = (LogicPtr && !LogicPtr->IsSimPaused() && bHasSnapshot) || bPIEActive;
+	bool playing              = (LogicPtr && !LogicPtr->IsSimPaused() && bHasSnapshot) || (bPIEActive && !bPIEPaused);
 	// Escape requests PIE stop — deferred to after the ImGui frame completes
 	// so we don't free GPU resources (descriptor sets, images) mid-frame.
 	if (bPIEActive && ImGui::IsKeyPressed(ImGuiKey_Escape)) bPIEStopRequested = true;
@@ -474,6 +547,45 @@ void EditorContext::BuildFrame()
 	if (!playing) bMouseReleasedDuringPlay = false;
 	bool engineGetsInput = (rightClickInViewport || playing) && !bMouseReleasedDuringPlay;
 	EnginePtr->Render->SetEditorOwnsKeyboard(!engineGetsInput);
+}
+
+void EditorContext::PushCommand(std::unique_ptr<UndoCommand> cmd)
+{
+    // Try to merge with previous command
+    if (UndoIndex > 0)
+    {
+        auto& last = UndoStack[UndoIndex - 1];
+		if (last->MergeWith(*cmd)) return; // merged, discard new
+	}
+
+	// Truncate redo history
+	UndoStack.resize(UndoIndex);
+
+	// Push new command
+	UndoStack.push_back(std::move(cmd));
+	UndoIndex++;
+
+	// Cap size
+	if (UndoStack.size() > MaxUndo)
+	{
+		UndoStack.erase(UndoStack.begin());
+		UndoIndex--;
+	}
+}
+
+void EditorContext::Undo()
+{
+	if (!CanUndo()) return;
+	UndoStack[UndoIndex - 1]->Undo();
+	UndoIndex--;
+	// Clear selection? Leave it for now.
+}
+
+void EditorContext::Redo()
+{
+	if (!CanRedo()) return;
+	UndoStack[UndoIndex]->Execute();
+	UndoIndex++;
 }
 
 void EditorContext::BuildDockspace()
@@ -539,12 +651,13 @@ void EditorContext::ApplyDefaultLayout(unsigned int dockspaceID)
 	ImGui::DockBuilderDockWindow("Viewport", center);
 	ImGui::DockBuilderDockWindow("Details", right);
 
-	// Bottom: tabbed — Content Browser, Log, Engine Stats, Node Script, Component Generator
+	// Bottom: tabbed — Content Browser, Log, Engine Stats, Node Script, Component Generator, Debugger
 	ImGui::DockBuilderDockWindow("Content Browser", bottom);
 	ImGui::DockBuilderDockWindow("Log", bottom);
 	ImGui::DockBuilderDockWindow("Engine Stats", bottom);
 	ImGui::DockBuilderDockWindow("Node Script", bottom);
 	ImGui::DockBuilderDockWindow("Component Generator", bottom);
+	ImGui::DockBuilderDockWindow("Debugger", bottom);
 
 	ImGui::DockBuilderFinish(dockspaceID);
 }
@@ -584,6 +697,31 @@ void EditorContext::BuildMenuBar()
 			FileDialogPath     = State.CurrentScenePath;
 		}
 		ImGui::Separator();
+		if (ImGui::MenuItem("Save as Prefab...", nullptr, false,
+		                    State.Selection == EditorState::SelectionType::Entity))
+		{
+			bShowPrefabSaveDialog = true;
+
+			// Build default filename from entity's class name
+			std::string defaultName = "NewPrefab";
+			if (State.SelectedClassID != 0)
+			{
+				const auto& cfr       = ReflectionRegistry::Get();
+				std::string debugName = "UnknownClass";
+				for (const auto& entry : cfr.NameToClassID)
+				{
+					if (entry.second == State.SelectedClassID)
+					{
+						debugName = entry.first;
+						break;
+					}
+				}
+			}
+			// Prepend content directory
+			std::string contentDir = State.ConfigPtr ? std::string(State.ConfigPtr->ProjectDir) + "/content/" : "";
+			FileDialogPath         = contentDir + defaultName + ".prefab";
+		}
+		ImGui::Separator();
 		if (ImGui::MenuItem("Import Mesh...", nullptr, false, MeshMgr != nullptr))
 		{
 			bShowImportDialog = true;
@@ -596,8 +734,8 @@ void EditorContext::BuildMenuBar()
 
 	if (ImGui::BeginMenu("Edit"))
 	{
-		ImGui::MenuItem("Undo", "Ctrl+Z", false, false);
-		ImGui::MenuItem("Redo", "Ctrl+Y", false, false);
+		if (ImGui::MenuItem("Undo", "Ctrl+Z", false, CanUndo())) Undo();
+		if (ImGui::MenuItem("Redo", "Ctrl+Y", false, CanRedo())) Redo();
 		ImGui::Separator();
 
 		bool isTranslate = State.CurrentGizmoOp == EditorState::GizmoOp::Translate;
@@ -739,6 +877,17 @@ void EditorContext::BuildMenuBar()
 		{
 			StopPIE();
 		}
+		if (ImGui::MenuItem(bPIEPaused ? "Resume PIE" : "Pause PIE", nullptr, false, bPIEActive))
+		{
+			bPIEPaused = !bPIEPaused;
+			auto applyPause = [&](FlowManagerBase* flow) {
+				if (!flow) return;
+				WorldBase* w = flow->GetWorld();
+				if (w && w->GetLogicThread()) w->GetLogicThread()->SetSimPaused(bPIEPaused);
+			};
+			applyPause(ServerFlow.get());
+			for (auto& c : PIEClients) applyPause(c.Flow.get());
+		}
 
 		ImGui::EndMenu();
 	}
@@ -827,6 +976,98 @@ void EditorContext::DrawFileDialog()
 	}
 }
 
+void EditorContext::DrawPrefabSaveDialog()
+{
+	if (!bShowPrefabSaveDialog) return;
+
+	ImGui::OpenPopup("Save Prefab As");
+	ImVec2 center = ImGui::GetMainViewport()->GetCenter();
+	ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+	ImGui::SetNextWindowSize(ImVec2(500, 120), ImGuiCond_Appearing);
+
+	if (ImGui::BeginPopupModal("Save Prefab As", &bShowPrefabSaveDialog, ImGuiWindowFlags_AlwaysAutoResize))
+	{
+		char pathBuf[512];
+		snprintf(pathBuf, sizeof(pathBuf), "%s", FileDialogPath.c_str());
+
+		// Show the path relative to content directory for clarity
+		std::string relativePath;
+		if (State.ConfigPtr)
+		{
+			std::string contentDir = std::string(State.ConfigPtr->ProjectDir) + "/content/";
+			if (FileDialogPath.find(contentDir) == 0) relativePath = FileDialogPath.substr(contentDir.length());
+			else relativePath                                      = FileDialogPath;
+		}
+		ImGui::Text("Save prefab to:  %s", relativePath.c_str());
+
+		ImGui::SetNextItemWidth(-1);
+		if (ImGui::InputText("##prefabpath", pathBuf, sizeof(pathBuf))) FileDialogPath = pathBuf;
+
+		ImGui::Separator();
+		if (ImGui::Button("Save", ImVec2(120, 0)))
+		{
+			// Prepare full path with content directory and .prefab extension
+			std::string finalPath = FileDialogPath;
+
+			// Prepend content directory if not already present
+			if (State.ConfigPtr)
+			{
+				std::string contentDir = std::string(State.ConfigPtr->ProjectDir) + "/content/";
+				if (finalPath.find(contentDir) != 0) finalPath = contentDir + finalPath;
+			}
+
+			// Ensure .prefab extension
+			if (finalPath.size() < 7 || finalPath.substr(finalPath.size() - 7) != ".prefab") finalPath += ".prefab";
+
+			if (State.Selection == EditorState::SelectionType::Entity)
+			{
+				Registry* reg = State.RegistryPtr;
+
+				// Serialize entity fields
+				JsonValue components = SerializeEntityFields(reg,
+															 State.SelectedArchetype, State.SelectedChunk, State.SelectedLocalIndex);
+
+				// Wrap in prefab JSON (type + components)
+				JsonValue prefabJson = JsonValue::Object();
+				// Look up class name from ClassID
+				std::string typeName   = "Unknown";
+				const auto& archetypes = reg->GetArchetypes();
+				for (const auto& entry : archetypes)
+				{
+					if (entry.first.ID == State.SelectedClassID)
+					{
+						typeName = entry.second->DebugName;
+						break;
+					}
+				}
+				prefabJson["type"]       = JsonValue::String(typeName);
+				prefabJson["components"] = components;
+
+				std::string jsonStr = JsonWrite(prefabJson, true);
+				std::ofstream file(finalPath);
+				if (file.is_open())
+				{
+					file << jsonStr;
+					file.close();
+					LOG_ENG_INFO_F("[Editor] Saved prefab to %s", finalPath.c_str());
+				}
+				else
+					LOG_ENG_ERROR("[Editor] Failed to write prefab file");
+			}
+
+			bShowPrefabSaveDialog = false;
+			ImGui::CloseCurrentPopup();
+		}
+		ImGui::SameLine();
+		if (ImGui::Button("Cancel", ImVec2(120, 0)))
+		{
+			bShowPrefabSaveDialog = false;
+			ImGui::CloseCurrentPopup();
+		}
+		ImGui::EndPopup();
+	}
+}
+
 void EditorContext::DrawImportDialog()
 {
 	if (!bShowImportDialog) return;
@@ -906,7 +1147,7 @@ uint32_t EditorContext::ImportMeshAsset(const std::string& gltfPath)
 	const auto* dbEntry = AssetDB.FindByPath(relPath);
 	AssetID meshID      = dbEntry ? dbEntry->ID : AssetID{};
 
-	uint32_t slot = MeshMgr->RegisterMesh(asset, stem, meshID);
+	uint32_t slot = MeshMgr->LoadMesh(asset, stem, meshID);
 	if (slot != UINT32_MAX)
 	LOG_ENG_INFO_F("[Editor] Registered mesh '%s' at slot %u (AssetID: %lld)",
 				   stem.c_str(), slot, static_cast<long long>(meshID.GetUUID() >> 8));
@@ -936,7 +1177,7 @@ void EditorContext::LoadAllMeshAssets()
 			continue;
 		}
 
-		uint32_t slot = MeshMgr->RegisterMesh(asset, entry.Name, entry.ID);
+		uint32_t slot = MeshMgr->LoadMesh(asset, entry.Name, entry.ID);
 		if (slot != UINT32_MAX)
 			LOG_ENG_INFO_F("[Editor] Loaded mesh '%s' → slot %u", entry.Path.c_str(), slot);
 	}
@@ -978,7 +1219,7 @@ void EditorContext::HandleDroppedFile(const std::string& path)
 				AssetID dropID          = dropEntry ? dropEntry->ID : AssetID{};
 				std::string dropName    = dropEntry ? dropEntry->Name : p.stem().string();
 
-				uint32_t slot = MeshMgr->RegisterMesh(asset, dropName, dropID);
+				uint32_t slot = MeshMgr->LoadMesh(asset, dropName, dropID);
 				if (slot != UINT32_MAX)
 					LOG_ENG_INFO_F("[Editor] Loaded dropped mesh '%s' → slot %u", dropName.c_str(), slot);
 			}
@@ -988,6 +1229,60 @@ void EditorContext::HandleDroppedFile(const std::string& path)
 	{
 		SpawnPrefab(path);
 	}
+#ifndef TNX_HEADLESS
+	else if (ext == ".wav" || ext == ".ogg")
+	{
+		// Convert source → .tnxaudio in content/. The source file is not copied.
+		if (AudioMgr && State.ConfigPtr)
+		{
+			std::string stem    = p.stem().string();
+			std::string outPath = std::string(State.ConfigPtr->ProjectDir)
+				+ "/content/" + stem + ".tnxaudio";
+
+			if (!ExportTnxAudio(path.c_str(), outPath.c_str()))
+			{
+				LOG_ENG_ERROR_F("[Editor] ExportTnxAudio failed for: %s", path.c_str());
+			}
+			else
+			{
+				AssetDB.Reconcile();
+
+				const auto* dbEntry = AssetDB.FindByPath(stem + ".tnxaudio");
+				AssetID audioID     = dbEntry ? dbEntry->ID : AssetID{};
+				std::string name    = dbEntry ? dbEntry->Name : stem;
+
+				uint32_t slot = AudioMgr->LoadSound(outPath.c_str(), name, audioID);
+				if (slot != UINT32_MAX)
+					LOG_ENG_INFO_F("[Editor] Imported audio '%s' → slot %u", name.c_str(), slot);
+				else
+					LOG_ENG_ERROR_F("[Editor] Failed to register imported audio: %s", outPath.c_str());
+			}
+		}
+	}
+	else if (ext == ".tnxaudio")
+	{
+		// Already engine format — copy to content/ and register.
+		if (AudioMgr && State.ConfigPtr)
+		{
+			std::string destPath = std::string(State.ConfigPtr->ProjectDir)
+				+ "/content/" + p.filename().string();
+			if (path != destPath) std::filesystem::copy_file(p, destPath, std::filesystem::copy_options::overwrite_existing);
+
+			AssetDB.Reconcile();
+
+			std::string stem    = p.stem().string();
+			const auto* dbEntry = AssetDB.FindByPath(p.filename().string());
+			AssetID audioID     = dbEntry ? dbEntry->ID : AssetID{};
+			std::string name    = dbEntry ? dbEntry->Name : stem;
+
+			uint32_t slot = AudioMgr->LoadSound(destPath.c_str(), name, audioID);
+			if (slot != UINT32_MAX)
+				LOG_ENG_INFO_F("[Editor] Loaded dropped .tnxaudio '%s' → slot %u", name.c_str(), slot);
+			else
+				LOG_ENG_ERROR_F("[Editor] Failed to load dropped .tnxaudio: %s", path.c_str());
+		}
+	}
+#endif
 	else
 	{
 		LOG_ENG_WARN_F("[Editor] Unsupported drop file type: %s", ext.c_str());
@@ -1012,12 +1307,20 @@ void EditorContext::SpawnPrefab(const std::string& prefabPath)
 
 void EditorContext::DeleteSelectedEntity()
 {
-	if (State.Selection != EditorState::SelectionType::Entity) return;
+    if (State.Selection != EditorState::SelectionType::Entity) return;
 
-	// Capture selection data before clearing — Spawn lambda runs on Logic thread.
-	Chunk* chunk        = State.SelectedChunk;
+    // Capture undo data before deletion
+    Archetype* arch     = State.SelectedArchetype;
+    Chunk* chunk        = State.SelectedChunk;
 	uint16_t localIndex = State.SelectedLocalIndex;
+	//uint32_t cacheIndex    = State.SelectedCacheIndex;
+	ClassID classID = State.SelectedClassID;
+	Registry* reg   = State.RegistryPtr;
 
+	// Serialize entity state while it still exists
+	JsonValue beforeState = SerializeEntityFields(reg, arch, chunk, localIndex);
+
+	// Perform deletion as before
 	State.ClearSelection();
 
 	Registry* deleteReg = EnginePtr->GetDefaultWorld() ? EnginePtr->GetDefaultWorld()->GetRegistry() : nullptr;
@@ -1034,6 +1337,55 @@ void EditorContext::DeleteSelectedEntity()
 		LOG_ENG_INFO_F("[Editor] Deleted entity (cache index %u)", cacheIdx);
 	});
 
+	// Create and push delete command (inlined class for simplicity)
+	class UndoableDeleteCommand : public UndoCommand
+	{
+	public:
+		UndoableDeleteCommand(TrinyxEngine* engine, Registry* reg, ClassID classID, JsonValue savedState)
+			: m_Engine(engine)
+			, m_Reg(reg), m_ClassID(classID), m_SavedState(std::move(savedState)) {}
+
+		void Execute() override
+		{
+			if (m_RestoredCacheIdx == UINT32_MAX) return;
+			uint32_t cacheIdx  = m_RestoredCacheIdx;
+			m_RestoredCacheIdx = UINT32_MAX;
+			m_Engine->Spawn([reg = m_Reg, cacheIdx](uint32_t)
+			{
+				GlobalEntityHandle gh = reg->FindEntityByLocation(static_cast<EntityCacheHandle>(cacheIdx));
+				if (gh.GetIndex() == 0)
+				{
+					LOG_ENG_WARN("[Editor] Redo delete: entity not found");
+					return;
+				}
+				reg->DestroyByGlobalHandle(gh);
+			});
+		}
+
+		void Undo() override
+		{
+			m_Engine->Spawn([this](uint32_t)
+			{
+				EntityHandle handle = m_Reg->CreateByClassID(m_ClassID);
+				EntityRecord record = m_Reg->GetRecord(handle);
+				if (record.IsValid())
+				{
+					DeserializeEntityFields(m_Reg, record.Arch, record.TargetChunk, record.LocalIndex, m_SavedState);
+					MarkEntityDirty(m_Reg, record.Arch, record.TargetChunk, record.LocalIndex);
+					m_RestoredCacheIdx = record.TargetChunk->Header.CacheIndexStart + record.LocalIndex;
+				}
+			});
+		}
+
+	private:
+		TrinyxEngine* m_Engine;
+		Registry* m_Reg;
+		ClassID m_ClassID;
+		JsonValue m_SavedState;
+		uint32_t m_RestoredCacheIdx = UINT32_MAX;
+	};
+
+	PushCommand(std::make_unique<UndoableDeleteCommand>(EnginePtr, reg, classID, std::move(beforeState)));
 	State.bSceneDirty = true;
 }
 
@@ -1219,11 +1571,10 @@ void EditorContext::StartPIE()
 	JsonValue sceneJson = EntityBuilder::SerializeScene(editorReg, "PIE");
 
 	// Build server and client configs from the game config (no editor overrides)
-	ServerConfig      = *EnginePtr->GetGameConfig();
-	ServerConfig.Mode = bServerVisible ? EngineMode::ListenServer : EngineMode::Server;
+	ServerConfig = *EnginePtr->GetGameConfig();
 
 	// Create server flow (owns server world + constructs)
-	ServerFlow = std::make_unique<FlowManager>();
+	ServerFlow = std::make_unique<PIEServerFlow>();
 	ServerFlow->Initialize(EnginePtr, &ServerConfig, 960, 540);
 	if (!ServerFlow->CreateWorld())
 	{
@@ -1231,17 +1582,17 @@ void EditorContext::StartPIE()
 		ServerFlow.reset();
 		return;
 	}
-	World* ServerWorld = ServerFlow->GetWorld();
+	WorldBase* AuthorityWorld = ServerFlow->GetWorld();
 
 	// Load scene into server world via spawn handshake
-	ServerWorld->SetJobsInitialized(true);
+	AuthorityWorld->SetJobsInitialized(true);
 
 	// Allocate server viewport (if visible)
 	EditorRenderer* renderer = EnginePtr->GetRenderer();
 	if (bServerVisible)
 	{
 		ServerViewport              = std::make_unique<WorldViewport>();
-		ServerViewport->TargetWorld = ServerWorld;
+		ServerViewport->TargetWorld = AuthorityWorld;
 		renderer->AllocateViewportResources(ServerViewport.get(), 960, 540);
 		renderer->AddViewport(ServerViewport.get());
 	}
@@ -1251,9 +1602,8 @@ void EditorContext::StartPIE()
 	for (int ci = 0; ci < PIEClientCount; ++ci)
 	{
 		PIEClient client;
-		client.Config      = *EnginePtr->GetGameConfig();
-		client.Config.Mode = EngineMode::Client;
-		client.Flow        = std::make_unique<FlowManager>();
+		client.Config = *EnginePtr->GetGameConfig();
+		client.Flow   = std::make_unique<PIEClientFlow>();
 		client.Flow->Initialize(EnginePtr, &client.Config, 960, 540);
 		if (!client.Flow->CreateWorld())
 		{
@@ -1274,7 +1624,7 @@ void EditorContext::StartPIE()
 			ServerFlow.reset();
 			return;
 		}
-		World* clientWorld = client.Flow->GetWorld();
+		WorldBase* clientWorld = client.Flow->GetWorld();
 		clientWorld->SetJobsInitialized(true);
 
 		client.Viewport              = std::make_unique<WorldViewport>();
@@ -1340,8 +1690,15 @@ void EditorContext::StartPIE()
 	}
 
 	// Wire the server world pointer before clients connect so that ConnectionHandshake
-	// processing (EnsurePlayerInputSlot) finds a valid ServerWorld.
-	net->SetServerWorld(ServerFlow->GetWorld());
+	// processing (EnsurePlayerInputSlot) finds a valid AuthorityWorld.
+	net->SetAuthorityWorld(ServerFlow->GetWorld());
+
+	// ReplicationSystem must exist before the pump loop — HandshakeRequest → GenerateNetID
+	// → CreateInputLog → Replicator->OpenChannel fires during the pump, not after.
+	Replicator = std::make_unique<ReplicationSystem>();
+	Replicator->Initialize(ServerFlow->GetWorld());
+	ServerFlow->GetWorld()->SetReplicationSystem(Replicator.get());
+	net->SetReplicationSystem(Replicator.get());
 
 	// Connect each client via loopback and discover server-side handles
 	std::vector<uint32_t> knownHandles;
@@ -1420,20 +1777,14 @@ void EditorContext::StartPIE()
 				LOG_ENG_WARN_F("[PIE] OwnerID never assigned for client %zu server handle %u", i, serverHandle);
 
 			// Promote client entry: wire world to the now-known OwnerID.
-			PIEClients[i].Flow->GetWorld()->LocalOwnerID = ownerID;
+			PIEClients[i].Flow->GetWorld()->SetLocalOwnerID(ownerID);
 			net->UpdateClientOwnerID(clientHandle, ownerID, PIEClients[i].Flow->GetWorld());
 		}
 	}
 
-	net->GetServer().WirePlayerInputInjector(ServerFlow->GetWorld());
+	net->GetAuthority().WireNetMode(ServerFlow->GetWorld());
 
-	Replicator = std::make_unique<ReplicationSystem>();
-	Replicator->Initialize(ServerFlow->GetWorld());
-	ServerFlow->GetWorld()->SetReplicationSystem(Replicator.get());
-	net->SetReplicationSystem(Replicator.get());
-
-	// Start the shared net thread (polls connections at NetworkUpdateHz)
-	if (!net->IsRunning()) net->Start();
+	// PIENetThread is now driven by the Sentinel main loop — no Start() needed.
 
 	if (EnginePtr->OnPIEStarted.IsBound())
 		EnginePtr->OnPIEStarted(ServerFlow->GetWorld(), connMgr);
@@ -1461,6 +1812,7 @@ void EditorContext::StartPIE()
 	bPrePIESimWasPaused = !LogicPtr || LogicPtr->IsSimPaused();
 	if (LogicPtr) LogicPtr->SetSimPaused(true);
 
+	bPIEPaused = false;
 	bPIEActive = true;
 	State.ClearSelection();
 	LOG_ENG_INFO_F("[PIE] Started: 1 server%s + %zu client(s), port %u",
@@ -1477,13 +1829,6 @@ void EditorContext::StopPIE()
 
 	EditorRenderer* renderer = EnginePtr->GetRenderer();
 
-	// 1. Stop and join all PIE worlds via FlowManagers
-	for (auto& client : PIEClients) client.Flow->StopWorld();
-	ServerFlow->StopWorld();
-
-	for (auto& client : PIEClients) client.Flow->JoinWorld();
-	ServerFlow->JoinWorld();
-
 	// 2. Tear down PIE networking
 	PIENetThread* net = EnginePtr->GetNetThread();
 	if (net)
@@ -1496,12 +1841,8 @@ void EditorContext::StopPIE()
 		)
 		ServerFlow->GetWorld()->SetReplicationSystem(nullptr);
 
-		// Stop net thread so we can safely manipulate connections
-		if (net->IsRunning())
-		{
-			net->Stop();
-			net->Join();
-		}
+		// PIENetThread is Sentinel-driven — no Stop/Join needed.
+		// Connections are closed below; PumpMessages will drain remaining messages.
 
 		NetConnectionManager* connMgr = net->GetConnectionManager();
 
@@ -1526,11 +1867,11 @@ void EditorContext::StopPIE()
 
 		// Clear all client handler registrations
 		net->ClearClients();
-		net->SetServerWorld(nullptr);
+		net->SetAuthorityWorld(nullptr);
 
 		connMgr->StopListening();
 	}
-
+	
 	// 3. Remove viewports from renderer and free GPU resources
 	renderer->WaitForGPU(); // Ensure in-flight frames finish before destroying images/descriptors
 	for (auto& client : PIEClients)
@@ -1544,13 +1885,33 @@ void EditorContext::StopPIE()
 		renderer->FreeViewportResources(ServerViewport.get());
 	}
 
-	// 4. Shutdown and destroy worlds (FlowManager destructors handle World shutdown)
+	// 4. Drain in-flight replication build jobs before destroying anything they point to.
+	// DispatchFrameJobs() dispatches worker-pool jobs that capture raw pointers into
+	// the ReplicationSystem (channels, Stats) and world slab data. Freeing those objects
+	// while jobs are still running causes use-after-free writes that corrupt Jolt's
+	// internal memory, producing the Jolt BodyID crash at teardown.
+	if (Replicator) Replicator->WaitForBuildJobs();
+
+	// 5. Resume any paused PIE logic threads so they can exit their fixed loop cleanly.
+	if (bPIEPaused)
+	{
+		auto resume = [](FlowManagerBase* flow) {
+			if (!flow) return;
+			WorldBase* w = flow->GetWorld();
+			if (w && w->GetLogicThread()) w->GetLogicThread()->SetSimPaused(false);
+		};
+		resume(ServerFlow.get());
+		for (auto& c : PIEClients) resume(c.Flow.get());
+		bPIEPaused = false;
+	}
+
+	// 6. Shutdown and destroy worlds (FlowManager destructors handle World shutdown)
 	PIEClients.clear();
 	Replicator.reset();
 	ServerViewport.reset();
 	ServerFlow.reset();
 
-	// 5. Restore editor world to its pre-PIE sim state
+	// 7. Restore editor world to its pre-PIE sim state
 	if (LogicPtr) LogicPtr->SetSimPaused(bPrePIESimWasPaused);
 
 	bPIEActive = false;
@@ -1595,6 +1956,7 @@ void EditorContext::DrawEditorViewportPanel()
 				ImGui::EndDragDropTarget();
 			}
 		}
+		DrawGizmo();
 	}
 	ImGui::End();
 	ImGui::PopStyleVar();

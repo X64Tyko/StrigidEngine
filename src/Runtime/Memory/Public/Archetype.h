@@ -1,29 +1,32 @@
 #pragma once
-#include "Types.h"
-#include "Signature.h"
-#include "Chunk.h"
+#include <cstdint>
 #include <span>
 #include <unordered_map>
 #include <vector>
+#include "Types.h"
+#include "Signature.h"
+#include "Chunk.h"
 #include "ComponentView.h"
 #include "FieldMeta.h"
 #include "FlatMap.h"
 #include "Schema.h"
 
+class ComponentCacheBase;
+
 // Archetype — manages storage for all entities sharing a (Signature, ClassID) pair.
 //
 // Each archetype owns a list of Chunks (dense, 64-byte aligned allocations) and a
 // ArchetypeFieldLayout table (FlatMap<FieldKey, FieldDescriptor>) that is the single
-// source of truth for every field's slot index, cache tier, frame count, and stride.
+// source of truth for every field's slot index, cache tier, and element size.
 //
 // Fields may live in three places depending on their CacheTier:
 //   Temporal/Volatile — SoA ring buffer in the corresponding ComponentCache slab.
 //                       FieldPtrs[] in the chunk header point into the slab.
 //   Cold (None)       — SoA arrays packed directly inside the chunk allocation.
 //
-// BuildFieldArrayTable / BuildFieldDualArrayTable resolve frame indices using pure
-// arithmetic: `base + (frame % frameCount) * frameStride`. Cold fields degenerate
-// to `base + 0` (frameCount=1, frameStride=0) — no tier branching needed.
+// BuildFieldArrayTable / BuildFieldDualArrayTable resolve frame indices using the
+// cache's frame stride and count (queried once per call, not stored per-field).
+// Cold fields degenerate to base+0 — no tier branching needed in the hot loops.
 //
 // Lifetime: Registry owns all Archetype instances. Only Registry calls BuildLayout,
 // PushEntities, and RemoveEntity.
@@ -93,6 +96,10 @@ public:
 	std::vector<EntitySlot> ActiveEntitySlots;
 	std::vector<EntitySlot> InactiveEntitySlots;
 
+	// Exact live entity count per chunk — updated by PushEntities and RemoveEntity.
+	// DefragSystem reads this to identify trailing chunks that are fully empty.
+	std::vector<uint32_t> ChunkLiveCounts;
+
 	// Get all field array base pointers for a given component type within a chunk (frame 0).
 	std::vector<void*> GetFieldArrays(Chunk* targetChunk, ComponentTypeID typeId);
 
@@ -130,8 +137,6 @@ public:
 		FieldValueType valueType = FieldValueType::Unknown;
 		AssetType refAssetType   = AssetType::Invalid; // Non-Invalid = asset reference field
 		size_t fieldSize;        // Size of one element (e.g. 4 for float)
-		size_t fieldFrameCount;  // Frame count in cache ring (1 for cold)
-		size_t fieldFrameStride; // Bytes between frame N and frame N+1 (0 for cold)
 		bool bIsTemporal;        // True if stored in temporal/volatile slab
 	};
 
@@ -152,39 +157,36 @@ public:
 
 	// Build interleaved dual field array table (read T, write T+1) for FieldProxy::Bind()
 	// Output layout: [read0, write0, read1, write1, read2, write2, ...]
-	// absoluteFrame/VolatileAbsoluteFrame: raw monotonic frame counters — each field computes
-	// its own modular read/write indices from its FrameCount, so Volatile (triple-buffer) and
-	// Temporal (N-frame) fields in the same archetype work correctly.
-	// Cold fields use frameCount=1, frameStride=0 so the math degenerates to base+0 (branchless).
-	void BuildFieldDualArrayTable(Chunk* chunk, void** outDualArrayTable, uint32_t absoluteFrame, uint32_t volatileAbsoluteFrame) const
-	{
-		for (const auto& [fkey, fdesc] : ArchetypeFieldLayout)
-		{
-			size_t idx        = fdesc.fieldSlotIndex;
-			auto* base        = static_cast<uint8_t*>(chunk->Header.FieldPtrs[idx]);
-			uint32_t frame    = (fdesc.tier == CacheTier::Temporal ? absoluteFrame : volatileAbsoluteFrame);
-			uint32_t readIdx  = frame % fdesc.fieldFrameCount;
-			uint32_t writeIdx = (frame + 1) % fdesc.fieldFrameCount;
-
-			outDualArrayTable[idx * 2]     = base + readIdx * fdesc.fieldFrameStride;
-			outDualArrayTable[idx * 2 + 1] = base + writeIdx * fdesc.fieldFrameStride;
-		}
-	}
+	// absoluteFrame/volatileAbsoluteFrame: raw monotonic frame counters — each field computes
+	// its own modular read/write indices from the cache's frame count, so Volatile (triple-buffer)
+	// and Temporal (N-frame) fields in the same archetype work correctly.
+	// Cold fields resolve to base+0 (stride=0, count=1 — no branching in the loop).
+	void BuildFieldDualArrayTable(Chunk* chunk, void** outDualArrayTable, uint32_t absoluteFrame, uint32_t volatileAbsoluteFrame) const;
 
 	// Build single field array table for a specific frame (used by update dispatch, serialization).
-	// Cold fields use frameCount=1, frameStride=0 so the math degenerates to base+0 (branchless).
-	void BuildFieldArrayTable(Chunk* chunk, void** outFieldArrayTable, uint32_t absoluteFrame, uint32_t volatileAbsoluteFrame) const
-	{
-		for (const auto& [fkey, fdesc] : ArchetypeFieldLayout)
-		{
-			size_t idx              = fdesc.fieldSlotIndex;
-			auto* base              = static_cast<uint8_t*>(chunk->Header.FieldPtrs[idx]);
-			uint32_t frame          = (fdesc.tier == CacheTier::Temporal ? absoluteFrame : volatileAbsoluteFrame);
-			outFieldArrayTable[idx] = base + (frame % fdesc.fieldFrameCount) * fdesc.fieldFrameStride;
-		}
-	}
+	// Cold fields resolve to base+0.
+	void BuildFieldArrayTable(Chunk* chunk, void** outFieldArrayTable, uint32_t absoluteFrame, uint32_t volatileAbsoluteFrame) const;
 
 	size_t GetFieldArrayCount() const { return ArchetypeFieldLayout.count(); }
+
+	// Fill outSlots[0..N-1] with the flat field-table slot indices (into the array produced by
+	// BuildFieldArrayTable) for all fields of typeID, in DefineFields() order.
+	// Returns the field count, or 0 if the component is not in this archetype.
+	// outSlots must have room for at least maxSlots entries (use MAX_TEMPORAL_FIELDS_PER_COMPONENT).
+	uint32_t GetComponentFieldSlotIndices(ComponentTypeID typeID, uint8_t* outSlots, uint32_t maxSlots) const
+	{
+		uint8_t cacheSlot = ReflectionRegistry::Get().GetCacheSlotIndex(typeID);
+		uint32_t count = 0;
+		for (uint32_t fi = 0; fi < maxSlots; ++fi)
+		{
+			FieldKey key{ typeID, cacheSlot, fi };
+			const FieldDescriptor* desc = ArchetypeFieldLayout.find(key);
+			if (!desc) break;
+			outSlots[fi] = desc->fieldSlotIndex;
+			++count;
+		}
+		return count;
+	}
 
 private:
 	friend class Registry;
@@ -196,6 +198,14 @@ private:
 	// Entity slot allocation / removal — only Registry drives these.
 	void PushEntities(std::span<EntitySlot> outSlots);
 	void RemoveEntity(size_t chunkIndex, uint32_t localIndex, uint32_t archetypeIdx);
+
+	// Move one live entity from src to dst (dst must be an inactive slot).
+	// Copies all field data: cold fields inline in the chunk, temporal/volatile
+	// fields across all frames in the slab ring buffer.
+	// Does NOT update Registry records or slot lists — Registry::ExecuteDefragMove handles that.
+	void MoveEntitySlot(const EntitySlot& src, const EntitySlot& dst,
+	                    ComponentCacheBase* temporalCache,
+	                    ComponentCacheBase* volatileCache);
 
 	// Layout construction — called once by Registry after component metadata is known.
 	void BuildLayout(class Registry* reg, const std::vector<ComponentMetaEx>& components, SystemID inArchSystemID = SystemID::None);
