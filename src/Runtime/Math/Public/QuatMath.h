@@ -15,11 +15,12 @@
 // methods on TransRot / Rotation components instead (RotateX, RotateY, etc.).
 namespace QuatMath
 {
-	// Intermediate storage: float in Scalar, __m256 in Wide/WideMask.
+	// Intermediate storage: float in Scalar, ISA vector type in Wide/WideMask.
 	template <FieldWidth WIDTH>
 	struct QuatLocal
 	{
-		using Val = std::conditional_t<WIDTH == FieldWidth::Scalar, SimFloat, __m256>;
+		using Val = std::conditional_t<WIDTH == FieldWidth::Scalar, SimFloat, typename SIMDTraits<SimFloat,
+			WIDTH>::VecType>;
 		Val x, y, z, w;
 	};
 
@@ -75,11 +76,10 @@ FORCE_INLINE void Store(
 			r.z = a.z * bw + a.w * bz + a.x * by - a.y * bx;
 			r.w = a.w * bw - a.x * bx - a.y * by - a.z * bz;
 		}
-		else
-		{
-			using T         = SIMDTraits<SimFloat, WIDTH>;
-			const __m256 Bx = T::set1(bx), By = T::set1(by);
-			const __m256 Bz = T::set1(bz), Bw = T::set1(bw);
+		else {
+			using T = SIMDTraits<SimFloat, WIDTH>;
+			const typename T::VecType Bx = T::set1(bx), By = T::set1(by);
+			const typename T::VecType Bz = T::set1(bz), Bw = T::set1(bw);
 
 			// r.x = a.x*Bw + a.w*Bx + a.y*Bz - a.z*By
 			r.x = T::add(T::add(T::mul(a.x, Bw), T::mul(a.w, Bx)),

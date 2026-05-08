@@ -196,7 +196,7 @@ private:
 
 	const EngineConfig* ConfigPtr = nullptr;
 	std::vector<uint64_t> LiveEntityBits; // Bitplane: 1 bit per entity index, reused across FlushPendingBodies calls
-	alignas(16) std::vector<float> fieldScratch[7];
+	alignas(FIELD_ARRAY_ALIGNMENT) std::vector<float> fieldScratch[7];
 	TrinyxJobs::JobCounter JoltPhysCounter;
 
 	struct SyncPair
