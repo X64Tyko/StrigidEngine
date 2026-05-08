@@ -14,7 +14,6 @@ void DebuggerPanel::Draw(EditorState& state)
 	// --- Sample net stats (only on new frames to avoid duplicate ring entries) ---
 	float corrBytes    = 0.f;
 	float deltaBytes   = 0.f;
-	float deltaEnts    = 0.f;
 	float dirtyEnts    = 0.f;
 	float logicMs      = 0.f;
 	float fixedMs      = 0.f;
@@ -31,7 +30,6 @@ void DebuggerPanel::Draw(EditorState& state)
 			LastFrameNumber = frame;
 			corrBytes   = static_cast<float>(s.StateCorrectionBytes.load(std::memory_order_relaxed));
 			deltaBytes  = static_cast<float>(s.EntityDeltaBytes.load(std::memory_order_relaxed));
-			deltaEnts   = static_cast<float>(s.EntityDeltaEntityCount.load(std::memory_order_relaxed));
 			dirty       = s.DirtyEntityCount;
 			dirtyEnts   = static_cast<float>(dirty);
 			activeChannels = s.ActiveChannelCount;
