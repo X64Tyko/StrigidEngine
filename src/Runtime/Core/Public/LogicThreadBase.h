@@ -131,7 +131,7 @@ public:
 	void SetEarliestValidRollbackFrame(uint32_t frame)
 	{
 		assert(frame != 0 && "EarliestValidRollbackFrame must be a real frame number");
-		const uint32_t prev = EarliestValidRollbackFrame.load(std::memory_order_relaxed);
+		[[maybe_unused]] const uint32_t prev = EarliestValidRollbackFrame.load(std::memory_order_relaxed);
 		assert(frame > prev && "EarliestValidRollbackFrame must advance monotonically");
 		EarliestValidRollbackFrame.store(frame, std::memory_order_relaxed);
 	}
