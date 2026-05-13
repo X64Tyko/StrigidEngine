@@ -12,11 +12,15 @@
 #include "TrinyxMPSCRing.h"
 #include "Types.h"
 
+/** @addtogroup core
+ *  @{
+ */
+
 template <typename, typename, typename>
 class World;
 
-// Headers needed by LogicThread.cpp method bodies (pulled in via this header
-// since explicit instantiations in LogicThread.cpp include LogicThread.h):
+// Headers needed by LogicThread.cpp explicit-instantiation TU — pulled in here
+// because LogicThread.cpp includes LogicThread.h to instantiate all specializations.
 #include "CameraManager.h"
 #include "ConstructRegistry.h"
 #include "EngineConfig.h"
@@ -26,9 +30,8 @@ class World;
 #include "Profiler.h"
 #include "ThreadPinning.h"
 
-// Net policies — included AFTER Registry.h to avoid incomplete-type errors in
-// their inline template bodies (ReplicationSystem.h uses Registry internals).
-// These headers define AuthoritySim, OwnerSim, SoloSim (via NetPolicy.h).
+// Net policies included after Registry.h — their template bodies reference
+// ReplicationSystem, which in turn uses Registry internals.
 #include "AuthoritySim.h"
 #include "OwnerSim.h"
 
@@ -42,15 +45,20 @@ class World;
 #include <cstring>
 
 /**
- * LogicThread<TNet, TRollback, TFrame> — The Brain.
+ * @brief The Brain — fixed-timestep simulation coordinator for one World.
  *
- * Three policy axes control behaviour:
- *   TNet      — OnSimInput / OnFramePublished dispatch (SoloSim / AuthoritySim / OwnerSim)
- *   TRollback — NoRollback (zero overhead) or RollbackSim (N-frame ring + correction queues)
- *   TFrame    — GameFrame (production) or EditorFrame (TickPause support)
+ * Three independent compile-time policy axes produce exactly one concrete type:
  *
- * All method bodies live in LogicThread.cpp; explicit instantiations at the
- * bottom of that file compile all three needed specializations.
+ * @tparam TNet      Input injection and replication dispatch.
+ *                   `SoloSim` (offline) | `AuthoritySim` (server/Host) | `OwnerSim` (client).
+ * @tparam TRollback Correction history.
+ *                   `NoRollback` (zero overhead) | `RollbackSim` (N-frame ring + queues).
+ * @tparam TFrame    Editor branching.
+ *                   `GameFrame` (shipping) | `EditorFrame` (PIE / tick-pause).
+ *
+ * All method bodies live in `LogicThread.cpp`; explicit instantiations there are
+ * the only definitions. External code holds `LogicThreadBase*` to avoid coupling
+ * to a specific specialization.
  */
 template <typename TNet, typename TRollback, typename TFrame>
 class LogicThread : public LogicThreadBase
@@ -59,20 +67,25 @@ public:
 	LogicThread()           = default;
 	~LogicThread() override = default;
 
+	/**
+	 * @brief Bind all non-owning pointers and prepare the thread for Start().
+	 * @param worldQueue  World-scoped job queue handle; Brain submits pre/post-physics jobs here.
+	 * @param jobsInitialized Engine jobs-ready gate; Brain spins on this before draining the queue.
+	 */
 	void Initialize(Registry* registry, const EngineConfig* config, JoltPhysics* physics,
 					InputBuffer* simInput, InputBuffer* vizInput,
 					TrinyxJobs::WorldQueueHandle worldQueue,
 					const std::atomic<bool>* jobsInitialized,
 					int windowWidth, int windowHeight) override;
 
-	void Start() override;
-	void Stop() override;
-	void Join() override;
+	void Start() override; ///< @brief Spawn the Brain thread and begin the fixed-rate loop.
+	void Stop()  override; ///< @brief Signal the Brain thread to exit after the current frame.
+	void Join()  override; ///< @brief Block the caller until the Brain thread exits.
 
-	/// Accessor used by AuthorityNet::WireNetMode / OwnerNet::WireNetMode to
-	/// initialize the net policy after world creation.
+	/// @brief Expose the concrete net policy so AuthorityNet/OwnerNet can call Bind() after world creation.
 	TNet& GetNetMode() { return NetMode; }
 
+	/// @brief Physics sub-step divisor derived from EngineConfig at Initialize time.
 	uint32_t GetPhysicsDivizor() const { return PhysicsDivizor; }
 
 private:
@@ -97,17 +110,17 @@ private:
 	bool FixedUpdate(uint64_t perfFrequency, SimFloat fixedStepTime, int maxPhysSubSteps,
 					 uint64_t frameStartCounter);
 
-	[[no_unique_address]] TNet NetMode;
-	[[no_unique_address]] TRollback Rollback;
-	[[no_unique_address]] TFrame FrameMode;
+	[[no_unique_address]] TNet      NetMode;   ///< Net policy — zero size for SoloSim.
+	[[no_unique_address]] TRollback Rollback;  ///< Rollback policy — zero size for NoRollback.
+	[[no_unique_address]] TFrame    FrameMode; ///< Frame policy — zero size (tag type only).
 };
 
 #ifdef TNX_ENABLE_ROLLBACK
 #include "Policies/RollbackImpl.h"
 #endif
 
-// Explicit instantiations live in LogicThread.cpp. Suppress implicit
-// instantiation in all other TUs so the LogicThread<> vtable has exactly one home.
+// Explicit instantiations live in LogicThread.cpp. Suppress implicit instantiation
+// in all other TUs so LogicThread<>'s vtable has exactly one home.
 // AuthoritySim/OwnerSim variants depend on Net/Private symbols and only exist
 // when networking is enabled.
 extern template class LogicThread<SoloSim, NoRollback, GameFrame>;
@@ -122,3 +135,5 @@ extern template class LogicThread<AuthoritySim, RollbackSim, GameFrame>;
 extern template class LogicThread<OwnerSim, RollbackSim, GameFrame>;
 #endif
 #endif
+
+/** @} */

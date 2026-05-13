@@ -505,7 +505,7 @@ case NetMessageType::StreamReady:
 
 	Soul* soul = (AuthorityWorld && AuthorityWorld->GetFlowManager())
 		? AuthorityWorld->GetFlowManager()->GetSoul(ci->OwnerID) : nullptr;
-	LOG_NET_INFO_F(soul, "[ServerNet] StreamReady (assetID=%ld, inst=%u, ownerID=%u) — call SendChunkActivate when ready",
+	LOG_NET_INFO_F(soul, "[ServerNet] StreamReady (assetID=%Id, inst=%u, ownerID=%u) — call SendChunkActivate when ready",
 				   pl->AssetID, static_cast<unsigned>(pl->InstanceIndex), ci->OwnerID);
 
 	if (AuthorityWorld && AuthorityWorld->GetFlowManager())

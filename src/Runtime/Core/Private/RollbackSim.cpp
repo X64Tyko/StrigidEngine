@@ -86,6 +86,15 @@ void RollbackSim::EnqueuePredictedCorrections(std::vector<EntityTransformCorrect
 
 void RollbackSim::EnqueueSpawnRollback(LogicThreadBase& logic, uint32_t clientFrame)
 {
+	// Never roll back before the level load frame — that snapshot is empty (no geometry bodies).
+	const uint32_t floor = logic.EarliestValidRollbackFrame.load(std::memory_order_relaxed);
+	if (floor != 0 && clientFrame < floor)
+	{
+		LOG_ENG_INFO_F("[RollbackSim] EnqueueSpawnRollback: clamping target frame %u → %u (level load floor)",
+					   clientFrame, floor);
+		clientFrame = floor;
+	}
+
 	// Warn and skip — ring can't reach that far back.
 	if (logic.TemporalCache && logic.FrameNumber > logic.TemporalCache->GetTotalFrameCount())
 	{

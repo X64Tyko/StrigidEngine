@@ -1,0 +1,44 @@
+/*
+ * Trinyx theme — royal purple / midnight blue accent on m.css dark base.
+ * Single accent, used at key touch-points only. Everything else defers to the dark base.
+ *
+ * violet-500  #8b5cf6  primary accent
+ * violet-400  #a78bfa  hover / lighter variant
+ * violet-700  #6d28d9  active / pressed
+ */
+
+/* ---- Typography --------------------------------------------------------- */
+body {
+    font-family: 'Inter', system-ui, -apple-system, sans-serif;
+}
+code, pre, .m-code {
+    font-family: 'JetBrains Mono', 'Fira Code', monospace;
+    font-size: 0.875em;
+}
+
+/* ---- Links -------------------------------------------------------------- */
+a, a:link        { color: #8b5cf6; }
+a:visited        { color: #8b5cf6; }
+a:hover, a:focus { color: #a78bfa; }
+
+/* ---- Active nav item ---------------------------------------------------- */
+nav#m-navbar .m-col-l a.m-current,
+nav#m-navbar .m-col-r a.m-current { color: #8b5cf6; }
+
+/* ---- Primary colour utility (labels, badges) ---------------------------- */
+.m-primary              { color: #8b5cf6 !important; }
+.m-label.m-primary,
+.m-button.m-primary     { background-color: #6d28d9; border-color: #6d28d9; }
+
+/* ---- Highlighted code line ---------------------------------------------- */
+pre.m-code .hll { background-color: rgba(139, 92, 246, 0.10); }
+
+/* ---- Info banner accent ------------------------------------------------- */
+.m-note.m-info { border-left-color: #8b5cf6; }
+
+/* ---- Symbol detail section headings ------------------------------------- */
+.m-doc-details > h3,
+.m-doc-details > h4 { color: #8b5cf6; }
+
+/* ---- Search box focus --------------------------------------------------- */
+#m-search-input:focus { border-color: #8b5cf6; outline: none; }

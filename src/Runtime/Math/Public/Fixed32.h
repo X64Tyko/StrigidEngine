@@ -5,6 +5,10 @@
 
 #include "Globals.h" // FixedUnitsPerMeter
 
+/** @addtogroup math
+ *  @{
+ */
+
 // Fixed32 — 32-bit fixed-point scalar for deterministic simulation.
 //
 // Encoding: 1 unit = 0.1mm. 10,000 units = 1m. int32 range = ±214km.
@@ -396,3 +400,5 @@ constexpr Fixed32 FixedSqrt(Fixed32 x)
 	}
 	return Fixed32::FromRaw(static_cast<int32_t>(r));
 }
+
+/** @} */

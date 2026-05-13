@@ -7,6 +7,10 @@
 #include "SchemaValidation.h"
 #include "SIMDTraits.h" // SIMDTraits, FieldMask, kSIMDWide32Lanes
 
+/** @addtogroup core
+ *  @{
+ */
+
 template <typename T, typename FIELDTYPE, typename VECTYPE>
 concept ProxyType = std::is_same_v<std::remove_cvref_t<T>, SimFloat> || std::is_same_v<std::remove_cvref_t<T>, FIELDTYPE> || std::is_same_v<std::remove_cvref_t<T>, VECTYPE> || SchemaValidation::IsFieldProxy<std::remove_cvref_t<T>>::value;
 
@@ -415,3 +419,5 @@ struct FieldProxy : private FieldProxyMask<WIDTH>
 		}
 	}
 };
+
+/** @} */

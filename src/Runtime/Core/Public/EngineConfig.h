@@ -1,148 +1,109 @@
-﻿#pragma once
+#pragma once
 #include <algorithm>
 
 #include "Types.h"
 
+/** @addtogroup core
+ *  @{
+ */
+
+/**
+ * @brief Runtime configuration for a TrinyxEngine instance.
+ *
+ * Loaded from INI files at startup with cascading precedence (most-specific wins):
+ * - Game: `{ProjectName}Defaults.ini` → `TrinyxDefaults.ini` → compiled defaults
+ * - Editor overlay: `EditorDefaults.ini` → game config fills gaps
+ *
+ * All integer fields use @ref Unset as a sentinel meaning "not set; use compiled default."
+ * Call @c ApplyDefaults() after loading to resolve all sentinels before use.
+ */
 struct EngineConfig
 {
-	// Sentinel value for int fields — means "not yet set by any config file".
-	static constexpr int Unset = -1;
+	static constexpr int Unset = -1; ///< Sentinel: field has not been assigned by any config file.
 
-	// ---------------------------------------------------------------------------
-	// Cascading config loading — most-specific file wins.
-	// Each file only fills fields still at sentinel; it never overrides.
-	// ---------------------------------------------------------------------------
-
-	// Game config: {ProjectName}Defaults.ini (projectDir) → TrinyxDefaults.ini (engineDir) → compiled defaults.
-	// Derives project name from the directory name. Walks up from projectDir to find TrinyxDefaults.ini.
+	/**
+	 * @brief Load the cascading game config for @p projectDir.
+	 *
+	 * Walks `{ProjectName}Defaults.ini` → `TrinyxDefaults.ini` → compiled defaults.
+	 * Project name is derived from the directory name.
+	 */
 	static EngineConfig LoadProjectConfig(const char* projectDir);
 
-	// Editor config: EditorDefaults.ini (projectDir) → EditorDefaults.ini (engineDir) → game config fills gaps.
-	// Call after LoadProjectConfig; pass the game config so it fills any remaining holes.
+	/**
+	 * @brief Load the editor config overlay on top of @p gameConfig.
+	 *
+	 * Walks `EditorDefaults.ini` (projectDir) → `EditorDefaults.ini` (engineDir) → @p gameConfig fills gaps.
+	 * @param gameConfig Game config to fall back to for fields not set by editor INI files.
+	 */
 	static EngineConfig LoadEditorConfig(const char* projectDir, const EngineConfig& gameConfig);
 
-	// Load a single INI file; writes compiled defaults and returns them if the file does not exist.
+	/**
+	 * @brief Load a single INI file into a config struct.
+	 * @return Compiled defaults if the file does not exist.
+	 */
 	static EngineConfig LoadFromFile(const char* path);
 
-	// Fill any Unset int fields and empty string fields from `other`.
+	/// @brief Copy all @c Unset int fields and empty strings from @p other into this config.
 	void FillFrom(const EngineConfig& other);
 
-	// Replace remaining Unset/empty fields with compiled-in defaults.
+	/// @brief Replace all remaining @c Unset / empty fields with compiled-in defaults.
 	void ApplyDefaults();
 
-	// Headless mode: no window, no renderer, no GPU. Set via --headless CLI arg,
-	// TNX_HEADLESS compile-time define, or implied by TNX_NET_MODEL=Server.
-	bool Headless = false;
+	bool Headless            = false; ///< No window, renderer, or GPU. Implied by `TNX_NET_MODEL=Server`.
+	bool EnableThreadPinning = true;  ///< Assign threads to specific cores for reduced jitter. Disable in PIE.
 
-	// Thread pinning: assign threads to specific CPU cores for reduced scheduling jitter.
-	// Disable in PIE/editor builds where multiple worlds oversubscribe available cores.
-	// Can be overridden via EnableThreadPinning=false in EditorDefaults.ini.
-	bool EnableThreadPinning = true;
+	int MaxFrames = 0; ///< Exit after this many Sentinel frames. 0 = run indefinitely (CI: set to ~60).
 
-	// Exit the main loop after this many sentinel frames. 0 = run indefinitely.
-	// Useful for CI: --max-frames 60 runs one second of logic then exits cleanly.
-	int MaxFrames = 0;
+	int TargetFPS             = Unset; ///< Main-loop frame rate cap. Cannot be lower than FixedUpdateHz if set.
+	int FixedUpdateHz         = Unset; ///< Fixed-timestep logic rate (e.g., 128 or 512 Hz).
+	int PhysicsUpdateInterval = Unset; ///< Fixed steps per Jolt step. 8 = 64 Hz physics at 512 Hz sim.
 
-	// Variadic Update, let the Logic thread run uncapped or limit its updates, cannot be lower than Fixed update if capped.
-	int TargetFPS = Unset;
+	int NetworkUpdateHz   = Unset; ///< State-correction send rate ("tick rate"). Lower = less bandwidth.
+	int ClockSyncProbes   = Unset; ///< RTT probe count during Synchronizing before computing InputLead. Default: 8, range: 1–255.
+	int InputPollHz       = Unset; ///< Sentinel input-poll rate; higher = lower input latency.
+	int InputNetHz        = Unset; ///< Rate at which the client sends InputFrame packets to the Authority.
 
-	// Gameplay Logic (Fixed High) - e.g., 60Hz or 128Hz
-	int FixedUpdateHz = Unset;
+	/// @brief Artificial input delay in sim frames for lockstep/deterministic play.
+	/// @note 0 = disabled (default). Brain reads input for (currentFrame - InputDelayFrames).
+	int InputDelayFrames  = 0;
 
-	// Number of fixed updates per Physics update -> at 8 = fixed: 512Hz physics: 64Hz
-	int PhysicsUpdateInterval = Unset;
-
-	// Networking (Fixed Low/Med) - e.g., 20Hz or 30Hz
-	// This is your "Tick Rate". Lower = Less Bandwidth, Higher = More Precision.
-	int NetworkUpdateHz = Unset;
-
-	// Number of RTT probe pings sent during the Synchronizing phase before
-	// computing InputLead. Higher = more accurate estimate; lower = faster load.
-	// Default: 8. Range: 1-255.
-	int ClockSyncProbes = Unset;
-
-	// Input (and window management)
-	// This controls how fast your main thread goes, higher = better input latency
-	int InputPollHz = Unset;
-
-	// Rate at which the client sends InputFrame packets to the server.
-	// Decoupled from NetworkUpdateHz (state corrections) — higher = lower input latency on server.
-	// At 512Hz sim / 128Hz input = 4 sim frames per packet.
-	// TODO(lockstep): when InputDelayFrames > 0, ensure InputNetHz >= FixedUpdateHz / InputDelayFrames
-	int InputNetHz = Unset;
-
-	// Artificial input delay in sim frames for lockstep/deterministic play.
-	// 0 = disabled (default). Brain reads input for (currentFrame - InputDelayFrames).
-	// TODO(lockstep): when > 0, extend InputBuffer ring depth to InputDelayFrames + 1 slots.
-	// TODO(lockstep): gate Brain::AdvanceFrame on receipt of all peer inputs for (currentFrame - InputDelayFrames).
-	int InputDelayFrames = 0;
-
-	// Server: how many sim frames the server is allowed to predict ahead of a client's
-	// last received input before stalling the sim for that client.
-	// Needs to cover one delivery batch + RTT headroom + startup timing offset.
-	// At 512Hz sim / 128Hz input = 4 frames/batch; 64 covers ~125ms of jitter/offset.
-	// Set to 0 for strict lockstep.
+	/// @brief Max sim frames the Authority may predict ahead of a client's last received input.
+	/// @note 0 = strict lockstep. Covers one delivery batch + RTT headroom + startup timing offset.
 	int MaxClientInputLead = 16;
 
-	// Arena 1 capacity (Render + Dual partitions). Determines the slab boundary
-	// between Arena 1 and Arena 2. Must be <= MAX_CACHED_ENTITIES.
-	int MAX_RENDERABLE_ENTITIES = Unset;
+	int MAX_RENDERABLE_ENTITIES = Unset; ///< Arena 1 capacity (Render + Dual partitions). Must be ≤ MAX_CACHED_ENTITIES.
+	int MAX_CACHED_ENTITIES     = Unset; ///< Max dynamic entities across all arenas combined.
+	int MAX_JOLT_BODIES         = Unset; ///< Sizes the Jolt body interface, temp allocator, and mapping arrays.
 
-	// The max number of Dynamic entities in the world at one time (all arenas combined).
-	int MAX_CACHED_ENTITIES = Unset;
+	int TemporalFrameCount = Unset; ///< Temporal ring depth. Min 8, power-of-2. At 512 Hz: 128 frames ≈ 0.25 s of history.
+	int JobCacheSize       = Unset; ///< Pre-allocated job queue capacity. Exceeding this value will assert.
 
-	// Maximum Jolt physics bodies. Sizes the body interface, temp allocator, and mapping arrays.
-	int MAX_JOLT_BODIES = Unset;
+	char ProjectDir[512]   = ""; ///< Project root directory (set from TNX_PROJECT_DIR or Initialize() argument).
+	char DefaultScene[256] = ""; ///< Scene to load on startup (relative to ProjectDir/content/).
+	char DefaultState[256] = ""; ///< Flow state name to load on startup (e.g., "MainMenu").
 
-	// Number of temporal frames stored in history. Min 8, must be power of 2.
-	// At 128Hz: 128 frames = 1 second of history
-	// At 512Hz: 128 frames = 0.25 seconds of history
-	int TemporalFrameCount = Unset;
+	uint16_t NetPort     = 27015;        ///< GNS connection port (CLI: --port).
+	char NetAddress[128] = "127.0.0.1"; ///< Remote address for client connections (CLI: --client <ip>).
 
-	// number of jobs to preallocate the job queues to hold. exceeding this value will assert
-	int JobCacheSize = Unset;
+	int EngineLogLevel = Unset; ///< Min log level for the engine channel. 0=Trace … 4=Error.
+	int GameLogLevel   = Unset; ///< Min log level for the game channel. 0=Trace … 4=Error.
 
-	// Project root directory (set from TNX_PROJECT_DIR or Initialize() argument).
-	// Used by the editor's Content Browser to locate assets.
-	char ProjectDir[512] = "";
-
-	// Editor: default scene to load on startup (relative to ProjectDir/content/).
-	char DefaultScene[256] = "";
-
-	// Default flow state to load on startup (registered name, e.g. "MainMenu").
-	char DefaultState[256] = "";
-
-	// Networking — set via CLI args (--server, --client <ip>, --port <port>).
-	uint16_t NetPort     = 27015;
-	char NetAddress[128] = "127.0.0.1";
-
-	// Log channel min levels. Unset → engine defaults (Info for Engine, Debug for Game).
-	// Set via EngineLogLevel / GameLogLevel in *.ini.  Values map to LogLevel: 0=Trace … 4=Error.
-	int EngineLogLevel = Unset;
-	int GameLogLevel   = Unset;
-
-	// Disable GNS Nagle coalescing for all unreliable sends (not just input).
-	// Input sends always bypass Nagle regardless of this setting.
-	// Default: false (only input bypasses Nagle).
+	/// @brief Disable GNS Nagle coalescing for all unreliable sends.
+	/// @note Input sends always bypass Nagle regardless of this setting.
 	bool NoNagle = false;
 
-	// GNS per-connection send rate clamp (bytes/sec). Unset = leave GNS default (256KB/s).
-	// Raise this significantly for loopback (PIE) or determinism tests.
-	// Both Min and Max should typically be set to the same value to pin the rate.
-	// TODO: bring this down once we've characterized real-network bandwidth needs.
-	// Example: 10 * 1024 * 1024 = 10MB/s for loopback.
+	/// @brief GNS per-connection send rate floor (bytes/sec). Unset = GNS default (256 KB/s).
+	/// @note Set both Min and Max to the same value to pin the rate.
 	int SendRateMin = Unset;
-	int SendRateMax = Unset;
+	int SendRateMax = Unset; ///< GNS per-connection send rate cap (bytes/sec).
 
-	// Audio — Sentinel update rate for the AudioManager (fade processing, stream refill).
-	// Decoupled from InputPollHz: 250Hz gives 4ms fade resolution at negligible CPU cost.
-	int AudioUpdateHz = Unset;
+	int AudioUpdateHz  = Unset; ///< Sentinel audio update rate (fade processing, stream refill). Default: 250 Hz.
+	int MaxAudioVoices = Unset; ///< Maximum simultaneous voices; exceeded voices are stolen by priority.
 
-	// Maximum simultaneous voices.  Exceeded voices are stolen by priority.
-	int MaxAudioVoices = Unset;
+	// --- Helpers: resolve Unset to compiled defaults ---
 
-	// --- Helpers ---
-	// These resolve Unset to compiled defaults for safe use.
+	/// @brief Main-loop target frame time in seconds.
+	/// @return 0.0 if uncapped; otherwise 1.0 / min(TargetFPS, FixedUpdateHz) in non-editor builds.
 	double GetTargetFrameTime() const
 	{
 		int fps   = (TargetFPS == Unset) ? 0 : TargetFPS;
@@ -156,25 +117,31 @@ struct EngineConfig
 #endif
 	}
 
+	/// @brief Fixed simulation step duration in seconds.
 	double GetFixedStepTime() const
 	{
 		int fixed = (FixedUpdateHz == Unset) ? 128 : FixedUpdateHz;
 		return 1.0 / fixed;
 	}
 
+	/// @brief Network update interval in seconds (time between state-correction sends).
 	double GetNetworkStepTime() const
 	{
 		int hz = (NetworkUpdateHz == Unset) ? 30 : NetworkUpdateHz;
 		return (hz > 0) ? 1.0 / hz : 0.0;
 	}
 
+	/// @brief Resolved InputNetHz, falling back to 128 if @c Unset.
 	int GetInputNetHz() const
 	{
 		return (InputNetHz == Unset) ? 128 : InputNetHz;
 	}
 
+	/// @brief Client input packet interval in seconds.
 	double GetInputNetStepTime() const
 	{
 		return 1.0 / GetInputNetHz();
 	}
 };
+
+/** @} */

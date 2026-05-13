@@ -9,6 +9,10 @@
 #include "AudioHandle.h"
 #include "TnxName.h"
 
+/** @addtogroup audio
+ *  @{
+ */
+
 struct SoundAsset;
 
 enum class BusID : uint8_t { Master = 0 };
@@ -163,4 +167,6 @@ private:
 	uint16_t NextGeneration = 1; // always >= 1; {idx,0} stays Invalid
 	bool bInitialized       = false;
 };
+
+/** @} */
 

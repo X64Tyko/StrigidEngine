@@ -12,14 +12,14 @@
 			"name": "Arena",
 			"path": "Arena.tnxscene",
 			"type": 8.0,
-			"contentHash": 9.343907719541973e+18
+			"contentHash": 4.5045154207554555e+18
 		},
 		{
 			"uuid": 256.0,
 			"name": "DefaultCharacter",
 			"path": "DefaultCharacter.tnxprefab",
 			"type": 9.0,
-			"contentHash": 5.6986800749862932e+18
+			"contentHash": 5.3161583432269373e+18
 		},
 		{
 			"uuid": 256.0,
@@ -33,14 +33,14 @@
 			"name": "StaticCube",
 			"path": "StaticCube.prefab",
 			"type": 9.0,
-			"contentHash": 1.0084112354616433e+19
+			"contentHash": 1.6835617540666714e+19
 		},
 		{
 			"uuid": 1280.0,
 			"name": "Wall",
 			"path": "Wall.prefab",
 			"type": 9.0,
-			"contentHash": 7.5710423226814648e+18
+			"contentHash": 1.5066031282316009e+19
 		},
 		{
 			"uuid": 256.0,
