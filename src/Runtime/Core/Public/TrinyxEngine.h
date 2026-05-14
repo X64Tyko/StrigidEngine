@@ -29,7 +29,6 @@ using NetThreadType = OwnerNet;
 #endif
 
 class RenderThread;
-// Forward declarations
 class Registry;
 class LogicThreadBase;
 class JoltPhysics;
@@ -50,19 +49,24 @@ using RendererType = GameplayRenderer;
 #endif
 #endif
 
+/** @addtogroup core
+ *  @{
+ */
+
 /**
- * TrinyxEngine: The Sentinel (Main Thread)
+ * @brief The Sentinel — main-thread owner of all engine subsystems.
+ *
+ * Owns the SDL window, Vulkan context and memory, the render and audio subsystems,
+ * the job system, and the FlowManager. Does @em not own per-world data (Registry,
+ * JoltPhysics, LogicThread) — those live inside each @c WorldBase managed by the FlowManager.
  *
  * Responsibilities:
- * - SDL event pumping (SDL requires this on the main thread)
- * - Window ownership
- * - VulkanContext + VulkanMemory ownership and lifetime
- * - Thread lifecycle management
- * - Frame pacing (timing only — the RenderThread is GPU-autonomous)
- * - World ownership: manages one or more World instances
- *
- * Each World owns its own Registry, JoltPhysics, LogicThread, InputBuffers,
- * and SpawnSync. The engine owns the GPU resources shared across all worlds.
+ * - SDL event pumping (SDL requires events on the main thread).
+ * - Window and GPU device lifetime.
+ * - VulkanContext + VulkanMemory ownership shared across all worlds.
+ * - Thread lifecycle management (Logic, Render, job workers).
+ * - Frame pacing (timing only — the RenderThread is GPU-autonomous).
+ * - FlowManager ownership and default-world caching.
  */
 class TrinyxEngine
 {
@@ -72,72 +76,108 @@ public:
 	TrinyxEngine(const TrinyxEngine&)            = delete;
 	TrinyxEngine& operator=(const TrinyxEngine&) = delete;
 
-	/// Parse CLI args into Config before Initialize().
-	/// Supports: --server, --client <ip>, --port <port>, --latency <ms>
+	/**
+	 * @brief Parse CLI arguments into @c Config before calling @c Initialize().
+	 *
+	 * Recognizes: `--server`, `--client <ip>`, `--port <port>`, `--latency <ms>`.
+	 */
 	void ParseCommandLine(int argc, char* argv[]);
 
+	/**
+	 * @brief Create the window, initialize Vulkan, audio, and the job system.
+	 * @param title      Window title string.
+	 * @param width      Initial window width in pixels.
+	 * @param height     Initial window height in pixels.
+	 * @param projectDir Project root path; falls back to @c TNX_PROJECT_DIR env var if @c nullptr.
+	 * @return @c true on success; @c false if any subsystem failed to initialize.
+	 */
 	bool Initialize(const char* title, int width, int height, const char* projectDir = nullptr);
 
-	/// Template Run: accepts the GameManager subclass so PostStart can be
-	/// called after threads and jobs are fully initialized.
+	/**
+	 * @brief Start all threads and run the main loop until the window is closed.
+	 * @tparam GameClass A @c GameManager subclass; its @c PostStart is called after threads are ready.
+	 *
+	 * Calls @c game.PostStart after Logic/Render threads and the job pool are fully initialized,
+	 * then loads @c Config.DefaultState if set (non-editor builds only). Calls @c Shutdown before returning.
+	 */
 	template <typename GameClass>
 	void Run(GameClass& game);
 
+	/// @brief Tear down threads, GPU resources, and all owned subsystems.
 	void Shutdown();
 
-	// Singleton
+	/// @brief Singleton accessor — one engine instance per process.
 	static TrinyxEngine& Get()
 	{
 		static TrinyxEngine instance;
 		return instance;
 	}
 
-	// --- World access ---
-	WorldBase* GetDefaultWorld() const { return DefaultWorld; }
-	FlowManagerBase* GetFlowManager() const { return Flow.get(); }
+	// --- World and flow access ---
 
-	// Convenience: access the default world's registry.
+	/// @brief Returns the active default world, or @c nullptr before the FlowManager creates one.
+	WorldBase*       GetDefaultWorld() const { return DefaultWorld; }
+	/// @brief Returns the FlowManager that owns all worlds and game states.
+	FlowManagerBase* GetFlowManager()  const { return Flow.get(); }
+
+	/// @brief Convenience accessor: returns the default world's entity registry.
 	Registry* GetRegistry() const;
-	const EngineConfig* GetConfig() const { return &Config; }
+
+	/// @brief Returns the active config (editor overlay when @c TNX_ENABLE_EDITOR, else game config).
+	const EngineConfig* GetConfig()     const { return &Config; }
+	/// @brief Returns the pure game config without editor overrides, used when creating PIE worlds.
 	const EngineConfig* GetGameConfig() const { return &GameConfig; }
+
+	/// @brief Returns @c true once the job system is initialized and workers are draining queues.
 	bool GetJobsInitialized() const { return bJobsInitialized.load(std::memory_order_relaxed); }
 
-	// Test-only: hard-reset the registry (wipes all entities, handles, caches).
+	/// @brief Test-only: wipe all entities, handles, and caches in the default world's registry.
 	void ResetRegistry() const;
+	/// @brief Advance the default world's local handle free-pool after the safety window.
 	void ConfirmLocalRecycles() const;
 
-	/// Spawn entities from any thread into the default world (blocks until Logic thread executes).
-	/// Lambda must satisfy ValidJobLambda: trivially copyable, ≤48 bytes, accepts (uint32_t).
+	/**
+	 * @brief Spawn entities into the default world from any thread.
+	 *
+	 * Blocks the calling thread until the Logic thread executes @p lambda.
+	 * @note @p lambda must satisfy @c ValidJobLambda: trivially copyable, ≤48 bytes, signature @c (uint32_t).
+	 */
 	template <TrinyxJobs::ValidJobLambda LAMBDA>
 	void Spawn(LAMBDA lambda) { if (DefaultWorld) DefaultWorld->SpawnAndWait(lambda); }
 
-	// Renderer access (needed by EditorContext)
+// --- Renderer, window, and audio (compiled out in headless builds) ---
 #ifndef TNX_HEADLESS
+	/// @brief Returns the active renderer — @c EditorRenderer or @c GameplayRenderer depending on build flags.
 	RendererType* GetRenderer() const { return Render.get(); }
-	SDL_Window* GetWindow() const { return EngineWindow; }
-	AudioManager* GetAudio() const { return Audio.get(); }
+	/// @brief Returns the SDL window handle.
+	SDL_Window*   GetWindow()   const { return EngineWindow; }
+	/// @brief Returns the audio manager.
+	AudioManager* GetAudio()    const { return Audio.get(); }
 #endif
 
+// --- Networking (compiled out when TNX_ENABLE_NETWORK is not defined) ---
 #ifdef TNX_ENABLE_NETWORK
-	// Networking
+	/// @brief Returns the GNS context (GameNetworkingSockets library state).
 	GNSContext* GetGNSContext() const { return const_cast<GNSContext*>(&GNS); }
+	/// @brief Returns the active net thread (@c PIENetThread, @c AuthorityNet, or @c OwnerNet).
 	NetThreadType* GetNetThread() const { return Net.get(); }
 
-	/// Lazy-init GNS + NetThread if not already active.
-	/// Used by editor PIE to enable networking from Standalone mode.
+	/**
+	 * @brief Initialize GNS and the net thread if not already active.
+	 * @note Used by the editor PIE to enable networking from Standalone mode.
+	 * @return @c true if networking is available after the call.
+	 */
 	bool EnsureNetworking();
 
-	// Game-level PIE hooks — game code binds these in PostInitialize.
-	// EditorContext fires them during StartPIE/StopPIE and Play/Stop.
-	Callback<void, WorldBase*, NetConnectionManager*> OnPIEStarted;
-	Callback<void, NetConnectionManager*> OnPIEStopped;
+	Callback<void, WorldBase*, NetConnectionManager*> OnPIEStarted; ///< Fired by EditorContext at StartPIE; game code binds in PostInitialize.
+	Callback<void, NetConnectionManager*>             OnPIEStopped; ///< Fired by EditorContext at StopPIE.
 #endif
 
-	Callback<void, WorldBase*> OnPlayStarted; // Fired when Play (Local) is clicked
-	Callback<void> OnPlayStopped;         // Fired when Stop (Local) is clicked
+	Callback<void, WorldBase*> OnPlayStarted; ///< Fired when Play (Local) is clicked in the editor.
+	Callback<void>             OnPlayStopped; ///< Fired when Stop (Local) is clicked in the editor.
 
-	// Input routing — when set, PumpEvents writes to this world instead of DefaultWorld.
-	// EditorContext sets this during PIE/Play to route input to the active world.
+	/// @brief When set, @c PumpEvents writes input to this world instead of @c DefaultWorld.
+	/// @note EditorContext sets this during PIE/Play to route input to the active world.
 	WorldBase* InputTargetWorld = nullptr;
 
 private:
@@ -145,64 +185,58 @@ private:
 	friend class EditorContext;
 #endif
 
-	// Sentinel Tasks (Main Thread)
-	void StartThreadsAndJobs();
-	void RunMainLoop();
+	// --- Sentinel tasks (main thread) ---
+	void StartThreadsAndJobs(); ///< @brief Pin Logic/Render threads and initialize the job worker pool.
+	void RunMainLoop();         ///< @brief Main loop: pump events, pace frames, coordinate the render thread.
 #ifndef TNX_HEADLESS
-	void PumpEvents(); // Handle OS events
+	void PumpEvents();          ///< @brief Drain the SDL event queue and route input to the active world.
 #endif
-	void WaitForTiming(uint64_t frameStart, uint64_t perfFrequency);
-
-	// FPS tracking
-	void CalculateFPS();
+	void WaitForTiming(uint64_t frameStart, uint64_t perfFrequency); ///< @brief Spin-wait to hit the configured frame rate cap.
+	void CalculateFPS(); ///< @brief Update the Sentinel-side FPS counter approximately once per second.
 
 #ifndef TNX_HEADLESS
 	// --- Window ---
-	SDL_Window* EngineWindow = nullptr;
-	SDL_GPUDevice* GpuDevice = nullptr;
-	FramePacer Pacer;
+	SDL_Window*    EngineWindow = nullptr; ///< SDL window handle; null in headless builds.
+	SDL_GPUDevice* GpuDevice    = nullptr; ///< SDL GPU device handle.
+	FramePacer     Pacer;                  ///< Frame-rate pacing state (timing only — render is GPU-autonomous).
 #endif
 
 #ifdef TNX_ENABLE_NETWORK
 	// --- Networking ---
-	GNSContext GNS;
-	std::unique_ptr<NetThreadType> Net;
+	GNSContext                 GNS; ///< GNS library context; owns the GNS global singleton state.
+	std::unique_ptr<NetThreadType> Net; ///< Active net thread (PIENetThread / AuthorityNet / OwnerNet).
 #if !TNX_ENABLE_EDITOR
-	// ReplicationSystem is owned by the engine for non-editor builds.
-	// The editor creates its own per-PIE-session instance in EditorContext.
-	std::unique_ptr<ReplicationSystem> Replicator;
+	std::unique_ptr<ReplicationSystem> Replicator; ///< Owned for non-editor builds; editor creates per-PIE-session instances in EditorContext.
 #endif
 #endif
 
 #ifndef TNX_HEADLESS
-	// --- Vulkan (owned here, shared across worlds) ---
-	VulkanContext VkCtx;
-	VulkanMemory VkMem;
-#endif
+	// --- Vulkan (owned here, shared across all worlds) ---
+	VulkanContext VkCtx; ///< Vulkan instance, physical device, and logical device.
+	VulkanMemory  VkMem; ///< VMA allocator and GPU buffer management.
 
-	// --- Renderer (shared, reads from active world) ---
-#ifndef TNX_HEADLESS
-	std::unique_ptr<RendererType> Render;
-	std::unique_ptr<AudioManager> Audio;
+	// --- Renderer and audio ---
+	std::unique_ptr<RendererType> Render; ///< Compile-time selected: EditorRenderer or GameplayRenderer.
+	std::unique_ptr<AudioManager> Audio;  ///< SDL3 voice pool and audio event registry.
 #endif
 
 	// --- Config ---
-	EngineConfig Config;     // Active config (editor config when TNX_ENABLE_EDITOR, else game config)
-	EngineConfig GameConfig; // Pure game config (no editor overrides) — used by PIE for server/client worlds
+	EngineConfig Config;     ///< Active config — editor overlay applied on top of game config when @c TNX_ENABLE_EDITOR.
+	EngineConfig GameConfig; ///< Pure game config without editor overrides; used when creating PIE Authority/Owner worlds.
 
 	// --- World (owned by FlowManager, cached here for fast access) ---
-	WorldBase* DefaultWorld = nullptr;
+	WorldBase* DefaultWorld = nullptr; ///< Non-owning alias; FlowManager holds the authoritative world lifetime.
 
 	// --- Lifecycle ---
-	std::atomic<bool> bIsRunning{false};
-	std::atomic<bool> bJobsInitialized{false};
-	std::unique_ptr<FlowManagerBase> Flow;
+	std::atomic<bool>            bIsRunning{false};       ///< True while the main loop is executing.
+	std::atomic<bool>            bJobsInitialized{false}; ///< Set to true once the job worker pool is ready; Logic thread polls this gate.
+	std::unique_ptr<FlowManagerBase> Flow;                ///< FlowManager — owns all worlds, game states, and level lifetimes.
 
 	// --- Frame timing ---
-	uint64_t LastFrameCounter = 0; // SDL performance counter from previous frame
-	double FpsTimer           = 0.0;
-	double LastFPSCheck       = 0.0;
-	int FrameCount            = 0;
+	uint64_t LastFrameCounter = 0;   ///< SDL performance counter snapshot from the previous frame.
+	double   FpsTimer         = 0.0; ///< Accumulated time since the last FPS calculation.
+	double   LastFPSCheck     = 0.0; ///< Timestamp of the most recent FPS update.
+	int      FrameCount       = 0;   ///< Frames counted since the last FPS calculation.
 };
 
 template <typename GameClass>
@@ -223,3 +257,5 @@ void TrinyxEngine::Run(GameClass& game)
 	RunMainLoop();
 	Shutdown();
 }
+
+/** @} */

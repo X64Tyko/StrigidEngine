@@ -12,11 +12,16 @@
 #include "Logger.h"
 #include "Profiler.h"
 
+/** @addtogroup core
+ *  @{
+ */
+
 /// @brief Called once per logic tick to drain corrections and trigger rollback if needed.
 ///
 /// Prunes stale server events, drains @c IncomingCorrections, merges any pending
 /// spawn-rollback frame, then calls @c ExecuteRollback if the earliest correction
 /// or spawn event predates the current frame.
+/// @param logic The concrete @c LogicThread instance that owns this policy.
 template <typename TLogic>
 void RollbackSim::ProcessRollback(TLogic& logic)
 {
@@ -195,6 +200,7 @@ void RollbackSim::ExecuteRollback(TLogic& logic, uint32_t targetFrame)
 /// then does a byte-perfect @c memcmp of the resimulated field data against the saved ground
 /// truth. Reports per-field divergences and Jolt state mismatches. Restores the original
 /// simulation state before returning.
+/// @param logic The concrete @c LogicThread instance that owns this policy.
 template <typename TLogic>
 void RollbackSim::ExecuteRollbackTest(TLogic& logic)
 {
@@ -334,4 +340,5 @@ void RollbackSim::ExecuteRollbackTest(TLogic& logic)
     LOG_ENG_INFO("[Rollback] State restored, simulation continuing.");
 }
 
+/** @} */
 #endif // TNX_ENABLE_ROLLBACK

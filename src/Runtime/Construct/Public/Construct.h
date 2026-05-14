@@ -7,6 +7,10 @@
 #include "Schema.h"
 #include "WorldBase.h"
 
+/** @addtogroup gameplay
+ *  @{
+ */
+
 class Soul;
 
 struct ConstructViewRef
@@ -251,3 +255,5 @@ private:
 		static_cast<Derived*>(this)->PhysicsStep(dt);
 	}
 };
+
+/** @} */

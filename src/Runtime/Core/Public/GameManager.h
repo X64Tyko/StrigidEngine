@@ -2,81 +2,74 @@
 
 class TrinyxEngine;
 
+/** @addtogroup core
+ *  @{
+ */
+
 /**
- * GameManager<Derived> — CRTP base class for user game projects.
+ * @brief CRTP base for user game projects; provides default lifecycle hooks and window config.
  *
- * Subclass this in your project and use TNX_IMPLEMENT_GAME(YourClass)
- * in one .cpp file to wire up main() automatically. The engine will
- * call PostInitialize() after all core systems are ready but before
- * the main loop starts.
+ * @tparam Derived Concrete game class. Override hooks by name-hiding — no virtual dispatch.
  *
- * Override any method by name-hiding (no virtual, no vtable):
- *
+ * Usage: subclass, override what you need, then place @ref TNX_IMPLEMENT_GAME in one .cpp:
+ * @code
  *   class MyGame : public GameManager<MyGame> {
  *   public:
  *       const char* GetWindowTitle() const { return "My Game"; }
  *       bool PostInitialize(TrinyxEngine& engine) { ... return true; }
  *   };
  *   TNX_IMPLEMENT_GAME(MyGame)
+ * @endcode
  *
- * Without the macro, users can drive initialization manually:
- *
- *   MyGame game;
- *   auto& engine = TrinyxEngine::Get();
- *   engine.Initialize(game.GetWindowTitle(), game.GetWindowWidth(),
- *                     game.GetWindowHeight(), projectDir);
- *   game.PostInitialize(engine);
- *   engine.Run();
+ * Without the macro, drive initialization manually via `TrinyxEngine::Initialize` /
+ * `PostInitialize` / `Run`.
  */
 template <typename Derived>
 class GameManager
 {
 public:
-	/// Called after ParseCommandLine but before Initialize(). Use this to parse
-	/// any game-specific CLI arguments (e.g. --test names for the Testbed).
+	/// @brief Called after ParseCommandLine but before engine Initialize().
+	/// @note Use this to parse game-specific CLI arguments before any engine system starts.
 	void PreInitialize(int argc, char* argv[])
 	{
 		(void)argc; (void)argv;
 	}
 
-	/// Called after engine initialization completes (all threads, renderer, registry ready).
-	/// Use this to spawn initial entities, load levels, etc.
-	/// Return false to abort before entering the main loop.
+	/// @brief Called once all engine threads, renderer, and registry are ready.
+	/// @return false to abort before entering the main loop.
 	bool PostInitialize(TrinyxEngine& engine)
 	{
 		(void)engine;
 		return true;
 	}
 
-	/// Called from Run() after Logic, Render, and the job system are fully started.
-	/// Use this for runtime tests or setup that requires the engine loop to be active.
+	/// @brief Called from Run() after Logic, Render, and the job system are fully started.
+	/// @note Use this for runtime tests or setup that requires live tick dispatch.
 	void PostStart(TrinyxEngine& engine)
 	{
 		(void)engine;
 	}
 
-	/// Called after Run() returns. Override to propagate post-start failure counts
-	/// (e.g. runtime test failures) into the process exit code.
+	/// @brief Returns the process exit code after Run() completes.
+	/// @note Override to surface post-start failure counts (e.g. runtime test failures).
 	/// TNX_IMPLEMENT_GAME returns this value directly.
 	int GetExitCode() const { return 0; }
 
-	const char* GetWindowTitle() const { return "Trinyx Game"; }
-	int GetWindowWidth() const { return 1920; }
-	int GetWindowHeight() const { return 1080; }
+	const char* GetWindowTitle() const { return "Trinyx Game"; } ///< Override to set window title.
+	int GetWindowWidth()  const { return 1920; } ///< Override to set initial window width.
+	int GetWindowHeight() const { return 1080; } ///< Override to set initial window height.
 
 protected:
-	Derived& Self() { return static_cast<Derived&>(*this); }
-	const Derived& Self() const { return static_cast<const Derived&>(*this); }
+	Derived&       Self()       { return static_cast<Derived&>(*this); }       ///< CRTP downcast.
+	const Derived& Self() const { return static_cast<const Derived&>(*this); } ///< CRTP downcast (const).
 };
 
 /**
- * TNX_IMPLEMENT_GAME(GameClass)
+ * @brief Provides `main()` and wires `ParseCommandLine → Initialize → PostInitialize → Run`.
  *
- * Place in exactly one .cpp file in your game project. Provides main()
- * and wires up engine initialization -> PostInitialize -> Run.
- *
- * Requires TNX_PROJECT_DIR to be defined by CMake (set automatically
- * when using the standard project CMakeLists pattern).
+ * Place in exactly one .cpp in your game project.
+ * @note Requires `TNX_PROJECT_DIR` to be defined by CMake (set automatically by the standard
+ *       project CMakeLists pattern).
  */
 #ifndef TNX_PROJECT_DIR
 #define TNX_PROJECT_DIR ""
@@ -104,3 +97,5 @@ protected:
 		}                                                                                \
 		return exitCode;                                                                 \
 	}
+
+/** @} */

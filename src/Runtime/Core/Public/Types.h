@@ -5,35 +5,38 @@
 #include <functional>
 #include <type_traits>
 
-// Cross-platform force inline macro
+/** @addtogroup core
+ *  @{
+ */
+
+/// @brief Force-inline attribute — `__forceinline` on MSVC, `always_inline` on GCC/Clang.
 #ifdef _MSC_VER
 #define FORCE_INLINE __forceinline
 #else
 #define FORCE_INLINE inline __attribute__((always_inline))
 #endif
 
-// Cross-platform bit scan intrinsics
+// Cross-platform bit-scan intrinsics
 #ifdef _MSC_VER
 #include <intrin.h>
-// Count trailing zeros (32-bit)
+/// @brief Count trailing zeros (32-bit) — returns the index of the least significant set bit.
 #define TNX_CTZ32(x) ([](uint32_t val) -> uint32_t { \
 	unsigned long idx; \
 	_BitScanForward(&idx, val); \
 	return static_cast<uint32_t>(idx); \
 }(x))
-// Count trailing zeros (64-bit)
+/// @brief Count trailing zeros (64-bit) — returns the index of the least significant set bit.
 #define TNX_CTZ64(x) ([](uint64_t val) -> uint32_t { \
 	unsigned long idx; \
 	_BitScanForward64(&idx, val); \
 	return static_cast<uint32_t>(idx); \
 }(x))
 #else
-// GCC/Clang builtins
 #define TNX_CTZ32(x) __builtin_ctz(x)
 #define TNX_CTZ64(x) __builtin_ctzll(x)
 #endif
 
-// Disable MSVC warning for anonymous structs in unions (C++11 standard feature)
+// Suppress warnings for anonymous structs in unions used by math types.
 #ifdef _MSC_VER
 #pragma warning(push)
 #pragma warning(disable: 4201) // nonstandard extension used: nameless struct/union
@@ -42,34 +45,33 @@
 #pragma GCC diagnostic ignored "-Wpedantic"
 #endif
 
-// allows changing the behavior of the FieldProxy
+/// @brief Selects the storage and update path for a FieldProxy.
 enum class FieldWidth : uint8_t
 {
-	Scalar,
-	Wide,
-	WideMask
+	Scalar,   ///< Single-entity scalar update path.
+	Wide,     ///< AVX2 8-wide SIMD unconditional store.
+	WideMask, ///< AVX2 8-wide SIMD masked store (gated on the Active flag).
 };
 
-// Identifies which SoA ring buffer tier an entity's fields live in.
-// uint8_t backing for forward-compatibility (Static, Cold tiers planned).
+/// @brief Identifies which SoA ring-buffer tier an entity's fields live in.
+/// @note When @c TNX_ENABLE_ROLLBACK is disabled, Temporal is treated as Volatile at no memory cost.
 enum class CacheTier : uint8_t
 {
-	None      = 0,
-	Volatile  = 1, // 5-frame ring buffer — cosmetic entities, no rollback
-	Temporal  = 2, // N-frame ring buffer — simulation-authoritative, rollback-capable
-	Universal = 3, // N-frame ring buffer - Grows as needed and contains components all entities share
+	None      = 0, ///< No SoA tier — cold/chunk-only data, not iterable by wide sweeps.
+	Volatile  = 1, ///< 3-frame ring buffer — cosmetic entities, ambient AI, particles (no rollback).
+	Temporal  = 2, ///< N-frame ring buffer — simulation-authoritative, rollback-capable.
+	Universal = 3, ///< N-frame ring buffer — grows as needed; fields shared by all entities.
 
 	MAX
 };
 
-// Engine mode — determines what subsystems are initialized.
-// Defined here (not in NetTypes.h) so it is available regardless of TNX_ENABLE_NETWORK.
+/// @brief Determines what subsystems are initialized for this process.
 enum class EngineMode : uint8_t
 {
-	Standalone, // No networking — default for singleplayer / editor
-	Client,     // Connects to remote server, renders locally
-	Server,     // Headless — no window/Vulkan/renderer
-	Host,       // Server + local client in one process (PIE default)
+	Standalone, ///< No networking — singleplayer / editor default.
+	Client,     ///< Connects to a remote Authority; renders locally.
+	Server,     ///< Headless Authority — no window, no Vulkan, no renderer.
+	Host,       ///< Authority + Owner in one process — listen-server / PIE default.
 };
 
 [[maybe_unused]] static const char* EngineModeNames[] = {
@@ -79,15 +81,14 @@ enum class EngineMode : uint8_t
 	"Host",
 };
 
-// Identifies the lifetime tier of a Construct — determines what survives
-// level transitions, World resets, and session teardown.
-// FlowManager uses this to enforce destruction/survival on transitions.
+/// @brief Lifetime tier of a Construct — determines survival across level transitions and World resets.
+/// @note FlowManager enforces construction and destruction order during transitions.
 enum class ConstructLifetime : uint8_t
 {
-	Level,      // Destroyed when the Level unloads
-	World,      // Destroyed when the World resets
-	Session,    // Survives World reset. Destroyed when the session ends.
-	Persistent, // Survives everything. Destroyed only explicitly.
+	Level,      ///< Destroyed when the Level unloads.
+	World,      ///< Destroyed when the World resets.
+	Session,    ///< Survives World reset; destroyed when the session ends.
+	Persistent, ///< Survives everything; destroyed only explicitly.
 };
 
 #include "SimFloat.h"
@@ -111,7 +112,14 @@ SimFloatImpl<T> Sqrt(SimFloatImpl<T> x);
 template <template <FieldWidth> class Derived, FieldWidth WIDTH = FieldWidth::Scalar>
 using MaskTemplate = Derived<WIDTH>;
 
-// Math types
+/**
+ * @brief 3-component vector parameterized on a scalar type.
+ *
+ * @tparam VecType Scalar element type — defaults to @c SimFloat (Fixed32 or float depending on build).
+ *
+ * Cross-type construction and assignment are available when @c TNX_FIXED_IMPLICIT_FLOAT is defined.
+ * Use @c CastTo<Dst>() or the @c ToFloat() / @c ToSim() helpers for explicit conversions.
+ */
 template <typename VecType = SimFloat>
 struct TVector3
 {
@@ -124,8 +132,8 @@ struct TVector3
 	{
 	}
 
-	// Converting constructor – accepts any three arguments that can be
-	// converted to floatType.  Avoids duplication when SimFloat == float.
+	// Variadic ctor — accepts any three arguments convertible to VecType.
+	// Avoids duplicate ctors when SimFloat == float.
 	template <typename... Args,
 			  std::enable_if_t<sizeof...(Args) == 3 &&
 							   (std::is_convertible_v<Args, VecType> && ...), int> = 0>
@@ -157,7 +165,7 @@ struct TVector3
 	}
 #endif
 
-	// ── Explicit conversions ──
+	/// @brief Explicit per-component type conversion.
 	template <typename Dst>
 	TVector3<Dst> CastTo() const
 	{
@@ -167,8 +175,8 @@ struct TVector3
 			TVecDetail::ConvertScalar<Dst>(z));
 	}
 
-	TVector3<float> ToFloat() const { return CastTo<float>(); }
-	TVector3<SimFloat> ToSim() const { return CastTo<SimFloat>(); }
+	TVector3<float>    ToFloat() const { return CastTo<float>(); }    ///< @brief Convert to float components.
+	TVector3<SimFloat> ToSim()   const { return CastTo<SimFloat>(); }  ///< @brief Convert to SimFloat components.
 
 	TVector3& operator+=(const TVector3& other)
 	{
@@ -204,7 +212,7 @@ struct TVector3
 
 	TVector3 operator+(const TVector3<VecType>& other) const { return TVector3(x + other.x, y + other.y, z + other.z); }
 	TVector3 operator-(const TVector3<VecType>& other) const { return TVector3(x - other.x, y - other.y, z - other.z); }
-	// Right‑multiply by any type convertible to floatType
+	// Right‑multiply by any type convertible to VecType
 	template <typename T>
 	TVector3 operator*(const T& scalar) const
 	{
@@ -220,7 +228,7 @@ struct TVector3
 	}
 
 	TVector3 operator-() const { return TVector3(-x, -y, -z); }
-	// Left‑multiply by any type convertible to floatType
+	// Left‑multiply by any type convertible to VecType
 	template <typename T>
 	friend TVector3 operator*(const T& scalar, const TVector3& v)
 	{
@@ -228,11 +236,10 @@ struct TVector3
 		return TVector3(s * v.x, s * v.y, s * v.z);
 	}
 
-	// ── Squared magnitude & distance (no sqrt) ──
-	VecType LengthSqr() const { return x * x + y * y + z * z; }
-	VecType DistanceSqr(const TVector3& o) const { return (*this - o).LengthSqr(); }
-	VecType Distance(const TVector3& o) const { return Sqrt(DistanceSqr(o)); }
-	bool IsNearZero(VecType eps2 = VecType(1e-8f)) const { return LengthSqr() <= eps2; }
+	VecType LengthSqr()                              const { return x * x + y * y + z * z; }
+	VecType DistanceSqr(const TVector3& o)           const { return (*this - o).LengthSqr(); }
+	VecType Distance(const TVector3& o)              const { return Sqrt(DistanceSqr(o)); }
+	bool    IsNearZero(VecType eps2 = VecType(1e-8f)) const { return LengthSqr() <= eps2; }
 
 	VecType Length() const
 	{
@@ -252,16 +259,17 @@ struct TVector3
 	}
 };
 
-using Vector3  = TVector3<>;
-using Vector3f = TVector3<float>;
+using Vector3  = TVector3<>;      ///< Simulation-space 3-vector (SimFloat components).
+using Vector3f = TVector3<float>; ///< Float-component 3-vector for render/upload code.
 
-// Free functions
+/// @brief Dot product of two same-type vectors.
 template <typename VecType>
 VecType Dot(const TVector3<VecType>& a, const TVector3<VecType>& b)
 {
 	return a.x * b.x + a.y * b.y + a.z * b.z;
 }
 
+/// @brief Cross product of two same-type vectors.
 template <typename VecType>
 TVector3<VecType> Cross(const TVector3<VecType>& a, const TVector3<VecType>& b)
 {
@@ -271,6 +279,13 @@ TVector3<VecType> Cross(const TVector3<VecType>& a, const TVector3<VecType>& b)
 		a.x * b.y - a.y * b.x);
 }
 
+/**
+ * @brief Unit quaternion parameterized on a scalar type.
+ *
+ * @tparam VecType Scalar element type — defaults to @c SimFloat.
+ *
+ * Stored as (x, y, z, w) with the scalar part in @c w. Hamilton product convention.
+ */
 template <typename VecType = SimFloat>
 struct TQuat
 {
@@ -281,9 +296,8 @@ struct TQuat
 
 	static TQuat Identity() { return TQuat(); }
 
-	TQuat Conjugate() const { return TQuat(-x, -y, -z, w); }
-
-	VecType LengthSqr() const { return x * x + y * y + z * z + w * w; }
+	TQuat   Conjugate()  const { return TQuat(-x, -y, -z, w); }
+	VecType LengthSqr()  const { return x * x + y * y + z * z + w * w; }
 
 	TQuat Normalized() const
 	{
@@ -291,7 +305,7 @@ struct TQuat
 		return len > VecType(0) ? TQuat(x / len, y / len, z / len, w / len) : Identity();
 	}
 
-	// Hamilton product: this * o
+	/// @brief Hamilton product: @c this * o.
 	TQuat operator*(const TQuat& o) const
 	{
 		return TQuat(
@@ -301,7 +315,7 @@ struct TQuat
 			w * o.w - x * o.x - y * o.y - z * o.z);
 	}
 
-	// Rotate vector v by this unit quaternion: v + 2w(q×v) + 2(q×(q×v))
+	/// @brief Rotate vector @p v by this unit quaternion: v + 2w(q×v) + 2(q×(q×v)).
 	TVector3<VecType> Rotate(const TVector3<VecType>& v) const
 	{
 		TVector3<VecType> qv{x, y, z};
@@ -309,6 +323,7 @@ struct TQuat
 		return v + t * w + Cross(qv, t);
 	}
 
+	/// @brief Explicit per-component type conversion.
 	template <typename Dst>
 	TQuat<Dst> CastTo() const
 	{
@@ -319,17 +334,24 @@ struct TQuat
 			TVecDetail::ConvertScalar<Dst>(w));
 	}
 
-	TQuat<float> ToFloat() const { return CastTo<float>(); }
-	TQuat<SimFloat> ToSim() const { return CastTo<SimFloat>(); }
+	TQuat<float>    ToFloat() const { return CastTo<float>(); }    ///< @brief Convert to float components.
+	TQuat<SimFloat> ToSim()   const { return CastTo<SimFloat>(); }  ///< @brief Convert to SimFloat components.
 };
 
-using Quat  = TQuat<>;
-using Quatf = TQuat<float>;
+using Quat  = TQuat<>;      ///< Simulation-space quaternion (SimFloat components).
+using Quatf = TQuat<float>; ///< Float-component quaternion for render/upload code.
 
+/**
+ * @brief 4×4 column-major matrix parameterized on a scalar type.
+ *
+ * @tparam MatType Scalar element type — defaults to @c SimFloat.
+ *
+ * Storage: @c m[col * 4 + row]. Default-constructed as identity.
+ */
 template <typename MatType = SimFloat>
 struct TMatrix4
 {
-	MatType m[16]; // Column-major order
+	MatType m[16]; ///< Column-major storage: m[col * 4 + row].
 
 	TMatrix4()
 	{
@@ -339,9 +361,7 @@ struct TMatrix4
 
 	static TMatrix4 Identity() { return TMatrix4(); }
 
-	// Column-major multiply: result = a * b
-	// Both forms compile to the same code; the named static is here so you can
-	// grep for it when profiling and swap in an intrinsic version if needed.
+	/// @brief Column-major multiply: result = a * b.
 	static TMatrix4 Multiply(const TMatrix4& a, const TMatrix4& b)
 	{
 		TMatrix4 r;
@@ -354,13 +374,12 @@ struct TMatrix4
 			}
 		return r;
 	}
-	
+
 	MatType& operator[](int i) { return m[i]; }
 
 	TMatrix4 operator*(const TMatrix4& o) const { return Multiply(*this, o); }
 
-
-	// ── Explicit conversions ──
+	/// @brief Explicit per-element type conversion.
 	template <typename Dst>
 	TMatrix4<Dst> CastTo() const
 	{
@@ -369,41 +388,39 @@ struct TMatrix4
 		return r;
 	}
 
-	TMatrix4<float> ToFloat() const { return CastTo<float>(); }
-	TMatrix4<SimFloat> ToSim() const { return CastTo<SimFloat>(); }
+	TMatrix4<float>    ToFloat() const { return CastTo<float>(); }    ///< @brief Convert to float elements.
+	TMatrix4<SimFloat> ToSim()   const { return CastTo<SimFloat>(); }  ///< @brief Convert to SimFloat elements.
 };
 
-using Matrix4  = TMatrix4<>;
-using Matrix4f = TMatrix4<float>;
+using Matrix4  = TMatrix4<>;      ///< Simulation-space 4×4 matrix (SimFloat elements).
+using Matrix4f = TMatrix4<float>; ///< Float-element 4×4 matrix for render/upload code.
 
-// Component type ID - numeric identifier for each component type (0-255)
-using ComponentTypeID = uint32_t;
+using ComponentTypeID = uint32_t; ///< Numeric identifier for a component type.
 
-// Per-cache slot index — which slot a component occupies within its associated ComponentCacheBase.
-// Distinct from ComponentTypeID: MetaFlags may be slot 0 in the Temporal cache but a different
-// component could be slot 0 in the Volatile cache. Same underlying width as StaticTemporalIndex().
+/// @brief Slot index within a ComponentCacheBase — which SoA column a component occupies.
+/// @note Distinct from ComponentTypeID: slot 0 may refer to different components in different caches.
 using CacheSlotID = uint8_t;
 
-// Component Signature definition as a bitset - tracks which components are present
-static constexpr size_t MAX_COMPONENTS                    = 256;
-static constexpr size_t MAX_TEMPORAL_FIELDS_PER_COMPONENT = 64;                                                 // Max decomposed temporal fields per component
-static constexpr size_t MAX_FIELD_ARRAYS                  = MAX_COMPONENTS * MAX_TEMPORAL_FIELDS_PER_COMPONENT; // Max total field arrays across all components
-// Upper bound on field arrays for any single archetype (temporal + non-temporal).
-// Chunk::MAX_TEMPORAL_FIELDS caps temporal fields at 64; this adds headroom for non-temporal.
+static constexpr size_t MAX_COMPONENTS                    = 256;  ///< Maximum distinct component types.
+static constexpr size_t MAX_TEMPORAL_FIELDS_PER_COMPONENT = 64;   ///< Max decomposed temporal SoA fields per component.
+static constexpr size_t MAX_FIELD_ARRAYS = MAX_COMPONENTS * MAX_TEMPORAL_FIELDS_PER_COMPONENT; ///< Max total field arrays across all components.
+/// @brief Upper bound on field arrays for any single archetype (temporal + non-temporal).
 static constexpr size_t MAX_FIELDS_PER_ARCHETYPE = 64;
-using ComponentSignature                         = FixedBitset<MAX_COMPONENTS>;
-using ClassID                                    = uint16_t;
-static constexpr size_t MAX_CLASS_COUNT          = 4096; // based on size of TypeID in Entity header hardcoded for testing
 
-// roughly 32 entities per chunk if they have 64 fields of 4bytes each all in chunk storage.
+using ComponentSignature = FixedBitset<MAX_COMPONENTS>; ///< Bitmask tracking which component types are present on an archetype.
+using ClassID            = uint16_t;                    ///< Per-Construct-type numeric class identifier.
+static constexpr size_t MAX_CLASS_COUNT = 4096;         ///< Hard limit based on the ClassID field width in Entity headers.
+
+/// @brief Nominal chunk size in bytes — ~32 entities if each has 64 fields of 4 bytes in chunk storage.
 constexpr uint32_t CHUNK_SIZE = 256 * MAX_FIELDS_PER_ARCHETYPE * 4;
 
-// Global counters (defined in TrinyxEngine.cpp)
+/// @brief Engine-internal global counters. Do not access directly from gameplay code.
 namespace Internal
 {
-	extern uint32_t g_GlobalComponentCounter;
-	extern uint8_t g_GlobalMixinCounter; // user mixin IDs, starts at 128
+	extern uint32_t g_GlobalComponentCounter; ///< Monotonically increasing component type counter.
+	extern uint8_t  g_GlobalMixinCounter;     ///< User mixin IDs; starts at 128 to avoid collisions with engine mixins.
 
+	/// @brief Per-CacheTier component slot counters, indexed by CacheTier value.
 	extern std::array<uint8_t, static_cast<size_t>(CacheTier::MAX)> g_TemporalComponentCounter;
 }
 
@@ -412,3 +429,5 @@ namespace Internal
 #elif defined(__GNUC__) || defined(__clang__)
 #pragma GCC diagnostic pop
 #endif
+
+/** @} */

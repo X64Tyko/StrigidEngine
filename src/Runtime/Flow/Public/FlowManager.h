@@ -6,6 +6,10 @@
 #include "LogicThreadBase.h"
 #include "Logger.h"
 
+/** @addtogroup flow
+ *  @{
+ */
+
 // ---------------------------------------------------------------------------
 // FlowManager<TNet, TRollback, TFrame> — Concrete typed flow manager.
 //
@@ -93,6 +97,10 @@ void FlowManager<TNet, TRollback, TFrame>::LoadLevel(const char* levelPath, bool
 			for (GlobalEntityHandle gh : spawnedHandles) reg->PushEntityReinitEvent(gh, spawnFrame);
 #endif
 		});
+		// Clamp future spawn rollbacks to this frame — any Jolt snapshot before spawnFrame
+		// was saved before level geometry existed, so rolling back further would restore
+		// an empty physics world and leave level bodies in an unsaved state.
+		ActiveWorld->GetLogicThread()->SetEarliestValidRollbackFrame(spawnFrame);
 	}
 	else
 	{
@@ -106,3 +114,5 @@ void FlowManager<TNet, TRollback, TFrame>::LoadLevel(const char* levelPath, bool
 
 	LOG_NET_INFO_F(nullptr, "[FlowManager] Level loaded: %s", levelPath);
 }
+
+/** @} */

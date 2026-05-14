@@ -337,3 +337,24 @@ jobs:
             cmake-build-ci-server/**/*.log
             cmake-build-ci-client/**/*.log
           retention-days: 7
+
+  # ---------------------------------------------------------------------------
+  # Fast-forward main to match Dev-Main once all CI jobs pass.
+  # Runs only on push to Dev-Main (not on PRs, not on main pushes).
+  # Uses the exact SHA that passed CI — not the branch tip — so a race-condition
+  # push that lands between CI start and merge cannot slip through.
+  # If main has diverged (requires rebase), the push fails explicitly.
+  # ---------------------------------------------------------------------------
+  merge-to-main:
+    name: "Fast-forward main ← Dev-Main"
+    needs: [ build-and-test, network-loopback ]
+    if: github.ref == 'refs/heads/Dev-Main' && github.event_name == 'push'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - name: Push to main
+        run: |
+          git push https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git \
+            ${{ github.sha }}:refs/heads/main

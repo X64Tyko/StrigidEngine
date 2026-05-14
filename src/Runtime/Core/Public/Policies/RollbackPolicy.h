@@ -6,16 +6,22 @@
 #include "NetTypes.h"
 #include "TrinyxMPMCRing.h"
 
+/** @addtogroup core
+ *  @{
+ */
+
 class LogicThreadBase;
 
-// ---------------------------------------------------------------------------
-// NoRollback — zero-size, zero overhead.
-// All stubs are empty so LogicThread call sites need no if constexpr guards.
-// ---------------------------------------------------------------------------
+/**
+ * @brief TRollbackMode policy for `LogicThread` — no rollback history, zero overhead.
+ *
+ * All stubs compile away; LogicThread call sites require no `if constexpr` guards.
+ * Games that don't need rollback pay no memory or runtime cost.
+ */
 struct NoRollback
 {
-    static constexpr bool     Enabled            = false;
-    static constexpr uint32_t RollbackFrameCount = 0;
+    static constexpr bool     Enabled            = false; ///< Compile-time guard for rollback-conditional code.
+    static constexpr uint32_t RollbackFrameCount = 0;     ///< No history frames allocated.
 
     void InitializeRings() {}
 
@@ -34,42 +40,89 @@ struct NoRollback
     void EnqueueSpawnRollback(LogicThreadBase&, uint32_t) {}
 };
 
-// ---------------------------------------------------------------------------
-// RollbackSim — owns all rollback state and logic.
-// Method bodies live in RollbackImpl.h (templates) and RollbackSim.cpp (non-templates).
-// ---------------------------------------------------------------------------
+/**
+ * @brief TRollbackMode policy for `LogicThread` — owns all rollback state and logic.
+ *
+ * Template method bodies live in `RollbackImpl.h`; non-template bodies in `RollbackSim.cpp`.
+ *
+ * @note `IncomingCorrections` and `IncomingPredictedCorrections` are the only members
+ *       safe to write from net/worker threads. All other members are Logic-thread-only.
+ * @warning `EnqueueCorrections` and `EnqueuePredictedCorrections` may be called from any
+ *          thread; all other methods must be called on the Logic thread.
+ */
 struct RollbackSim
 {
-    static constexpr bool     Enabled            = true;
-    static constexpr uint32_t RollbackFrameCount = 5;
+    static constexpr bool     Enabled            = true; ///< Enables rollback paths in LogicThread.
+    static constexpr uint32_t RollbackFrameCount = 5;    ///< Frames of history kept for resimulation.
 
-    // Lock-free rings: net/worker threads push here; logic thread drains.
-    TrinyxMPMCRing<EntityTransformCorrection> IncomingCorrections;
-    TrinyxMPMCRing<EntityTransformCorrection> IncomingPredictedCorrections;
+    TrinyxMPMCRing<EntityTransformCorrection> IncomingCorrections;          ///< Lock-free; net/worker threads push, Logic thread drains.
+    TrinyxMPMCRing<EntityTransformCorrection> IncomingPredictedCorrections; ///< Lock-free; net/worker threads push, Logic thread drains.
 
-    // Logic-thread-only staging (drained from IncomingCorrections each tick).
-    std::vector<EntityTransformCorrection> PendingCorrections;
-    std::queue<EntityTransformCorrection>  PendingPredictedCorrections;
+    std::vector<EntityTransformCorrection> PendingCorrections;          ///< Logic-thread staging; drained from IncomingCorrections each tick.
+    std::queue<EntityTransformCorrection>  PendingPredictedCorrections; ///< Logic-thread staging; drained from IncomingPredictedCorrections each tick.
 
 #ifdef TNX_TESTING
-    std::vector<uint8_t> TemporalSlabBackup;
-    std::vector<uint8_t> VolatileSlabBackup;
-    std::vector<uint8_t> GroundTruthBackup;
+    std::vector<uint8_t> TemporalSlabBackup;  ///< Pre-rollback slab snapshot for determinism validation.
+    std::vector<uint8_t> VolatileSlabBackup;  ///< Pre-rollback slab snapshot for determinism validation.
+    std::vector<uint8_t> GroundTruthBackup;   ///< Authority state captured for post-resim diff.
 #endif
 
     void InitializeRings();
 
+    /**
+     * @brief Drains incoming rings and triggers resimulation if corrections are pending.
+     * @tparam TLogic Concrete LogicThread specialization.
+     */
     template <typename TLogic> void ProcessRollback(TLogic& logic);
+
+    /**
+     * @brief Restores Jolt + SoA state to `targetFrame` and resimulates forward.
+     * @tparam TLogic Concrete LogicThread specialization.
+     * @param targetFrame Earliest frame that received a correction; resim starts here.
+     */
     template <typename TLogic> void ExecuteRollback(TLogic& logic, uint32_t targetFrame);
+
+    /**
+     * @brief Determinism self-test: resimulates the last N frames and diffs against saved ground truth.
+     * @tparam TLogic Concrete LogicThread specialization.
+     * @note Only meaningful with `TNX_TESTING` defined.
+     */
     template <typename TLogic> void ExecuteRollbackTest(TLogic& logic);
 
+    /** @brief Saves this frame's input into the per-frame input log for future resimulation. */
     void RecordFrameInput(LogicThreadBase& logic);
+
+    /**
+     * @brief Replays a previously recorded input into the sim during resimulation.
+     * @param frameNum The historical frame whose input is being replayed.
+     */
     void InjectFrameInput(LogicThreadBase& logic, uint32_t frameNum);
+
+    /** @brief Saves a Jolt + SoA snapshot for the current frame into the ring buffer. */
     void SaveSnapshot(LogicThreadBase& logic);
+
+    /** @brief Re-applies Authority-originated events (spawns, despawns) during resimulation. */
     void ReplayServerEvents(LogicThreadBase& logic);
+
+    /** @brief Applies speculative corrections accumulated in `PendingPredictedCorrections`. */
     void ApplyPredictedCorrections(LogicThreadBase& logic);
 
+    /**
+     * @brief Enqueues Authority-confirmed transform corrections; safe to call from any thread.
+     * @param earliestClientFrame The oldest client frame affected; resim will start from here.
+     */
     void EnqueueCorrections(std::vector<EntityTransformCorrection> corrections, uint32_t earliestClientFrame);
+
+    /**
+     * @brief Enqueues speculative (predicted) corrections; safe to call from any thread.
+     */
     void EnqueuePredictedCorrections(std::vector<EntityTransformCorrection> corrections);
+
+    /**
+     * @brief Triggers a rollback to reconcile a spawn that arrived out-of-order.
+     * @param clientFrame The client frame at which the spawn should have occurred.
+     */
     void EnqueueSpawnRollback(LogicThreadBase& logic, uint32_t clientFrame);
 };
+
+/** @} */

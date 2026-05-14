@@ -22,5 +22,6 @@ class EPlayer : public EInterpEntity<EPlayer, WIDTH>
 	{
 		EInterpEntity<EPlayer, WIDTH>::Initialize();
 		this->VisTransform.VisBlend = SimFloat(0.8f); // some default lerp for characters
+		this->Mesh.MeshID = static_cast<uint32_t>(1);
 	}
 };
