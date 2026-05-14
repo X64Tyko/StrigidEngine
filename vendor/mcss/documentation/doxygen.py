@@ -2469,11 +2469,11 @@ def extract_metadata(state: State, xml):
     # far Doxygen treats even *.c files as language="C++". Reproduced in the
     # test_ignored.Languages test case.
     if compounddef.attrib.get('language', 'C++') not in ['C++']:
-        logging.warning("{}: unsupported language {}, skipping whole file".format(state.current, compounddef.attrib['language']))
+        logging.debug("{}: language {} is not C++, skipping whole file".format(state.current, compounddef.attrib.get('language', 'unknown')))
         return
     assert len([i for i in root]) == 1
 
-    if compounddef.attrib['kind'] not in ['namespace', 'group', 'class', 'struct', 'union', 'dir', 'file', 'page']:
+    if compounddef.attrib['kind'] not in ['namespace', 'group', 'class', 'struct', 'union', 'concept', 'dir', 'file', 'page']:
         logging.debug("No useful info in {}, skipping".format(state.current))
         return
 
@@ -2905,7 +2905,7 @@ def parse_xml(state: State, xml: str):
     # Decide about the include file for this compound. Classes get it always,
     # namespaces without any class / group members too.
     state.current_kind = compound.kind
-    if compound.kind in ['struct', 'class', 'union'] or (compound.kind == 'namespace' and compounddef.find('innerclass') is None and compounddef.find('innernamespace') is None and compounddef.find('sectiondef') is None):
+    if compound.kind in ['struct', 'class', 'union', 'concept'] or (compound.kind == 'namespace' and compounddef.find('innerclass') is None and compounddef.find('innernamespace') is None and compounddef.find('sectiondef') is None):
         location_attribs = compounddef.find('location').attrib
         file = location_attribs['declfile'] if 'declfile' in location_attribs else location_attribs['file']
 
@@ -3632,6 +3632,8 @@ def parse_xml(state: State, xml: str):
             kind = EntryType.PAGE
         elif compound.kind == 'group':
             kind = EntryType.GROUP
+        elif compound.kind == 'concept':
+            kind = EntryType.CLASS
         else: assert False # pragma: no cover
 
         result = Empty()
@@ -3713,7 +3715,7 @@ def parse_index_xml(state: State, xml):
                 top_level_namespaces += [entry]
             elif compound.kind == 'group':
                 top_level_modules += [entry]
-            elif compound.kind in ['class', 'struct', 'union']:
+            elif compound.kind in ['class', 'struct', 'union', 'concept']:
                 top_level_classes += [entry]
             elif compound.kind == 'dir':
                 top_level_dirs += [entry]
@@ -3736,7 +3738,7 @@ def parse_index_xml(state: State, xml):
                     orphan_pages[compound.parent] = {}
                 orphan_pages[compound.parent][entry.id] = entry
             else:
-                assert compound.kind in ['class', 'struct', 'union', 'file']
+                assert compound.kind in ['class', 'struct', 'union', 'concept', 'file']
                 if not compound.parent in orphans:
                     orphans[compound.parent] = []
                 orphans[compound.parent] += [entry]
