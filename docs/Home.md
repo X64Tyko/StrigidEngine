@@ -2,6 +2,7 @@
 
 TrinyxEngine is a C++20, data-oriented game engine built for competitive multiplayer games where **determinism, rollback netcode, and input latency are first-class design constraints**. It targets 100,000+ dynamic entities at 512Hz fixed update (1.95ms/frame budget) while exposing a familiar OOP-style API to gameplay authors.
 
+
 ---
 
 ## Navigation
