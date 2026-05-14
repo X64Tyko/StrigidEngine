@@ -357,9 +357,26 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          fetch-depth: 1
+          fetch-depth: 0
 
       - name: Push to main
         run: |
-          git push https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git \
-            ${{ github.sha }}:refs/heads/main
+          git fetch origin main
+
+          # Case 1: main already contains our SHA (a newer CI run beat us here).
+          # This is not an error — the more recent commit is already on main.
+          if git merge-base --is-ancestor "${{ github.sha }}" origin/main; then
+            echo "main is already at or ahead of ${{ github.sha }} — nothing to do."
+            exit 0
+          fi
+
+          # Case 2: our SHA is ahead of main (clean fast-forward) — push normally.
+          if git merge-base --is-ancestor origin/main "${{ github.sha }}"; then
+            git push https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git \
+              ${{ github.sha }}:refs/heads/main
+            exit 0
+          fi
+
+          # Case 3: true divergence — someone committed directly to main.
+          echo "ERROR: main has diverged from Dev-Main. Rebase Dev-Main onto main before merging."
+          exit 1
