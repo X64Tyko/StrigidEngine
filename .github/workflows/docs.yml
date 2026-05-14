@@ -27,6 +27,7 @@ jobs:
         with:
           # Full history gives Doxygen accurate file dates.
           fetch-depth: 0
+          submodules: recursive
 
       - name: Install Doxygen + Graphviz
         run: |
