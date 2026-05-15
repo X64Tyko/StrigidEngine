@@ -183,6 +183,21 @@ void OwnerNet::HandleEntitySpawn(Registry* reg, const EntitySpawnPayload& payloa
 						   reg->GetTemporalCache()->GetActiveReadFrame(),
 						   reg->GetVolatileCache()->GetActiveReadFrame());
 
+	// WriteEntitySpawnFields bypasses FieldProxy so Dirty|DirtiedFrame are never ORed in.
+	// Set them explicitly on the write frame so the GPU dirty-bit upload sees this entity.
+	{
+		ComponentCacheBase* cache       = reg->GetTemporalCache();
+		TemporalFrameHeader* writeHdr   = cache->GetFrameHeader(cache->GetActiveWriteFrame());
+		const ComponentTypeID flagsSlot = CacheSlotMeta<>::StaticTemporalIndex();
+		auto* writeFlags = static_cast<int32_t*>(cache->GetFieldData(writeHdr, flagsSlot, 0));
+		if (writeFlags)
+		{
+			const uint32_t slabIdx = static_cast<uint32_t>(record->CacheEntityIndex);
+			writeFlags[slabIdx] |= static_cast<int32_t>(TemporalFlagBits::Dirty)
+			                    |  static_cast<int32_t>(TemporalFlagBits::DirtiedFrame);
+		}
+	}
+
 #ifdef TNX_ENABLE_ROLLBACK
 	{
 		GlobalEntityHandle capturedGH      = gHandle;
@@ -196,6 +211,17 @@ void OwnerNet::HandleEntitySpawn(Registry* reg, const EntitySpawnPayload& payloa
 				WriteEntitySpawnFields(reg, rec, capturedPayload,
 									   reg->GetTemporalCache()->GetActiveWriteFrame(),
 									   reg->GetVolatileCache()->GetActiveWriteFrame());
+				// Set DirtiedFrame so PropagateFrameResim scatter-copies this entity forward.
+				ComponentCacheBase* c     = reg->GetTemporalCache();
+				TemporalFrameHeader* wHdr = c->GetFrameHeader(c->GetActiveWriteFrame());
+				const ComponentTypeID slot = CacheSlotMeta<>::StaticTemporalIndex();
+				auto* wFlags = static_cast<int32_t*>(c->GetFieldData(wHdr, slot, 0));
+				if (wFlags)
+				{
+					const uint32_t slabIdx = static_cast<uint32_t>(rec->CacheEntityIndex);
+					wFlags[slabIdx] |= static_cast<int32_t>(TemporalFlagBits::Dirty)
+					                |  static_cast<int32_t>(TemporalFlagBits::DirtiedFrame);
+				}
 			}
 		});
 	}
@@ -219,6 +245,8 @@ void OwnerNet::HandleEntityActivate(Registry* reg, const uint32_t* netHandles, u
 	if (!writeFlags) return;
 
 	const int32_t activeBit = static_cast<int32_t>(TemporalFlagBits::Active);
+	const int32_t dirtyBits = static_cast<int32_t>(TemporalFlagBits::Dirty)
+	                        | static_cast<int32_t>(TemporalFlagBits::DirtiedFrame);
 
 	for (uint32_t k = 0; k < count; ++k)
 	{
@@ -228,7 +256,7 @@ void OwnerNet::HandleEntityActivate(Registry* reg, const uint32_t* netHandles, u
 		if (!record || !record->IsValid()) continue;
 
 		const uint32_t slabIdx = static_cast<uint32_t>(record->CacheEntityIndex);
-		writeFlags[slabIdx] |= activeBit;
+		writeFlags[slabIdx] |= activeBit | dirtyBits;
 		if (readFlags) readFlags[slabIdx] |= activeBit;
 	}
 
@@ -244,14 +272,16 @@ void OwnerNet::HandleEntityActivate(Registry* reg, const uint32_t* netHandles, u
 				const ComponentTypeID slot = CacheSlotMeta<>::StaticTemporalIndex();
 				auto* wFlags = static_cast<int32_t*>(c->GetFieldData(wHdr, slot, 0));
 				if (!wFlags) return;
-				const int32_t bit = static_cast<int32_t>(TemporalFlagBits::Active);
+				const int32_t bits = static_cast<int32_t>(TemporalFlagBits::Active)
+				                   | static_cast<int32_t>(TemporalFlagBits::Dirty)
+				                   | static_cast<int32_t>(TemporalFlagBits::DirtiedFrame);
 				for (uint32_t nhVal : capturedHandles)
 				{
 					EntityNetHandle nh{};
 					nh.Value             = nhVal;
 					EntityRecord* rec    = reg->GlobalEntityRegistry.GetRecordPtr(nh);
 					if (!rec || !rec->IsValid()) continue;
-					wFlags[static_cast<uint32_t>(rec->CacheEntityIndex)] |= bit;
+					wFlags[static_cast<uint32_t>(rec->CacheEntityIndex)] |= bits;
 				}
 			}
 		});
