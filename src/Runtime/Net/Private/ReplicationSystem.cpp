@@ -97,8 +97,43 @@ void ReplicationSystem::Flush(NetConnectionManager* connMgr)
 
 void ReplicationSystem::DispatchConstructSpawnJobs(uint32_t frameNumber)
 {
-	if (PendingConstructSpawns.empty()) return;
 	if (!TrinyxJobs::IsRunning()) return;
+
+	struct Capture
+	{
+		ServerClientChannel* Channel;
+		PacketHeader         Header;
+		std::vector<uint8_t> Buf;
+		uint32_t             ServerSpawnFrame;
+	};
+
+	auto dispatchBuf = [&](ServerClientChannel* ch, uint32_t clientFrame, const std::vector<uint8_t>& buf)
+	{
+		if (buf.size() < sizeof(ConstructSpawnPayload)) return;
+
+		PacketHeader hdr = ch->Channel.PrepareHeader(
+			NetMessageType::ConstructSpawn,
+			static_cast<uint16_t>(buf.size()),
+			clientFrame);
+
+		auto* cap             = new Capture{ch, hdr, buf, 0};
+		cap->ServerSpawnFrame = reinterpret_cast<const ConstructSpawnPayload*>(buf.data())->SpawnFrame;
+
+		TrinyxJobs::Dispatch([cap](uint32_t)
+		{
+			auto perClientBuf       = cap->Buf;
+			auto* pl                = reinterpret_cast<ConstructSpawnPayload*>(perClientBuf.data());
+			pl->SpawnFrame          = cap->Channel->CI->ToClientFrame(cap->ServerSpawnFrame);
+			cap->Header.PayloadSize = static_cast<uint16_t>(perClientBuf.size());
+
+			PendingPacket pkt;
+			pkt.Header   = cap->Header;
+			pkt.Payload  = std::move(perClientBuf);
+			pkt.Reliable = true;
+			cap->Channel->SendQueue.Push(std::move(pkt));
+			delete cap;
+		}, &BuildCounter, TrinyxJobs::Queue::General);
+	};
 
 	for (uint8_t oid : ActiveOwnerIDs)
 	{
@@ -108,41 +143,60 @@ void ReplicationSystem::DispatchConstructSpawnJobs(uint32_t frameNumber)
 
 		const uint32_t clientFrame = ch->CI->ToClientFrame(frameNumber);
 
-		for (const std::vector<uint8_t>& buf : PendingConstructSpawns)
+		if (!ch->CI->bInitialConstructFlushed)
 		{
-			if (buf.size() < sizeof(ConstructSpawnPayload)) continue;
-
-			// Stamp the header on Sentinel before the job runs to fix SequenceNum.
-			PacketHeader hdr = ch->Channel.PrepareHeader(
-				NetMessageType::ConstructSpawn,
-				static_cast<uint16_t>(buf.size()),
-				clientFrame);
-
-			struct Capture
+			// Walk all live constructs and build payloads from current view state.
+			// CollectViewHandlesFn reads the live EntityHandle from each ConstructView,
+			// so defrag relocations are handled correctly without any cached data.
+			if (ConstructReg)
 			{
-				ServerClientChannel* Channel;
-				PacketHeader Header;
-				std::vector<uint8_t> Buf;
-				uint32_t ServerSpawnFrame;
-			};
-			auto* cap             = new Capture{ch, hdr, buf, 0};
-			cap->ServerSpawnFrame = reinterpret_cast<const ConstructSpawnPayload*>(buf.data())->SpawnFrame;
+				Registry* entityReg = AuthorityWorld ? AuthorityWorld->GetRegistry() : nullptr;
+				std::vector<EntityHandle> viewHandles;
 
-			TrinyxJobs::Dispatch([cap](uint32_t)
-			{
-				// Translate SpawnFrame into client-local frame space before sending.
-				auto perClientBuf       = cap->Buf;
-				auto* pl                = reinterpret_cast<ConstructSpawnPayload*>(perClientBuf.data());
-				pl->SpawnFrame          = cap->Channel->CI->ToClientFrame(cap->ServerSpawnFrame);
-				cap->Header.PayloadSize = static_cast<uint16_t>(perClientBuf.size());
+				for (auto& bucket : ConstructReg->Buckets)
+				{
+					for (const auto& entry : bucket)
+					{
+						if (!entry.NetHandle.Value || !entry.CollectViewHandlesFn) continue;
+						const ConstructRecord* rec = ConstructReg->Records.try_get_ptr(entry.NetHandle.NetIndex);
+						if (!rec || !rec->IsValid()) continue;
 
-				PendingPacket pkt;
-				pkt.Header   = cap->Header;
-				pkt.Payload  = std::move(perClientBuf);
-				pkt.Reliable = true;
-				cap->Channel->SendQueue.Push(std::move(pkt));
-				delete cap;
-			}, &BuildCounter, TrinyxJobs::Queue::General);
+						entry.CollectViewHandlesFn(entry.Ptr, viewHandles);
+
+						std::vector<uint32_t> netHandleValues(viewHandles.size(), 0);
+						if (entityReg)
+						{
+							for (size_t k = 0; k < viewHandles.size(); ++k)
+							{
+								GlobalEntityHandle gH = entityReg->GlobalEntityRegistry.LookupGlobalHandle(viewHandles[k]);
+								if (gH.GetIndex() == 0) continue;
+								const EntityRecord* entRec = entityReg->GlobalEntityRegistry.Records[gH.GetIndex()];
+								if (entRec) netHandleValues[k] = entRec->NetworkID.Value;
+							}
+						}
+
+						const uint8_t viewCount  = static_cast<uint8_t>(viewHandles.size());
+						const size_t payloadSize = sizeof(ConstructSpawnPayload) + viewCount * sizeof(uint32_t);
+						std::vector<uint8_t> buf(payloadSize, 0);
+						auto* pl        = reinterpret_cast<ConstructSpawnPayload*>(buf.data());
+						pl->Handle      = rec->NetworkID.Value;
+						ConstructNetManifest mf{}; mf.PrefabIndex = rec->TypeHash;
+						pl->Manifest    = mf.Value;
+						pl->SpawnFrame  = rec->SpawnFrame;
+						pl->ViewCount   = viewCount;
+						uint32_t* trail = reinterpret_cast<uint32_t*>(buf.data() + sizeof(ConstructSpawnPayload));
+						for (uint8_t j = 0; j < viewCount; ++j) trail[j] = netHandleValues[j];
+
+						dispatchBuf(ch, clientFrame, buf);
+					}
+				}
+			}
+			ch->CI->bInitialConstructFlushed = true;
+		}
+		else
+		{
+			for (const std::vector<uint8_t>& buf : PendingConstructSpawns)
+				dispatchBuf(ch, clientFrame, buf);
 		}
 	}
 

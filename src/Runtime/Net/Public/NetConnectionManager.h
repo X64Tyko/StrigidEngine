@@ -69,6 +69,7 @@ struct ConnectionInfo
 	bool bAuthoritySide                = false; // True for server-accepted handles, false for client-initiated
 	bool bOwnerInitiated           = false; // True only for connections we opened via Connect() — reliable even in GNS loopback
 	bool bInitialSpawnFlushed       = false; // Server-side: true after first full entity batch sent to this client
+	bool bInitialConstructFlushed   = false; // Server-side: true after first full construct batch sent to this client
 
 	// Client-side: last frame the server confirmed it consumed — in client-local frame space
 	// (the server converts from server-frame via FrameOffset before stamping the header).

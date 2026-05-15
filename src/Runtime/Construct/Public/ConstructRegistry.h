@@ -78,6 +78,8 @@ public:
 		entry.ShutdownPtr = [](void* p) { static_cast<T*>(p)->Shutdown(); };
 		entry.ReinitPtr   = [](void* p, WorldBase* w) { static_cast<T*>(p)->Initialize(w); };
 
+		entry.CollectViewHandlesFn = [](void* p, std::vector<EntityHandle>& out) { static_cast<T*>(p)->CollectViewHandles(out); };
+
 		// Concept-detected world transition callbacks
 		if constexpr (requires(T t) { t.OnWorldTeardown(); }) entry.OnTeardown = [](void* p) { static_cast<T*>(p)->OnWorldTeardown(); };
 
@@ -411,6 +413,11 @@ private:
 		InitializedFn OnInitialized = nullptr;
 		ShutdownFn ShutdownPtr      = nullptr;
 		ReinitFn ReinitPtr          = nullptr;
+
+		// Collects the live EntityHandle for each registered ConstructView.
+		// Set at Create<T> time. Used by ReplicationSystem to build ConstructSpawn
+		// payloads for late-joining clients without caching stale handles.
+		void (*CollectViewHandlesFn)(void*, std::vector<EntityHandle>&) = nullptr;
 
 		// Net destroy hook — set by ReplicationSystem::RegisterConstruct.
 		// Fires before the Entry is erased so ReplicationSystem can queue ConstructDestroy.

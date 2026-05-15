@@ -74,17 +74,15 @@ public:
 
 		ConstructRef ref = reg->AllocateNetRef(ptr, ownerID, manifest, typeHash, prefabIDRaw, spawnFrame);
 
-		constexpr size_t MaxViews = 8;
-		EntityHandle viewHandles[MaxViews]{};
-		uint8_t viewCount = 0;
-		ptr->CollectViewHandles(viewHandles, viewCount);
+		std::vector<EntityHandle> viewHandles;
+		ptr->CollectViewHandles(viewHandles);
 
 		// Assign net handles for any view entity that doesn't have one yet.
 		Registry* entityReg = AuthorityWorld ? AuthorityWorld->GetRegistry() : nullptr;
-		uint32_t netHandleValues[MaxViews]{};
+		std::vector<uint32_t> netHandleValues(viewHandles.size(), 0);
 		if (entityReg)
 		{
-			for (uint8_t i = 0; i < viewCount; ++i)
+			for (size_t i = 0; i < viewHandles.size(); ++i)
 			{
 				GlobalEntityHandle gH = entityReg->GlobalEntityRegistry.LookupGlobalHandle(viewHandles[i]);
 				if (gH.GetIndex() == 0) continue;
@@ -95,6 +93,7 @@ public:
 			}
 		}
 
+		const uint8_t viewCount  = static_cast<uint8_t>(viewHandles.size());
 		const size_t payloadSize = sizeof(ConstructSpawnPayload) + viewCount * sizeof(uint32_t);
 		std::vector<uint8_t> buf(payloadSize, 0);
 		auto* payload       = reinterpret_cast<ConstructSpawnPayload*>(buf.data());

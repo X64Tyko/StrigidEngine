@@ -1,5 +1,7 @@
 #pragma once
 
+#include <vector>
+
 #include "EntityMeta.h"
 #include "EntityRecord.h"
 #include "LogicThreadBase.h"
@@ -124,10 +126,10 @@ public:
 			JoltPhysics* Phys = OwnerWorld->GetPhysics();
 			Registry* Reg     = OwnerWorld->GetRegistry();
 			Derived* Self     = static_cast<Derived*>(this);
-			for (uint32_t i = 0; i < ViewCount; ++i)
+			for (const auto& v : Views)
 			{
-				if (!Views[i].GetHandleFn) continue;
-				EntityHandle handle = Views[i].GetHandleFn(Views[i].View);
+				if (!v.GetHandleFn) continue;
+				EntityHandle handle = v.GetHandleFn(v.View);
 				if constexpr (HasOnHit<Derived>) Phys->BindOnHit<Derived, &Derived::OnHit>(handle, Reg, Self);
 				if constexpr (HasOnOverlapBegin<Derived>) Phys->BindOnOverlapBegin<Derived, &Derived::OnOverlapBegin>(handle, Reg, Self);
 				if constexpr (HasOnOverlapEnd<Derived>) Phys->BindOnOverlapEnd<Derived, &Derived::OnOverlapEnd>(handle, Reg, Self);
@@ -153,10 +155,10 @@ public:
 		{
 			JoltPhysics* Phys = OwnerWorld->GetPhysics();
 			Registry* Reg     = OwnerWorld->GetRegistry();
-			for (uint32_t i = 0; i < ViewCount; ++i)
+			for (const auto& v : Views)
 			{
-				if (!Views[i].GetHandleFn) continue;
-				EntityHandle handle = Views[i].GetHandleFn(Views[i].View);
+				if (!v.GetHandleFn) continue;
+				EntityHandle handle = v.GetHandleFn(v.View);
 				Phys->UnbindContacts(handle, Reg, static_cast<Derived*>(this));
 			}
 		}
@@ -173,27 +175,26 @@ public:
 
 	void RegisterView(ConstructViewRef ref)
 	{
-		Views[ViewCount++] = ref;
+		Views.push_back(ref);
 	}
 
 	/// Collect the ECS EntityHandle for each registered View.
 	/// Used by ReplicationSystem to build the ConstructSpawnPayload.
-	void CollectViewHandles(EntityHandle* out, uint8_t& count) const
+	void CollectViewHandles(std::vector<EntityHandle>& out) const
 	{
-		count = 0;
-		for (uint32_t i = 0; i < ViewCount; ++i)
-		{
-			if (Views[i].GetHandleFn) out[count++] = Views[i].GetHandleFn(Views[i].View);
-		}
+		out.clear();
+		for (const auto& v : Views)
+			if (v.GetHandleFn) out.push_back(v.GetHandleFn(v.View));
 	}
 
 	void DeregisterView(void* viewPtr)
 	{
-		for (uint32_t i = 0; i < ViewCount; ++i)
+		for (size_t i = 0; i < Views.size(); ++i)
 		{
 			if (Views[i].View == viewPtr)
 			{
-				Views[i] = Views[--ViewCount]; // swap-remove
+				Views[i] = std::move(Views.back());
+				Views.pop_back();
 				return;
 			}
 		}
@@ -222,13 +223,11 @@ private:
 	uint32_t ConstructID = 0;
 	bool bInitialized    = false;
 
-	static constexpr uint32_t MaxViews = 8;
-	ConstructViewRef Views[MaxViews];
-	uint32_t ViewCount = 0;
+	std::vector<ConstructViewRef> Views;
 
 	void HydrateAllViews()
 	{
-		for (uint32_t i = 0; i < ViewCount; ++i) Views[i].EnsureHydrated();
+		for (auto& v : Views) v.EnsureHydrated();
 	}
 
 	void PrePhysBase(SimFloat dt)
