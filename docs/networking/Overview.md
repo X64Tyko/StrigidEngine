@@ -26,6 +26,28 @@ Server-authoritative over GameNetworkingSockets (GNS). The transport is an imple
 
 ---
 
+## Two Network Modes
+
+### Deterministic Mode
+
+Frame numbers are the primary packet identifier. Input replication is the sync mechanism. State replication is optional — useful only as a divergence correction signal.
+
+- All peers must run at the same logic Hz
+- Slow clients are a policy problem, not an architectural one: rollback fast-forwards them back; disconnect policy handles unrecoverable deficit
+- Suited for competitive play where simulation integrity is paramount
+
+### Non-Deterministic Mode
+
+Server timestamps (`server_time_us`) replace frame numbers as the primary packet identifier. State replication is the primary sync signal — not optional in practice, since clients cannot guarantee identical outcomes.
+
+- Clients can run at any logic frame rate
+- Uncapped renderer interpolates smoothly between 30Hz snapshots regardless of local frame rate
+- Suited for co-op, casual games, or games with variable client performance expectations
+
+The `TNet` policy axis encodes which mode a given build uses. `AuthoritySim` and `OwnerSim` currently implement Deterministic Mode only. Non-Deterministic Mode requires a separate rewrite of those paths — see [Known Gaps](#known-gaps).
+
+---
+
 ## Core Components
 
 ### GNSContext
@@ -89,9 +111,14 @@ class LogicThread : public LogicThreadBase { ... };
 
 **Net policy types:**
 
-- **`AuthoritySim`** — `OnSimInput` injects per-player `PlayerInputLog` from `ServerClientChannel`; `OnFramePublished` advances `CommittedFrameHorizon`
-- **`OwnerSim`** — `OnSimInput` pushes to `InputAccumRing`; `OnFramePublished` is a no-op
-- **`SoloSim`** — both are no-ops
+| Policy | Shorthand | Role |
+|---|---|---|
+| `AuthoritySim` | AuthNet | `OnSimInput` injects per-player `PlayerInputLog` from `ServerClientChannel`; `OnFramePublished` advances `CommittedFrameHorizon` |
+| `OwnerSim` | OwnerNet | `OnSimInput` pushes to `InputAccumRing`; `OnFramePublished` is a no-op |
+| `SoloSim` | — | Both are no-ops |
+| `ListenSim` *(planned)* | ListenNet | Host-is-a-peer; combines Authority and Owner roles; runtime authority override table resolves per-entity ownership; migration-capable |
+
+`AuthNet` and `OwnerNet` are stripped builds — no authority surface is exposed to the wrong side. The security boundary is enforced at compile time, not runtime. `ListenNet` carries overhead the other modes never pay: runtime authority resolution, migration state, and both frame paths simultaneously.
 
 Dead code never compiles in a given build. Add new Authority/Owner branching to the sim mode policy — not to `LogicThread` directly.
 
@@ -189,7 +216,106 @@ Each job owns its `ServerClientChannel` exclusively — zero contention. Replica
 
 ---
 
+## Disconnect Policy
+
+The engine surfaces health metrics and executes whatever action the game returns. Policy decisions are never owned by the engine itself.
+
+```cpp
+struct ClientHealthMetrics {
+    float    packet_loss_pct;
+    uint32_t ms_behind_server;
+    uint32_t consecutive_missed_inputs;
+    uint32_t ticks_behind;
+    uint64_t last_packet_time_us;
+    bool     clock_sync_valid;
+};
+
+enum class ClientAction { None, Warn, Disconnect, Pause };
+
+using ClientHealthCallback = ClientAction(*)(
+    ClientID, ClientHealthMetrics, void* user_data
+);
+```
+
+`NetDisconnectPolicy` provides sane defaults for games that don't implement a custom callback:
+
+```cpp
+struct NetDisconnectPolicy {
+    uint32_t timeout_ms               = 10000;
+    float    packet_loss_threshold    = 0.30f;
+    uint32_t max_ticks_behind         = 512;   // deterministic mode
+    uint32_t max_ms_behind            = 500;   // non-deterministic mode
+    uint32_t health_check_interval_ms = 1000;
+    ClientHealthCallback     on_health_changed = nullptr;
+    ClientDisconnectCallback on_disconnect     = nullptr;
+};
+```
+
+A null callback uses default threshold enforcement. Setting the callback grants full control over Warn/Disconnect/Pause decisions.
+
+**Anti-cheat surface:** The disconnect policy incidentally bounds the exploitation window for common cheats:
+- Lag switches are capped to the variance window tolerance
+- Speed hacks: inputs timestamped ahead of server time are flagged as anomalous
+- Position hacks: the Authority owns simulation — client position is never trusted
+- Input injection: 128Hz input cap enforced Authority-side
+
+**Status: Designed, not yet implemented.**
+
+---
+
+## Host Migration (ListenNet)
+
+Host migration is a `ListenNet`-only concern. `AuthNet` (dedicated server) has no migration path; `OwnerNet` is a client-only build.
+
+### AuthorityClass Tags
+
+Each entity in a ListenNet game carries an `AuthorityClass` tag that governs authority transfer:
+
+| Tag | Meaning |
+|---|---|
+| `Host` | Follows the current host; transfers on migration |
+| `Owner` | Owned by the spawning peer; survives migration naturally |
+| `Fixed` | Compile-time permanent authority; never transfers |
+
+### Prerequisites Already Satisfied
+
+Migration requires no new infrastructure — only assembly of existing parts:
+- **Temporal ring buffer** — every peer has recent state history available as a snapshot
+- **Base frame offset per client** — re-anchoring to a new host is recalculating the offset
+- **Health metrics** — a degrading host is detectable before full disconnection
+- **Input windowing** — already active; retransmit input stream to new host to cover the gap
+
+### Handshake Protocol
+
+1. Old host continues simulating and acting as Authority during the handshake window
+2. Old host sends explicit state and input stream to the migration candidate
+3. New host fast-forwards via rollback until its snapshot matches
+4. New host signals ready and notifies all connected peers
+5. Old host receives confirmation and stops sending state snapshots
+6. Authority transfer complete — peers experience no gap
+
+### Candidate Election
+
+- Ranked by latency and snapshot recency; freshest snapshot wins ties
+- Old host does not relinquish authority until it receives explicit confirmation from the new host that all peers have been notified
+
+### Handshake Timeout and Candidate Failure
+
+If the old host detects candidate loss: abort handshake, reassert full authority, select next ranked candidate, restart handshake.
+
+### Memory Constraint
+
+No logical host/client split exists internally — preallocated slabs make doubling the footprint unreasonable. Migration serializes into snapshot format and transmits to the new host, which deserializes into its own preallocated slab. This serialization path also serves save states, late join, reconnect, and debug replay.
+
+**Status: Designed, not yet implemented.** Requires the snapshot serialization path first.
+
+---
+
 ## Known Gaps
 
 - No interest management / relevancy culling — Authority sends all entities to all Owners today
 - Phase 0 tentative despawn not implemented — see [Despawn Protocol](Despawn-Protocol.md)
+- `ListenNet` (`ListenSim`) TNet policy not yet implemented — `AuthorityClass` tagging and runtime override table pending
+- Host migration designed but not implemented — requires snapshot serialization path
+- Disconnect policy designed but not implemented — `ClientHealthMetrics` structs not wired
+- Deterministic/Non-Deterministic mode split is a planned netcode rewrite; current code is Deterministic only

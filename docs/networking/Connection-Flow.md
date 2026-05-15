@@ -48,7 +48,11 @@ Owner                              Authority
 - GNS establishes the transport connection
 - `HandshakeRequest` carries the client's engine version and a stable UUID; the Authority assigns an `OwnerID` (1–255) and creates a `Soul` for that connection
 - RTT is measured via ~8 Ping/Pong probes; an EWMA (0.875 old / 0.125 new weight) is maintained throughout the session
-- `ClockSync` computes the Owner's `InputLead` — how many frames ahead to timestamp inputs so they arrive at the Authority before the Authority simulates that frame. Formula: `RTT/2 + jitter_buffer`.
+- `ClockSync` establishes the **Base Frame Offset** — how many frames ahead the Owner must timestamp inputs so they arrive at the Authority before the Authority simulates that frame. Formula: `RTT/2 + jitter_buffer`. This is the stable target client-server relationship for the session, not a zero-lag target; subsequent drift is measured relative to it, not relative to zero. Cristian's algorithm with 5–6 RTT samples (median) is used for measurement; the server time offset is refreshed periodically during the session.
+- Three drift correction mechanisms operate against the Base Frame Offset:
+  - **Fast-forward:** client is behind the target offset — rollback ring buffer used to consume ticks faster than real time
+  - **Stall:** client is ahead of the target offset — hold one tick
+  - **Disconnect policy:** drift exceeds the variance window — health metrics fire, game callback decides action
 - `ClientReady` signals clock sync complete; Authority advances `ClientRepState` to `Synchronizing`
 
 ---

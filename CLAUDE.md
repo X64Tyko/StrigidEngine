@@ -482,10 +482,12 @@ for the authoritative status tracker.
    50-command undo/redo stack, GPU picking. See `docs/EDITOR.md`. Scope is explicitly limited to this definition.
 2. **Construct/View OOP** — Complete. `Construct<T>`, `Owned<T>`, `ConstructView<TEntity>`, `ConstructBatch`,
    JoltCharacter. PlayerConstruct proven.
-3. **Networking** — Complete. GNS wrapper, Authority/Owner/Host model, PIE loopback, entity spawn/destroy
+3. **Networking** — In progress. GNS wrapper, Authority/Owner/Host model, PIE loopback, entity spawn/destroy
    replication, state corrections, delta compression, rollback netcode integration, ClientRepState 7-state machine,
    gated push replication, networked despawn. `LogicThread<TNet,TRollback,TFrame>`, `AuthoritySim`/`OwnerSim`,
-   `ServerClientChannel` all done. Only pending: Phase 0 tentative despawn (needed for rollback-safe entity death).
+   `ServerClientChannel` all done. Pending: Phase 0 tentative despawn, `ListenNet` compile-time mode,
+   `AuthorityClass` tags + runtime authority override table, host migration, disconnect policy,
+   snapshot serialization path, and Deterministic/Non-Deterministic mode split rewrite.
 4. **Audio** — Complete. SDL3 `AudioManager`: voice pool, handle-based (`SoundHandle`) playback/stop/fade,
    `AudioEventEntry` registry, priority voice stealing, lazy-load/auto-unload. Compatible with Anti-Event design.
 5. **Camera System** — Complete. `CameraManager` (per-Soul layer stack), `CameraSlot[5]`, `CameraLayer` with
@@ -519,6 +521,11 @@ Targets include: hot-path audit, constraint system, static entity tier, reflecti
 - Presentation Reconciler (Anti-Events, speculative presentation diff)
 - ConstraintEntity system (constraint pool, rigid attachment pass, physics root determination)
 - Static entity tier (needs asset importing online first)
+- `ListenNet` compile-time mode (`ListenSim` TNet policy) — host-is-a-peer, migration-capable, `AuthorityClass` tags
+- Host migration protocol (handshake, candidate election, authority transfer, zero-gap for peers)
+- Snapshot serialization path (world-state serialize/deserialize — feeds migration, save states, late join, replay)
+- Disconnect policy (`ClientHealthMetrics`, `ClientAction`, `NetDisconnectPolicy`, `ClientHealthCallback`)
+- Deterministic/Non-Deterministic netcode mode split (frame-numbered vs. timestamp-based, variable-Hz clients)
 
 ---
 

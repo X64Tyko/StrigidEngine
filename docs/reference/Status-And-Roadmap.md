@@ -18,7 +18,7 @@
 |---|---|---|---|
 | 1 | **Editor (bare-bones)** | ✅ Complete | 8 panels, ImGuizmo, PIE (local + networked 1–4 clients), scene snapshot/restore, asset database (.tnxid sidecars, .tnxdb), JSON .tnxscene, 50-command undo/redo, GPU picking. See [Editor Overview](../editor/Overview.md). |
 | 2 | **Construct/View OOP** | ✅ Complete | `Construct<T>`, `Owned<T>`, `ConstructView<TEntity>`, `ConstructBatch`, JoltCharacter. PlayerConstruct proven. |
-| 3 | **Networking** | In Progress | GNS wrapper, PIE loopback, entity replication, clock sync, input routing, delta compression. `LogicThread<TNet,TRollback,TFrame>`, `ServerClientChannel`, `AuthoritySim`/`OwnerSim` done. Reliability fix in progress. |
+| 3 | **Networking** | In Progress | GNS wrapper, PIE loopback, entity replication, clock sync, input routing, delta compression. `LogicThread<TNet,TRollback,TFrame>`, `ServerClientChannel`, `AuthoritySim`/`OwnerSim` done. Two network modes (Deterministic/Non-Deterministic), `ListenNet` mode, host migration, disconnect policy, and mode-split rewrite designed and planned. |
 | 4 | **Audio** | ✅ Complete | SDL3 `AudioManager`: voice pool, handle-based playback, event registry, per-voice fade, priority voice stealing. Anti-Event compatible. |
 | 5 | **Camera System** | ✅ Complete | `CameraManager` (per-Soul layer stack), `CameraSlot[5]`, `CameraLayer` + mixins, `ECameraNode` (cold), `ECamera` (hot SoA), `CurveHandle`. |
 | 6 | **Game Flow** | In Progress | FlowManager, FlowState, GameMode, Soul, NetChannel done. `WithSpawnManagement`, `WithLobby`, `WithTeamAssignment` ModeMixins done. `ClientRepState` 7-state machine done. |
@@ -103,10 +103,26 @@ Once Editor + Networking + Audio are stable and a test arena level is running, t
 
 ## Not Yet Implemented
 
+### Networking
+
+- [ ] **`ListenNet` compile-time mode** — `ListenSim` TNet policy; `AuthorityClass` tags (`Host`/`Owner`/`Fixed`) for per-entity authority ownership in listen-server scenarios; runtime authority override table for resolution
+- [ ] **Host migration (ListenNet)** — handshake protocol, candidate election (ranked by latency + snapshot recency), authority transfer with zero peer gap; prerequisite: snapshot serialization path
+- [ ] **Snapshot serialization path** — serialize/deserialize full world state into snapshot format; feeds host migration, save states, late join, and debug replay
+- [ ] **Disconnect policy** — `ClientHealthMetrics`, `ClientAction`, `NetDisconnectPolicy` structs; `ClientHealthCallback` for game-owned policy; default threshold enforcement wired to NetThread health checks
+- [ ] **Deterministic / Non-Deterministic mode split** — separate `AuthoritySim`/`OwnerSim` paths for non-deterministic mode; uses server timestamps (`server_time_us`) instead of frame numbers, state replication as primary sync signal, variable client Hz, 30Hz snapshot interpolation
 - [ ] **Phase 0 tentative despawn** — per-frame `TentativeDestroys` ring buffer for rollback-safe entity death (Phase 1–3 done; Phase 0 tracking not yet implemented)
+
+### Simulation
+
 - [ ] **ConstraintEntity system** — constraint pool, `ConstraintType` enum, render-thread rigid attachment pass, physics root determination
 - [ ] **Space partition cell registry** — cell world origins, cell assignment at spawn, cross-cell reparenting
-- [ ] **Presentation Reconciler** — Anti-Events (RapidFadeOut, SoftCancel, RapidDecay) for rollback-driven effect correction. `AudioManager::FadeOut` is Anti-Event-compatible; diff logic not implemented.
 - [ ] **Standalone Soul synthesis** — create a local Soul in `FlowManager` for offline/solo play (currently Soul creation is gated behind network handshake)
+
+### Presentation
+
+- [ ] **Presentation Reconciler** — Anti-Events (RapidFadeOut, SoftCancel, RapidDecay) for rollback-driven effect correction. `AudioManager::FadeOut` is Anti-Event-compatible; diff logic not implemented.
+
+### Rendering
+
 - [ ] **Frustum culling** — SIMD 6-plane test + GPU-side predicate enhancement
 - [ ] **State-sorted rendering** — 64-bit sort keys, GPU radix sort after scatter
