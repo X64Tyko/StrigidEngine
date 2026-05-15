@@ -94,6 +94,9 @@ public:
 			0.3f,
 			0.7f);
 
+		phys->BindConstructOnHit<PlayerConstruct, &PlayerConstruct::OnHit>(
+			CharacterController.GetInnerBodyID(), this, Body.GetEntityHandle());
+
 		Soul* soul = GetOwnerSoul();
 		if (soul && soul->HasRole(SoulRole::Owner))
 		{
@@ -207,6 +210,8 @@ public:
 		DesiredVelZ = 0.0f;
 		
 	}
+
+	void OnHit(PhysicsOnHitData /*data*/) {}
 
 	void PostPhysics(SimFloat /*dt*/)
 	{

@@ -17,25 +17,25 @@ public:
 
 	void Shutdown();
 
-	// Called from Construct PrePhysics — feed it desired movement
 	void Update(JPH::Vec3 desiredVelocity, JPH::Vec3 gravity, float dt,
 				JPH::TempAllocator& allocator);
 
-	// Read back results
 	JPH::RVec3 GetPosition() const;
 	JPH::Quat GetRotation() const;
 	JPH::Vec3 GetLinearVelocity() const;
 	bool IsGrounded() const;
 
-	// Teleport character to a new position (e.g., server correction).
 	void SetPosition(JPH::RVec3 position);
 
-	// Write results back to slab fields
 	void SyncToSlab(SimFloat* posX, SimFloat* posY, SimFloat* posZ,
 					SimFloat* rotX, SimFloat* rotY, SimFloat* rotZ, SimFloat* rotW,
 					uint32_t index);
 
+	// Pass to JoltPhysics::BindConstructOnHit to wire up contact callbacks.
+	JPH::BodyID GetInnerBodyID() const { return InnerBodyID; }
+
 private:
 	JPH::Ref<JPH::CharacterVirtual> Character;
 	JoltPhysics* Physics = nullptr;
+	JPH::BodyID  InnerBodyID;
 };

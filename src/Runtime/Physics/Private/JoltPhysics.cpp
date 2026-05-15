@@ -772,24 +772,61 @@ void JoltPhysics::ProcessContacts(const Registry* Reg)
 	PhysicsContactEvent cevent;
 	while (ContactConsumer->TryPop(cevent))
 	{
-		const uint32_t ci1 = GetBodyOwner(cevent.Body1);
-		const uint32_t ci2 = GetBodyOwner(cevent.Body2);
-		if (ci1 == InvalidEntityIndex || ci2 == InvalidEntityIndex) continue;
+		const uint32_t ci1  = GetBodyOwner(cevent.Body1);
+		const uint32_t ci2  = GetBodyOwner(cevent.Body2);
+		const uint32_t bid1 = cevent.Body1.GetIndex();
+		const uint32_t bid2 = cevent.Body2.GetIndex();
 
-		const EntityHandle e1 = Reg->GetRecordByCache(ci1).LHandle;
-		const EntityHandle e2 = Reg->GetRecordByCache(ci2).LHandle;
+		const bool hasEntityCb1    = ci1 != InvalidEntityIndex;
+		const bool hasEntityCb2    = ci2 != InvalidEntityIndex;
+		const bool hasConstructCb1 = bid1 < ConstructHitCallbacks.size() && ConstructHitCallbacks[bid1].IsBound();
+		const bool hasConstructCb2 = bid2 < ConstructHitCallbacks.size() && ConstructHitCallbacks[bid2].IsBound();
+
+		if (!hasEntityCb1 && !hasEntityCb2 && !hasConstructCb1 && !hasConstructCb2) continue;
+
+		// Resolve the entity handle and construct owner pointer for each participant.
+		// Entity path uses the cache record. Construct path uses the registered tables.
+		// Both can be valid simultaneously (a construct with a representingEntity set).
+		const EntityHandle e1 = hasEntityCb1 ? Reg->GetRecordByCache(ci1).LHandle
+		                       : (bid1 < ConstructBodyEntityHandles.size() ? ConstructBodyEntityHandles[bid1] : EntityHandle{});
+		const EntityHandle e2 = hasEntityCb2 ? Reg->GetRecordByCache(ci2).LHandle
+		                       : (bid2 < ConstructBodyEntityHandles.size() ? ConstructBodyEntityHandles[bid2] : EntityHandle{});
+
+		void* c1 = bid1 < ConstructBodyOwnerPtrs.size() ? ConstructBodyOwnerPtrs[bid1] : nullptr;
+		void* c2 = bid2 < ConstructBodyOwnerPtrs.size() ? ConstructBodyOwnerPtrs[bid2] : nullptr;
 
 		switch (cevent.Type)
 		{
-			case PhysicsContactEventType::OnHit: if (ci1 < OnHitCallbacks.size()) OnHitCallbacks[ci1](PhysicsOnHitData{e2, cevent.ContactInfo.WorldSpaceNormal, cevent.ContactInfo.PenetrationDepth});
-				if (ci2 < OnHitCallbacks.size()) OnHitCallbacks[ci2](PhysicsOnHitData{e1, -cevent.ContactInfo.WorldSpaceNormal, cevent.ContactInfo.PenetrationDepth});
+			case PhysicsContactEventType::OnHit:
+			{
+				PhysicsOnHitData hit12{e2, c2,  cevent.ContactInfo.WorldSpaceNormal,  cevent.ContactInfo.PenetrationDepth};
+				PhysicsOnHitData hit21{e1, c1, -cevent.ContactInfo.WorldSpaceNormal,  cevent.ContactInfo.PenetrationDepth};
+				if (hasEntityCb1 && ci1 < OnHitCallbacks.size()) OnHitCallbacks[ci1](hit12);
+				if (hasEntityCb2 && ci2 < OnHitCallbacks.size()) OnHitCallbacks[ci2](hit21);
+				if (hasConstructCb1) ConstructHitCallbacks[bid1](hit12);
+				if (hasConstructCb2) ConstructHitCallbacks[bid2](hit21);
 				break;
-			case PhysicsContactEventType::OnOverlapBegin: if (ci1 < OnOverlapBeginCallbacks.size()) OnOverlapBeginCallbacks[ci1](PhysicsOverlapData{e2});
-				if (ci2 < OnOverlapBeginCallbacks.size()) OnOverlapBeginCallbacks[ci2](PhysicsOverlapData{e1});
+			}
+			case PhysicsContactEventType::OnOverlapBegin:
+			{
+				PhysicsOverlapData ov12{e2, c2};
+				PhysicsOverlapData ov21{e1, c1};
+				if (hasEntityCb1 && ci1 < OnOverlapBeginCallbacks.size()) OnOverlapBeginCallbacks[ci1](ov12);
+				if (hasEntityCb2 && ci2 < OnOverlapBeginCallbacks.size()) OnOverlapBeginCallbacks[ci2](ov21);
+				if (bid1 < ConstructOverlapBeginCallbacks.size()) ConstructOverlapBeginCallbacks[bid1](ov12);
+				if (bid2 < ConstructOverlapBeginCallbacks.size()) ConstructOverlapBeginCallbacks[bid2](ov21);
 				break;
-			case PhysicsContactEventType::OnOverlapEnded: if (ci1 < OnOverlapEndCallbacks.size()) OnOverlapEndCallbacks[ci1](PhysicsOverlapData{e2});
-				if (ci2 < OnOverlapEndCallbacks.size()) OnOverlapEndCallbacks[ci2](PhysicsOverlapData{e1});
+			}
+			case PhysicsContactEventType::OnOverlapEnded:
+			{
+				PhysicsOverlapData ov12{e2, c2};
+				PhysicsOverlapData ov21{e1, c1};
+				if (hasEntityCb1 && ci1 < OnOverlapEndCallbacks.size()) OnOverlapEndCallbacks[ci1](ov12);
+				if (hasEntityCb2 && ci2 < OnOverlapEndCallbacks.size()) OnOverlapEndCallbacks[ci2](ov21);
+				if (bid1 < ConstructOverlapEndCallbacks.size()) ConstructOverlapEndCallbacks[bid1](ov12);
+				if (bid2 < ConstructOverlapEndCallbacks.size()) ConstructOverlapEndCallbacks[bid2](ov21);
 				break;
+			}
 			default: break;
 		}
 	}

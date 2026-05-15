@@ -3,19 +3,19 @@
 #include "EntityRecord.h"
 #include "Types.h"
 
-// ---------------------------------------------------------------------------
-// Gameplay-facing physics event data. No Jolt dependency.
-// Constructs receive these via concept-detected OnHit / OnOverlapBegin / OnOverlapEnd.
-// ---------------------------------------------------------------------------
+// HitConstruct / OverlappedConstruct: non-null when the other body is Construct-owned.
+// Raw void* — valid for the duration of the callback only. Do not store.
 
 struct PhysicsOnHitData
 {
 	EntityHandle HitEntity;
-	Vector3 HitNormal;
-	float Penetration;
+	void*        HitConstruct = nullptr;
+	Vector3      HitNormal;
+	float        Penetration;
 };
 
 struct PhysicsOverlapData
 {
 	EntityHandle OverlappedEntity;
+	void*        OverlappedConstruct = nullptr;
 };

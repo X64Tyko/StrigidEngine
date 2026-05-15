@@ -27,6 +27,8 @@ void JoltCharacter::Initialize(JoltPhysics* physics, JPH::RVec3 position,
 	Character = new JPH::CharacterVirtual(
 		&settings, position, JPH::Quat::sIdentity(), 0, Physics->GetPhysicsSystem());
 
+	InnerBodyID = Character->GetInnerBodyID();
+
 	Physics->RegisterCharacter(this);
 }
 
@@ -36,6 +38,7 @@ void JoltCharacter::Shutdown()
 
 	if (Physics)
 	{
+		Physics->ClearConstructContacts(InnerBodyID);
 		Physics->UnregisterCharacter(this);
 	}
 
