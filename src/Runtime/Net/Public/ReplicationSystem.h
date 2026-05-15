@@ -114,6 +114,11 @@ public:
 		return ref;
 	}
 
+	/// Defer a PlayerBeginConfirm until EntitySpawn/ConstructSpawn are in the SendQueue.
+	/// Returns false if no active channel for ownerID (caller falls back to direct send).
+	bool EnqueuePlayerConfirm(uint8_t ownerID, uint32_t serverFrame,
+	                          const RPCHeader& rpcHdr, const void* params, uint16_t paramSize);
+
 	/// Record that the server resimulated ownerID's input from serverFrame.
 	/// Called from AuthoritySim::OnSimInput when an input mismatch fires.
 	/// Thread-safe: atomic min-update so multiple dirty marks coalesce to the earliest.

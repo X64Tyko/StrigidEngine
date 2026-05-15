@@ -3,6 +3,7 @@
 #include "PlayerInputLog.h"
 #include <atomic>
 #include <cstdint>
+#include <optional>
 #include <vector>
 
 class NetConnectionManager;
@@ -81,6 +82,8 @@ struct ServerClientChannel
 	std::vector<uint32_t> PendingActivations;                       ///< Net handle values queued for EntityActivate; drained once Playing.
 	NetChannel           Channel;                                    ///< Typed per-connection send wrapper.
 	PendingPacketQueue   SendQueue;                                  ///< Worker-push / Sentinel-drain MPSC queue.
+	std::optional<PendingPacket> PendingPlayerConfirm;              ///< Held until spawns are in SendQueue; pushed in Flush().
+	uint32_t PendingPlayerConfirmSpawnFrame = 0;                    ///< Minimum LastDispatchedFrame before confirm may be pushed.
 	ConnectionInfo*      CI                = nullptr;                ///< GNS connection state (non-owning).
 	uint8_t              OwnerID           = 0;                      ///< Stable session identity (1–255; 0 = server).
 	uint32_t             LastAckedSimFrame = 0;                      ///< Last simulation frame this client confirmed receiving.

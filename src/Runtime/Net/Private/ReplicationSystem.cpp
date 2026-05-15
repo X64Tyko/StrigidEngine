@@ -89,9 +89,69 @@ void ReplicationSystem::DispatchFrameJobs()
 	LastDispatchedFrame = published;
 }
 
+bool ReplicationSystem::EnqueuePlayerConfirm(uint8_t ownerID, uint32_t serverFrame,
+                                              const RPCHeader& rpcHdr, const void* params, uint16_t paramSize)
+{
+	ServerClientChannel* ch = GetChannelIfActive(ownerID);
+	if (!ch || !ch->CI) return false;
+
+	const uint32_t clientFrame  = ch->CI->ToClientFrame(serverFrame);
+	const uint16_t payloadSize  = static_cast<uint16_t>(sizeof(RPCHeader) + paramSize);
+	PacketHeader hdr = ch->Channel.PrepareHeader(NetMessageType::SoulRPC, payloadSize, clientFrame);
+
+	PendingPacket pkt;
+	pkt.Header = hdr;
+	pkt.Payload.resize(payloadSize);
+	std::memcpy(pkt.Payload.data(), &rpcHdr, sizeof(RPCHeader));
+	if (params && paramSize > 0)
+		std::memcpy(pkt.Payload.data() + sizeof(RPCHeader), params, paramSize);
+	pkt.Reliable = true;
+
+	ch->PendingPlayerConfirm = std::move(pkt);
+	ch->PendingPlayerConfirmSpawnFrame = serverFrame + 1; // SpawnAndWait returns before the spawn tick publishes.
+	LOG_ENG_INFO_F("[Replication] EnqueuePlayerConfirm: ownerID=%u clientFrame=%u minDispatch=%u",
+	               ownerID, clientFrame, ch->PendingPlayerConfirmSpawnFrame);
+	return true;
+}
+
 void ReplicationSystem::Flush(NetConnectionManager* connMgr)
 {
 	if (!AuthorityWorld || !connMgr) return;
+
+	bool hasPendingConfirm = false;
+	for (uint8_t oid : ActiveOwnerIDs)
+		if (ServerClientChannel* ch = GetChannelIfActive(oid))
+			if (ch->PendingPlayerConfirm.has_value()) { hasPendingConfirm = true; break; }
+
+	if (hasPendingConfirm)
+	{
+		// Re-run dispatch in case the spawn tick published between DispatchFrameJobs and now.
+		DispatchFrameJobs();
+
+		bool anyReady = false;
+		for (uint8_t oid : ActiveOwnerIDs)
+		{
+			ServerClientChannel* ch = GetChannelIfActive(oid);
+			if (ch && ch->PendingPlayerConfirm.has_value()
+				&& LastDispatchedFrame >= ch->PendingPlayerConfirmSpawnFrame)
+			{ anyReady = true; break; }
+		}
+
+		if (anyReady)
+		{
+			WaitForBuildJobs();
+			for (uint8_t oid : ActiveOwnerIDs)
+			{
+				ServerClientChannel* ch = GetChannelIfActive(oid);
+				if (!ch || !ch->PendingPlayerConfirm.has_value()) continue;
+				if (LastDispatchedFrame < ch->PendingPlayerConfirmSpawnFrame) continue;
+				ch->SendQueue.Push(std::move(*ch->PendingPlayerConfirm));
+				ch->PendingPlayerConfirm.reset();
+				ch->PendingPlayerConfirmSpawnFrame = 0;
+			}
+		}
+	}
+
 	FlushSendQueues(connMgr);
 }
 

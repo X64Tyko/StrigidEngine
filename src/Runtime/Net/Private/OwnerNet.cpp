@@ -6,6 +6,7 @@
 #include "CMeshRef.h"
 #include "CScale.h"
 #include "CTransform.h"
+#include "CVisualTransform.h"
 #include "ConstructRegistry.h"
 #include "EngineConfig.h"
 #include "FlowManagerBase.h"
@@ -108,6 +109,16 @@ void OwnerNet::WriteEntitySpawnFields([[maybe_unused]] Registry* reg, EntityReco
 		else if (compID == CMeshRef<>::StaticTypeID())
 		{
 			if (fdesc.componentSlotIndex == 0) uintArr[localIdx] = payload.MeshID;
+		}
+		else if (compID == CVisualTransform<>::StaticTypeID())
+		{
+			switch (fdesc.componentSlotIndex)
+			{
+				case 0: floatArr[localIdx] = payload.PosX; break;
+				case 1: floatArr[localIdx] = payload.PosY; break;
+				case 2: floatArr[localIdx] = payload.PosZ; break;
+				default: break;
+			}
 		}
 	}
 }
@@ -842,8 +853,17 @@ void OwnerNet::HandleMessage(const ReceivedMessage& msg)
 					{
 						ci->RepState = ClientRepState::Loaded;
 
-						// Activate locally-loaded level entities (spawned Alive-only via bBackground=true).
-						// Server-replicated entities (no local NetHandle) are activated separately via EntityActivate.
+						// Flush deferred spawns so entities exist before the Alive→Active sweep.
+						FlushDeferredEntitySpawns();
+						{
+							auto it = DeferredConstructSpawns.begin();
+							while (it != DeferredConstructSpawns.end())
+							{
+								if (TrySpawnDeferred(*it)) it = DeferredConstructSpawns.erase(it);
+								else ++it;
+							}
+						}
+
 						if (clientWorld)
 						{
 							Registry* sweepReg         = clientWorld->GetRegistry();

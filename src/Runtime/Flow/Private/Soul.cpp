@@ -6,6 +6,8 @@
 #ifdef TNX_ENABLE_NETWORK
 #include "NetConnectionManager.h"
 #include "ReflectionRegistry.h"
+#include "ReplicationSystem.h"
+#include "RPC.h"
 #endif
 
 // Soul.cpp — engine-reserved SoulRPC implementations + dispatch.
@@ -109,9 +111,18 @@ TNX_IMPL_SERVER(Soul, PlayerBegin, PlayerBeginRequestPayload)
 		// a window spanning hundreds of frames that aliases the ring buffer.
 		if (ctx.CI && clientSpawnFrame > 0) ctx.CI->LastAckedClientFrame = clientSpawnFrame - 1;
 
-		ctx.CI->RepState     = ClientRepState::Playing;
-		PlayerBeginConfirm(confirm);
-		LOG_NET_INFO_F(this, "[Soul] PlayerBeginConfirm sent (ownerID=%u, pos=%.1f,%.1f,%.1f, serverFrame=%u clientFrame=%u)",
+		// RepState=Playing now so DispatchActivateJobs drains PendingActivations next frame.
+		// Confirm is deferred through SendQueue so spawns arrive before Playing fires on client.
+		ctx.CI->RepState = ClientRepState::Playing;
+
+		WorldBase* confirmWorld = FlowMgr ? FlowMgr->GetWorld() : nullptr;
+		ReplicationSystem* repl = confirmWorld ? confirmWorld->GetReplicationSystem() : nullptr;
+		RPCHeader rpcHdr{ RPCMethodID<PlayerBeginConfirmPayload>(),
+		                  static_cast<uint16_t>(sizeof(PlayerBeginConfirmPayload)) };
+		if (!repl || !repl->EnqueuePlayerConfirm(OwnerID, spawnFrame, rpcHdr, &confirm, sizeof(confirm)))
+			PlayerBeginConfirm(confirm);
+
+		LOG_NET_INFO_F(this, "[Soul] PlayerBeginConfirm enqueued (ownerID=%u, pos=%.1f,%.1f,%.1f, serverFrame=%u clientFrame=%u)",
 					   OwnerID, confirm.PosX.ToFloat(), confirm.PosY.ToFloat(), confirm.PosZ.ToFloat(), spawnFrame, clientSpawnFrame);
 	}
 	else
