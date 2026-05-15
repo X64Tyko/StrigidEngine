@@ -34,6 +34,10 @@ public:
 	/// Safe to call at 128 Hz — skips dispatch if the previous job is still running.
 	void TickInputSend();
 
+	/// @brief Send @c LevelReady to all connections currently in @c LevelLoading state.
+	/// Called by StreamingManager via FlowManager once the background level load job completes.
+	void AcknowledgeLevelReady(StreamingRequestID requestID);
+
 	/// @brief Drain deferred @c ConstructSpawn payloads that were waiting for their @c EntitySpawn to arrive first.
 	void TickReplication();
 

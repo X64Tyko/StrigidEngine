@@ -94,6 +94,14 @@ void PIENetThread::TickDispatch()
 	Authority.TickDispatch();
 }
 
+void PIENetThread::AcknowledgeLevelReady(StreamingRequestID requestID)
+{
+	const uint8_t ownerID = requestID.GetOwnerID();
+	for (auto& entry : Clients)
+		if (entry.OwnerID == ownerID && entry.Handler)
+			entry.Handler->AcknowledgeLevelReady(requestID);
+}
+
 void PIENetThread::TickInputSend()
 {
 	for (auto& entry : Clients) entry.Handler->TickInputSend();

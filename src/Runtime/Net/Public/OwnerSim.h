@@ -6,6 +6,14 @@
 #include "NetTypes.h"
 #include "TrinyxMPSCRing.h"
 
+// Forward-declare the concrete net thread type so NetThreadType is usable without
+// pulling in the full header chain here. FlowManager includes the full header.
+#ifdef TNX_NET_MODEL_PIE
+class PIENetThread;
+#else
+class OwnerNet;
+#endif
+
 // ---------------------------------------------------------------------------
 // OwnerSim — client-side net policy for LogicThread<OwnerSim, ...>.
 //
@@ -18,6 +26,12 @@
 
 struct OwnerSim
 {
+#ifdef TNX_NET_MODEL_PIE
+    using NetThreadType = PIENetThread;
+#else
+    using NetThreadType = OwnerNet;
+#endif
+
 template <typename TLogic>
 bool OnSimInput(uint32_t frameNumber, TLogic& logic);
 

@@ -201,6 +201,8 @@ bool TrinyxEngine::Initialize(const char* title, int width, int height, const ch
 	if (Config.ProjectDir[0] != '\0')
 		AssetRegistry::Get().SetContentRoot(std::string(Config.ProjectDir) + "/content");
 
+	Streaming = std::make_unique<StreamingManager>();
+
 	Flow = std::make_unique<FlowManagerType>();
 	Flow->Initialize(this, &Config, width, height);
 
@@ -390,6 +392,9 @@ void TrinyxEngine::RunMainLoop()
 
 		// Tick the flow state machine — drives FlowState::Tick() on the active state
 		Flow->Tick(dt);
+
+		// Fire streaming callbacks for any completed batches (level loads, chunk activations).
+		Streaming->Tick();
 
 #ifdef TNX_ENABLE_NETWORK
 		if (Net)

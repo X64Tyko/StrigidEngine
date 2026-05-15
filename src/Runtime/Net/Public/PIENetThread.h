@@ -55,6 +55,9 @@ public:
 
 	AuthorityNet& GetAuthority() { return Authority; }
 
+	/// Route the LevelReady ack to the client handler whose OwnerID matches requestID.GetOwnerID().
+	void AcknowledgeLevelReady(StreamingRequestID requestID);
+
 	// Called by Sentinel — must be public.
 	void TickInputSend(); // delegates to each OwnerNet handler
 	void TickDispatch();  // delegates to Authority

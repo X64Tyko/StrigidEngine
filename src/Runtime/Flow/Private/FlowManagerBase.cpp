@@ -7,6 +7,8 @@
 #include "NetChannel.h"
 #include "NetTypes.h"
 #include "ReflectionRegistry.h"
+#include "StreamingManager.h"
+#include "TrinyxEngine.h"
 #include "WorldBase.h"
 
 #include <cstring>
@@ -306,6 +308,20 @@ std::string FlowManagerBase::GetActiveLevelLocalPath() const
 		if (ActiveLevelPath.rfind(prefix, 0) == 0) return ActiveLevelPath.substr(prefix.size());
 	}
 	return ActiveLevelPath;
+}
+
+StreamingManager* FlowManagerBase::GetStreamingManager() const
+{
+	return Engine ? Engine->GetStreamingManager() : nullptr;
+}
+
+void* FlowManagerBase::GetRawNetThread() const
+{
+#ifdef TNX_ENABLE_NETWORK
+	return Engine ? static_cast<void*>(Engine->GetNetThread()) : nullptr;
+#else
+	return nullptr;
+#endif
 }
 
 void FlowManagerBase::PostTravelNotify(const char* levelPath)

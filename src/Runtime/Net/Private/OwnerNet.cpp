@@ -815,18 +815,8 @@ void OwnerNet::HandleMessage(const ReceivedMessage& msg)
 					LOG_NET_INFO_F(soul, "[ClientNet] TravelNotify received — loading level '%s'", travelMsg->LevelPath);
 					if (flow) flow->PostTravelNotify(travelMsg->LevelPath);
 				}
-
-				// Auto-acknowledge (synchronous load in PIE).
-				// Future: remove and let FlowState call AcknowledgeLevelReady() after async load.
-				NetChannel(ci, ConnectionMgr).SendHeaderOnly(NetMessageType::LevelReady, /*reliable=*/true);
-
-				ci->RepState = ClientRepState::LevelLoaded;
-				{
-					WorldBase* clientWorld = WorldMap[ci->OwnerID];
-					FlowManagerBase* flow  = clientWorld ? clientWorld->GetFlowManager() : nullptr;
-					Soul* soul             = flow ? flow->GetSoul(ci->OwnerID) : nullptr;
-					LOG_NET_INFO(soul, "[ClientNet] LevelReady sent → client LevelLoaded");
-				}
+				// LevelReady is deferred — AcknowledgeLevelReady() fires once the
+				// StreamingManager completes the background load batch.
 				break;
 			}
 
@@ -1531,5 +1521,25 @@ void OwnerNet::ExecuteInputSend()
 		header.FrameNumber = lastClientFrame; // client-local; server translates via FrameOffset
 		header.SenderID    = ci->OwnerID;
 		ConnectionMgr->Send(handle, header, encodedBuf, false, /*noNagle=*/true);
+	}
+}
+
+void OwnerNet::AcknowledgeLevelReady(StreamingRequestID requestID)
+{
+	if (!ConnectionMgr) return;
+	const uint8_t ownerID = requestID.GetOwnerID();
+	for (ConnectionInfo& ci : ConnectionMgr->GetConnections())
+	{
+		if (!ci.bConnected || !ci.bOwnerInitiated) continue;
+		if (ci.OwnerID != ownerID) continue;
+		if (ci.RepState != ClientRepState::LevelLoading) continue;
+
+		ci.RepState = ClientRepState::LevelLoaded;
+		NetChannel(&ci, ConnectionMgr).SendHeaderOnly(NetMessageType::LevelReady, /*reliable=*/true);
+
+		WorldBase* w          = WorldMap[ci.OwnerID];
+		FlowManagerBase* flow = w ? w->GetFlowManager() : nullptr;
+		Soul* soul            = flow ? flow->GetSoul(ci.OwnerID) : nullptr;
+		LOG_NET_INFO(soul, "[ClientNet] LevelReady sent → client LevelLoaded");
 	}
 }

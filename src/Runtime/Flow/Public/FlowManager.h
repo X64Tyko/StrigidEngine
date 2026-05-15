@@ -1,10 +1,18 @@
 #pragma once
 
 #include "FlowManagerBase.h"
+#include "StreamingManager.h"
 #include "World.h"
 #include "EntityBuilder.h"
 #include "LogicThreadBase.h"
 #include "Logger.h"
+#ifdef TNX_ENABLE_NETWORK
+#include "OwnerNet.h"
+#include "OwnerSim.h"
+#endif
+#ifdef TNX_ENABLE_EDITOR
+#include "PIENetThread.h"
+#endif
 
 /** @addtogroup flow
  *  @{
@@ -78,41 +86,70 @@ void FlowManager<TNet, TRollback, TFrame>::LoadLevel(const char* levelPath, bool
 
 	ActiveLevelPath = levelPath;
 
-	Registry* reg        = ActiveWorld->GetRegistry();
-	const char* pathCStr = ActiveLevelPath.c_str();
+	StreamingManager* sm = GetStreamingManager();
+	if (!sm)
+	{
+		LOG_ENG_ERROR("[FlowManager] LoadLevel: StreamingManager not available");
+		return;
+	}
+
+	// Build completion callback — OwnerSim worlds bind AcknowledgeLevelReady on the right handler.
+	StreamingOnComplete onComplete;
+#if defined(TNX_ENABLE_NETWORK) && !defined(TNX_NET_MODEL_SERVER)
+	if constexpr (std::is_same_v<TNet, OwnerSim>)
+	{
+		using NetT = typename TNet::NetThreadType;
+		auto* net = static_cast<NetT*>(GetRawNetThread());
+		if (net) onComplete.Bind<NetT, &NetT::AcknowledgeLevelReady>(net);
+	}
+#endif
+
+	// Pack ownerID into the request for PIE routing; solo/server worlds return 0.
+	const StreamingRequestID id = sm->BeginRequest(onComplete, ActiveWorld->GetLocalOwnerID());
+	if (id == InvalidStreamingRequest) return;
+
+	const char* pathPtr   = sm->CopyPath(id, levelPath);
+	Registry*   reg       = ActiveWorld->GetRegistry();
+	WorldBase*  world     = ActiveWorld.get();
+	Soul*       soul      = GetSoul(ActiveWorld->GetLocalOwnerID());
 
 	if constexpr (TRollback::Enabled)
 	{
 		const uint32_t spawnFrame = ActiveWorld->GetLogicThread()->GetLastCompletedFrame() + 1;
-		// SpawnAndWait is synchronous — soul lifetime is not a concern here.
-		// If this ever becomes async, the raw capture must be replaced.
-		Soul* soul = GetSoul(ActiveWorld->GetLocalOwnerID());
-		ActiveWorld->SpawnAndWait([reg, pathCStr, bBackground, spawnFrame, soul](uint32_t)
-		{
-			std::vector<GlobalEntityHandle> spawnedHandles;
-			size_t count = EntityBuilder::SpawnFromFileTracked(reg, pathCStr, bBackground, spawnedHandles);
-			LOG_NET_INFO_F(soul, "[FlowManager] LoadLevel: spawned %zu entities from %s%s at frame %u",
-						   count, pathCStr, bBackground ? " (Alive-only)" : "", spawnFrame);
-#ifdef TNX_ENABLE_ROLLBACK
-			for (GlobalEntityHandle gh : spawnedHandles) reg->PushEntityReinitEvent(gh, spawnFrame);
-#endif
-		});
-		// Clamp future spawn rollbacks to this frame — any Jolt snapshot before spawnFrame
-		// was saved before level geometry existed, so rolling back further would restore
-		// an empty physics world and leave level bodies in an unsaved state.
+		// Clamp rollback horizon before the job runs so no snapshot taken before this frame
+		// can be restored (level geometry wouldn't exist in those snapshots).
 		ActiveWorld->GetLogicThread()->SetEarliestValidRollbackFrame(spawnFrame);
+
+		sm->AddJob(id, [world, reg, pathPtr, bBackground, spawnFrame, soul](uint32_t)
+		{
+			// Blocks this worker until the Logic thread processes the spawn.
+			// Safe: Logic thread drains its WorldQueue independently of General workers.
+			world->SpawnAndWait([reg, pathPtr, bBackground, spawnFrame, soul](uint32_t)
+			{
+				std::vector<GlobalEntityHandle> handles;
+				const size_t count = EntityBuilder::SpawnFromFileTracked(reg, pathPtr, bBackground, handles);
+				LOG_NET_INFO_F(soul, "[FlowManager] LoadLevel: spawned %zu entities from %s%s at frame %u",
+							   count, pathPtr, bBackground ? " (Alive-only)" : "", spawnFrame);
+#ifdef TNX_ENABLE_ROLLBACK
+				for (GlobalEntityHandle gh : handles) reg->PushEntityReinitEvent(gh, spawnFrame);
+#endif
+			});
+		});
 	}
 	else
 	{
-		ActiveWorld->SpawnAndWait([reg, pathCStr, bBackground](uint32_t)
+		sm->AddJob(id, [world, reg, pathPtr, bBackground, soul](uint32_t)
 		{
-			size_t count = EntityBuilder::SpawnFromFile(reg, pathCStr, bBackground);
-			LOG_NET_INFO_F(nullptr, "[FlowManager] LoadLevel: spawned %zu entities from %s%s",
-						   count, pathCStr, bBackground ? " (Alive-only)" : "");
+			world->SpawnAndWait([reg, pathPtr, bBackground, soul](uint32_t)
+			{
+				const size_t count = EntityBuilder::SpawnFromFile(reg, pathPtr, bBackground);
+				LOG_NET_INFO_F(soul, "[FlowManager] LoadLevel: spawned %zu entities from %s%s",
+							   count, pathPtr, bBackground ? " (Alive-only)" : "");
+			});
 		});
 	}
 
-	LOG_NET_INFO_F(nullptr, "[FlowManager] Level loaded: %s", levelPath);
+	sm->SubmitRequest(id);
 }
 
 /** @} */

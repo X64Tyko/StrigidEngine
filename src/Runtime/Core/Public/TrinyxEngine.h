@@ -6,6 +6,7 @@
 #include "EngineConfig.h"
 #include "Events.h"
 #include "FlowManagerBase.h"
+#include "StreamingManager.h"
 #include "TrinyxJobs.h"
 #include "World.h"
 #ifdef TNX_ENABLE_NETWORK
@@ -154,6 +155,8 @@ public:
 	/// @brief Returns the audio manager.
 	AudioManager* GetAudio()    const { return Audio.get(); }
 #endif
+	/// @brief Returns the streaming manager (level loads, chunk activations, future GPU transfers).
+	StreamingManager* GetStreamingManager() const { return Streaming.get(); }
 
 // --- Networking (compiled out when TNX_ENABLE_NETWORK is not defined) ---
 #ifdef TNX_ENABLE_NETWORK
@@ -200,6 +203,8 @@ private:
 	SDL_GPUDevice* GpuDevice    = nullptr; ///< SDL GPU device handle.
 	FramePacer     Pacer;                  ///< Frame-rate pacing state (timing only — render is GPU-autonomous).
 #endif
+
+	std::unique_ptr<StreamingManager> Streaming; ///< Async batch manager — level loads, chunk activations, future GPU transfers.
 
 #ifdef TNX_ENABLE_NETWORK
 	// --- Networking ---

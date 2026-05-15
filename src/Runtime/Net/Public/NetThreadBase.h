@@ -5,6 +5,7 @@
 
 #include "NetTypes.h"
 #include "NetConnectionManager.h"
+#include "StreamingTypes.h"
 
 #include <SDL3/SDL_timer.h>
 
@@ -68,6 +69,10 @@ public:
 	void TickInputSend()
 	{
 	}
+
+	// Default no-op — OwnerNet overrides to send the LevelReady ack after background load.
+	void AcknowledgeLevelReady(StreamingRequestID /*requestID*/) {}
+
 
 	// Default no-op — AuthorityNet and PIE override.
 	void TickDispatch()

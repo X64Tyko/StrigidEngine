@@ -16,6 +16,7 @@
 
 class FlowState;
 class GameMode;
+class StreamingManager;
 #ifdef TNX_ENABLE_NETWORK
 class NetChannel;
 #endif
@@ -143,6 +144,15 @@ public:
 	void PostPlayerBeginConfirm(const PlayerBeginConfirmPayload& payload);
 	PlayerBeginConfirmPayload GetPendingPlayerBeginConfirm() const { return PendingPlayerBeginConfirm; }
 	const std::string& GetPendingTravelPath() const { return PendingTravelPath; }
+
+	// ----- Streaming / net helpers (used by FlowManager<TNet> template) -----
+
+	/// Returns the engine's StreamingManager, or nullptr if not initialised.
+	StreamingManager* GetStreamingManager() const;
+
+	/// Returns the active net thread as a void* to avoid including TrinyxEngine.h in the template header.
+	/// FlowManager<TNet> static_casts this to the concrete NetThreadType.
+	void* GetRawNetThread() const;
 
 	// ----- Tick -----
 
