@@ -77,7 +77,8 @@ bool LogicThread::TickPause(const uint64_t perfFrequency, const uint64_t frameSt
 		ProcessSimInput(static_cast<SimFloat>(dt));
 		ProcessVizInput(static_cast<SimFloat>(dt));
 		PublishCompletedFrame();
-		RegistryPtr->PropagateFrame(FrameNumber++);
+		// No PropagateFrame — pausing freezes the ring buffer so rollback can rewind
+		// to any frame within the history window without the slots being overwritten.
 
 		WaitForTiming(frameStartCounter, perfFrequency);
 		TrackFPS();

@@ -537,7 +537,7 @@ void EditorContext::BuildFrame()
 	// Tell Sentinel whether the engine should own input.
 	// Engine gets input when: right-click held in viewport, or Play is running.
 	bool rightClickInViewport = ImGui::IsMouseDown(ImGuiMouseButton_Right) && ViewportPanelHovered;
-	bool playing              = (LogicPtr && !LogicPtr->IsSimPaused() && bHasSnapshot) || (bPIEActive && !bPIEPaused);
+	bool playing              = bPIEActive && !bPIEPaused;
 	// Escape requests PIE stop — deferred to after the ImGui frame completes
 	// so we don't free GPU resources (descriptor sets, images) mid-frame.
 	if (bPIEActive && ImGui::IsKeyPressed(ImGuiKey_Escape)) bPIEStopRequested = true;
@@ -770,38 +770,9 @@ void EditorContext::BuildMenuBar()
 
 	if (ImGui::BeginMenu("Play"))
 	{
-		bool simPaused = !LogicPtr || LogicPtr->IsSimPaused();
-
-		if (ImGui::MenuItem("Play (Local)", nullptr, false, simPaused && !bPIEActive))
+		if (ImGui::MenuItem("Play (Local)", nullptr, false, !bPIEActive))
 		{
-			if (LogicPtr)
-			{
-				if (!bHasSnapshot) SnapshotScene();
-				LogicPtr->SetSimPaused(false);
-
-				// Route input to editor world and let game spawn a player
-				EnginePtr->InputTargetWorld = EnginePtr->GetDefaultWorld();
-				if (EnginePtr->OnPlayStarted.IsBound())
-				{
-					EnginePtr->OnPlayStarted(EnginePtr->GetDefaultWorld());
-				}
-			}
-		}
-		if (ImGui::MenuItem("Pause", nullptr, false, !simPaused && !bPIEActive))
-		{
-			if (LogicPtr) LogicPtr->SetSimPaused(true);
-		}
-		if (ImGui::MenuItem("Stop (Local)", nullptr, false, bHasSnapshot && !bPIEActive))
-		{
-			// Let game destroy its constructs before restoring snapshot
-			if (EnginePtr->OnPlayStopped.IsBound())
-			{
-				EnginePtr->OnPlayStopped();
-			}
-			EnginePtr->InputTargetWorld = nullptr;
-
-			if (LogicPtr) LogicPtr->SetSimPaused(true);
-			RestoreSnapshot();
+			StartPIELocal();
 		}
 
 		ImGui::Separator();
@@ -886,8 +857,15 @@ void EditorContext::BuildMenuBar()
 				WorldBase* w = flow->GetWorld();
 				if (w && w->GetLogicThread()) w->GetLogicThread()->SetSimPaused(bPIEPaused);
 			};
-			applyPause(ServerFlow.get());
-			for (auto& c : PIEClients) applyPause(c.Flow.get());
+			if (bPIELocalMode)
+			{
+				applyPause(LocalPIEFlow.get());
+			}
+			else
+			{
+				applyPause(ServerFlow.get());
+				for (auto& c : PIEClients) applyPause(c.Flow.get());
+			}
 		}
 
 		ImGui::EndMenu();
@@ -1560,7 +1538,55 @@ void EditorContext::RestoreSnapshot()
 }
 
 // -----------------------------------------------------------------------
-// PIE — networked multi-world Play-In-Editor
+// PIE local — single solo world, game runs in the Viewport panel
+// -----------------------------------------------------------------------
+
+void EditorContext::StartPIELocal()
+{
+	if (bPIEActive) return;
+
+	LocalPIEConfig = *EnginePtr->GetGameConfig();
+
+	LocalPIEFlow = std::make_unique<PIELocalFlow>();
+	LocalPIEFlow->Initialize(EnginePtr, &LocalPIEConfig, 1280, 720);
+	if (!LocalPIEFlow->CreateWorld())
+	{
+		LOG_ENG_ERROR("[PIE Local] Failed to create world");
+		LocalPIEFlow.reset();
+		return;
+	}
+
+	WorldBase* pieWorld = LocalPIEFlow->GetWorld();
+	pieWorld->SetJobsInitialized(true);
+
+	// Allocate at a reasonable default — DrawEditorViewportPanel resizes to panel on first draw.
+	EditorRenderer* renderer = EnginePtr->GetRenderer();
+	LocalPIEViewport              = std::make_unique<WorldViewport>();
+	LocalPIEViewport->TargetWorld = pieWorld;
+	renderer->AllocateViewportResources(LocalPIEViewport.get(), 1280, 720);
+	renderer->AddViewport(LocalPIEViewport.get());
+
+	LocalPIEFlow->StartWorld();
+
+	if (!State.SceneDefaultMode.empty())
+		LocalPIEFlow->SetGameMode(State.SceneDefaultMode.c_str());
+	if (!State.SceneDefaultState.empty())
+		LocalPIEFlow->LoadDefaultState(State.SceneDefaultState.c_str());
+
+	EnginePtr->InputTargetWorld = pieWorld;
+
+	bPrePIESimWasPaused = !LogicPtr || LogicPtr->IsSimPaused();
+	if (LogicPtr) LogicPtr->SetSimPaused(true);
+
+	bPIEPaused    = false;
+	bPIELocalMode = true;
+	bPIEActive    = true;
+	State.ClearSelection();
+	LOG_ENG_INFO("[PIE Local] Started");
+}
+
+// -----------------------------------------------------------------------
+// PIE networked — server + client worlds in floating viewports
 // -----------------------------------------------------------------------
 
 void EditorContext::StartPIE()
@@ -1826,10 +1852,34 @@ void EditorContext::StopPIE()
 {
 	if (!bPIEActive) return;
 
-	// Clear input routing immediately
 	EnginePtr->InputTargetWorld = nullptr;
 
 	EditorRenderer* renderer = EnginePtr->GetRenderer();
+
+	if (bPIELocalMode)
+	{
+		// Resume if paused so the logic thread can exit its fixed loop cleanly.
+		if (bPIEPaused && LocalPIEFlow && LocalPIEFlow->GetWorld() && LocalPIEFlow->GetWorld()->GetLogicThread())
+			LocalPIEFlow->GetWorld()->GetLogicThread()->SetSimPaused(false);
+
+		renderer->WaitForGPU();
+		if (LocalPIEViewport)
+		{
+			renderer->RemoveViewport(LocalPIEViewport.get());
+			renderer->FreeViewportResources(LocalPIEViewport.get());
+		}
+
+		LocalPIEViewport.reset();
+		LocalPIEFlow.reset();
+
+		if (LogicPtr) LogicPtr->SetSimPaused(bPrePIESimWasPaused);
+
+		bPIELocalMode = false;
+		bPIEPaused    = false;
+		bPIEActive    = false;
+		LOG_ENG_INFO("[PIE Local] Stopped");
+		return;
+	}
 
 	// 2. Tear down PIE networking
 	PIENetThread* net = EnginePtr->GetNetThread();
@@ -1929,36 +1979,59 @@ void EditorContext::DrawEditorViewportPanel()
 		ImVec2 panelPos  = ImGui::GetCursorScreenPos();
 		ImVec2 panelSize = ImGui::GetContentRegionAvail();
 
-		// Store for gizmo and input tracking
 		ViewportPanelPos     = panelPos;
 		ViewportPanelSize    = panelSize;
 		ViewportPanelHovered = ImGui::IsWindowHovered();
 
-		// Ask the renderer to resize the offscreen target if the panel changed size
 		auto* renderer = static_cast<EditorRenderer*>(EnginePtr->GetRenderer());
-		if (panelSize.x > 1.0f && panelSize.y > 1.0f)
-		{
-			renderer->ResizeEditorViewport(static_cast<uint32_t>(panelSize.x),
-										   static_cast<uint32_t>(panelSize.y));
-		}
 
-		VkDescriptorSet tex = renderer->GetEditorViewportTexture();
-		if (tex != VK_NULL_HANDLE && panelSize.x > 0 && panelSize.y > 0)
+		if (bPIEActive && bPIELocalMode && LocalPIEViewport)
 		{
-			ImGui::Image(tex, panelSize);
-
-			// Drag-drop target: accept prefab drops onto the viewport image
-			if (ImGui::BeginDragDropTarget())
+			// Show the local PIE game world in the viewport panel.
+			// Resize the render target to match the panel — gated on size change.
+			if (panelSize.x > 1.0f && panelSize.y > 1.0f)
 			{
-				if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("PREFAB_PATH"))
-				{
-					std::string prefabPath(static_cast<const char*>(payload->Data));
-					SpawnPrefab(prefabPath);
-				}
-				ImGui::EndDragDropTarget();
+				renderer->ResizeViewport(LocalPIEViewport.get(),
+										 static_cast<uint32_t>(panelSize.x),
+										 static_cast<uint32_t>(panelSize.y));
+			}
+
+			if (LocalPIEViewport->ImGuiTexture != VK_NULL_HANDLE && panelSize.x > 0 && panelSize.y > 0)
+			{
+				ImGui::Image(LocalPIEViewport->ImGuiTexture, panelSize);
+
+				// Route input to the PIE world when this viewport is focused
+				if (ImGui::IsWindowFocused() && LocalPIEFlow)
+					EnginePtr->InputTargetWorld = LocalPIEFlow->GetWorld();
 			}
 		}
-		DrawGizmo();
+		else
+		{
+			// Normal editor scene view
+			if (panelSize.x > 1.0f && panelSize.y > 1.0f)
+			{
+				renderer->ResizeEditorViewport(static_cast<uint32_t>(panelSize.x),
+											   static_cast<uint32_t>(panelSize.y));
+			}
+
+			VkDescriptorSet tex = renderer->GetEditorViewportTexture();
+			if (tex != VK_NULL_HANDLE && panelSize.x > 0 && panelSize.y > 0)
+			{
+				ImGui::Image(tex, panelSize);
+
+				// Drag-drop target: accept prefab drops onto the viewport image
+				if (ImGui::BeginDragDropTarget())
+				{
+					if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("PREFAB_PATH"))
+					{
+						std::string prefabPath(static_cast<const char*>(payload->Data));
+						SpawnPrefab(prefabPath);
+					}
+					ImGui::EndDragDropTarget();
+				}
+			}
+			DrawGizmo();
+		}
 	}
 	ImGui::End();
 	ImGui::PopStyleVar();

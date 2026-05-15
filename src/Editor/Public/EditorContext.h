@@ -61,8 +61,11 @@ public:
 	/// Delete the currently selected entity (deferred via Spawn handshake).
 	void DeleteSelectedEntity();
 
-	/// PIE (Play-In-Editor) networked mode: server + client worlds.
+	/// PIE local mode: single solo world, replaces primary window with game viewport.
+	void StartPIELocal();
+	/// PIE networked mode: server + client worlds in floating viewports.
 	void StartPIE();
+	/// Stop whichever PIE mode is active.
 	void StopPIE();
 	bool IsPIEActive() const { return bPIEActive; }
 	bool bPIEStopRequested = false; // Set by BuildFrame (Escape), consumed after ImGui::Render
@@ -143,7 +146,13 @@ private:
 	std::vector<ArchetypeSnapshot> PlaySnapshot;
 	bool bHasSnapshot = false;
 
-	// --- PIE (networked multi-world) ---
+	// --- PIE local (single solo world, fullscreen) ---
+	std::unique_ptr<FlowManagerBase> LocalPIEFlow;
+	std::unique_ptr<WorldViewport>   LocalPIEViewport;
+	EngineConfig LocalPIEConfig;
+	bool bPIELocalMode = false;
+
+	// --- PIE networked (multi-world, floating viewports) ---
 	// Server may be headless (no viewport) or rendered.
 	// N clients each get their own World + viewport.
 	struct PIEClient

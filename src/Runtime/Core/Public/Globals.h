@@ -73,8 +73,10 @@ using PIEClientRollback = DefaultRollback; ///< PIE client follows the build's r
 
 using PIEServerWorld = World<PIEServerNet, PIEServerRollback, DefaultFrame>; ///< PIE Authority world type.
 using PIEClientWorld = World<PIEClientNet, PIEClientRollback, DefaultFrame>; ///< PIE Owner world type.
+using PIELocalWorld  = World<SoloSim, RollbackSim, DefaultFrame>;            ///< PIE local/solo world type.
 using PIEServerFlow  = FlowManager<PIEServerNet, PIEServerRollback, DefaultFrame>; ///< PIE Authority FlowManager type.
 using PIEClientFlow  = FlowManager<PIEClientNet, PIEClientRollback, DefaultFrame>; ///< PIE Owner FlowManager type.
+using PIELocalFlow   = FlowManager<SoloSim, RollbackSim, DefaultFrame>;            ///< PIE local/solo FlowManager type.
 #endif
 
 /** @} */

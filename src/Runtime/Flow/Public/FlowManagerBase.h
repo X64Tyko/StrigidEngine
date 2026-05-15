@@ -110,6 +110,17 @@ public:
 	void OnLocalOwnerConnected(uint8_t ownerID);
 	void OnClientDisconnected(uint8_t ownerID);
 
+	/// @brief Spawn the local player without a network round-trip.
+	///
+	/// Collapses the Authority's LevelReady → PlayerBegin → Confirm sequence into one
+	/// synchronous call for solo/standalone mode. Equivalent outcome: Soul created,
+	/// GameMode::OnPlayerBeginRequest called (which spawns the Construct and calls
+	/// soul.ClaimBody), then the input accumulator opened.
+	///
+	/// Requires the Logic thread to be running. Call from a FlowState::OnEnter after
+	/// SetGameMode, i.e. from PostStart context or later.
+	void SpawnLocalPlayer(uint8_t ownerID = 0);
+
 	/// Called by AuthorityNet when a client sends StreamReady for a non-auto-activate chunk.
 	/// Override or wire GameMode logic to call AuthorityNet::SendChunkActivate when ready.
 	virtual void OnStreamReady(int64_t /*assetIDRaw*/, uint16_t /*instanceIndex*/, uint8_t /*ownerID*/) {}

@@ -46,6 +46,8 @@ public:
 	void RemoveViewport(WorldViewport* vp);
 	void AllocateViewportResources(WorldViewport* vp, uint32_t width, uint32_t height);
 	void FreeViewportResources(WorldViewport* vp);
+	/// Resize a PIE viewport's GPU resources if its panel size changed.
+	void ResizeViewport(WorldViewport* vp, uint32_t width, uint32_t height);
 
 private:
 	friend class RendererCore<EditorRenderer>;

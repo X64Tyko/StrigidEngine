@@ -287,6 +287,16 @@ void EditorRenderer::ResizeEditorViewport(uint32_t width, uint32_t height)
 	AllocateViewportResources(&EditorViewport, width, height);
 }
 
+void EditorRenderer::ResizeViewport(WorldViewport* vp, uint32_t width, uint32_t height)
+{
+	if (!vp || (width == vp->Width && height == vp->Height)) return;
+	if (width == 0 || height == 0) return;
+
+	vkDeviceWaitIdle(Device);
+	FreeViewportResources(vp);
+	AllocateViewportResources(vp, width, height);
+}
+
 VkDescriptorSet EditorRenderer::GetEditorViewportTexture() const
 {
 	return EditorViewport.ImGuiTexture;
