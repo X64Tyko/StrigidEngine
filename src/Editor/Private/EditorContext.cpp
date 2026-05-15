@@ -400,7 +400,8 @@ void EditorContext::DrawGizmo()
 			{
 				auto* cache                     = State.RegistryPtr->GetTemporalCache();
 				auto* flags                     = reinterpret_cast<int32_t*>(cache->GetWriteFramePtr(base));
-				flags[State.SelectedLocalIndex] |= static_cast<int32_t>(TemporalFlagBits::Dirty);
+				flags[State.SelectedLocalIndex] |= static_cast<int32_t>(TemporalFlagBits::Dirty)
+				                               |  static_cast<int32_t>(TemporalFlagBits::DirtiedFrame);
 			}
 		}
 
@@ -1531,7 +1532,8 @@ void EditorContext::RestoreSnapshot()
 						ownerArch->BuildFieldArrayTable(chunk, fieldArrayTable, temporalFrame, volatileFrame);
 
 						auto* flagsArr     = static_cast<int32_t*>(fieldArrayTable[flagDesc->fieldSlotIndex]);
-						flagsArr[localIdx] = static_cast<int32_t>(TemporalFlagBits::Dirty);
+						flagsArr[localIdx] = static_cast<int32_t>(TemporalFlagBits::Dirty)
+						                   | static_cast<int32_t>(TemporalFlagBits::DirtiedFrame);
 					}
 
 					entityIdx++;

@@ -468,31 +468,9 @@ void OwnerNet::HandleStateCorrections(Registry* reg, const StateCorrectionEntry*
 								   reg->GetTemporalCache()->GetActiveWriteFrame(),
 								   reg->GetVolatileCache()->GetActiveWriteFrame());
 
-		for (const auto& [fkey, fdesc] : arch->ArchetypeFieldLayout)
-		{
-			if (fdesc.componentID != CTransform<>::StaticTypeID()) continue;
-			void* base = fieldArrayTable[fdesc.fieldSlotIndex];
-			if (!base) continue;
-			auto* fa = static_cast<SimFloat*>(base);
-			switch (fdesc.componentSlotIndex)
-			{
-				case 0: fa[localIdx] = entry.PosX;
-					break;
-				case 1: fa[localIdx] = entry.PosY;
-					break;
-				case 2: fa[localIdx] = entry.PosZ;
-					break;
-				case 3: fa[localIdx] = entry.RotQx;
-					break;
-				case 4: fa[localIdx] = entry.RotQy;
-					break;
-				case 5: fa[localIdx] = entry.RotQz;
-					break;
-				case 6: fa[localIdx] = entry.RotQw;
-					break;
-				default: break;
-			}
-		}
+		Registry::WriteEntityTransformFields(fieldArrayTable, arch, localIdx,
+		                                     entry.PosX, entry.PosY, entry.PosZ,
+		                                     entry.RotQx, entry.RotQy, entry.RotQz, entry.RotQw);
 	}
 #endif
 }
@@ -592,6 +570,15 @@ void OwnerNet::HandleEntityDelta(Registry* reg, const uint8_t* payload, uint32_t
 
 			// Always consume exactly DeltaLen bytes regardless of deserialize outcome.
 			pkt.Pos = compDataStart + deltaLen;
+		}
+
+		if (record)
+		{
+			const ComponentTypeID flagsSlot = CacheSlotMeta<>::StaticTemporalIndex();
+			auto* flags = static_cast<int32_t*>(cache->GetFieldData(writeHdr, flagsSlot, 0));
+			if (flags)
+				flags[record->CacheEntityIndex] |= static_cast<int32_t>(TemporalFlagBits::Dirty)
+				                                 | static_cast<int32_t>(TemporalFlagBits::DirtiedFrame);
 		}
 
 		if (!pkt.IsOk()) break;

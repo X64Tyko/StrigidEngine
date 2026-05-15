@@ -876,7 +876,19 @@ bool Registry::CheckAndCorrectEntityTransform(const EntityTransformCorrection& c
 	const SimFloat dz = predictedZ - correction.PosZ;
 	if (dx * dx + dy * dy + dz * dz <= kThresholdSq) return false;
 
-	// Still divergent after resim — write server-authoritative transform
+	// Still divergent after resim — write server-authoritative transform.
+	WriteEntityTransformFields(fieldArrayTable, arch, localIdx,
+	                           correction.PosX, correction.PosY, correction.PosZ,
+	                           correction.RotQx, correction.RotQy, correction.RotQz, correction.RotQw);
+
+	return true;
+}
+
+void Registry::WriteEntityTransformFields(void* const* fieldArrayTable, const Archetype* arch,
+                                          uint32_t localIdx,
+                                          SimFloat posX, SimFloat posY, SimFloat posZ,
+                                          SimFloat rotQx, SimFloat rotQy, SimFloat rotQz, SimFloat rotQw)
+{
 	for (const auto& [fkey, fdesc] : arch->ArchetypeFieldLayout)
 	{
 		if (fdesc.componentID != CTransform<>::StaticTypeID()) continue;
@@ -885,31 +897,21 @@ bool Registry::CheckAndCorrectEntityTransform(const EntityTransformCorrection& c
 		auto* fa = static_cast<SimFloat*>(base);
 		switch (fdesc.componentSlotIndex)
 		{
-			case 0: fa[localIdx] = correction.PosX;
-				break;
-			case 1: fa[localIdx] = correction.PosY;
-				break;
-			case 2: fa[localIdx] = correction.PosZ;
-				break;
-			case 3: fa[localIdx] = correction.RotQx;
-				break;
-			case 4: fa[localIdx] = correction.RotQy;
-				break;
-			case 5: fa[localIdx] = correction.RotQz;
-				break;
-			case 6: fa[localIdx] = correction.RotQw;
-				break;
+			case 0: fa[localIdx] = posX;  break;
+			case 1: fa[localIdx] = posY;  break;
+			case 2: fa[localIdx] = posZ;  break;
+			case 3: fa[localIdx] = rotQx; break;
+			case 4: fa[localIdx] = rotQy; break;
+			case 5: fa[localIdx] = rotQz; break;
+			case 6: fa[localIdx] = rotQw; break;
 			default: break;
 		}
 	}
 
-	// Mark corrected entity as resim-dirtied so the selective sweep and scatter
-	// propagation process it in every subsequent resim step.
 	auto* flagsArr = static_cast<int32_t*>(fieldArrayTable[0]);
 	if (flagsArr)
-		flagsArr[localIdx] |= static_cast<int32_t>(TemporalFlagBits::DirtiedFrame);
-
-	return true;
+		flagsArr[localIdx] |= static_cast<int32_t>(TemporalFlagBits::Dirty)
+		                    | static_cast<int32_t>(TemporalFlagBits::DirtiedFrame);
 }
 
 void Registry::PushEntityReinitEvent(GlobalEntityHandle gHandle, uint32_t frame)
@@ -964,6 +966,13 @@ void Registry::PushEntityReinitEvent(GlobalEntityHandle gHandle, uint32_t frame)
 				uint8_t* dst = static_cast<uint8_t*>(base) + r->LocalIndex * fdesc->fieldSize;
 				std::memcpy(dst, snap.data.data(), snap.data.size());
 			}
+
+			// The snapshot memcpy restores the flags field to its snapshotted state, which may
+			// have had Dirty/DirtiedFrame cleared. Re-assert both so the render and sweep see it.
+			auto* flagsArr = static_cast<int32_t*>(t[0]);
+			if (flagsArr)
+				flagsArr[r->LocalIndex] |= static_cast<int32_t>(TemporalFlagBits::Dirty)
+				                         | static_cast<int32_t>(TemporalFlagBits::DirtiedFrame);
 		}
 	});
 }

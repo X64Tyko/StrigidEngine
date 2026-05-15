@@ -153,6 +153,14 @@ public:
 	void PushEntityReinitEvent(GlobalEntityHandle gHandle, uint32_t frame);
 #endif
 
+	// Writes all 7 CTransform fields (pos + rot) from a pre-built fieldArrayTable at localIdx
+	// and ORs Dirty | DirtiedFrame into fieldArrayTable[0]. Used by all raw-write correction paths
+	// to ensure consistent dirty tracking without duplicating the field-layout loop.
+	static void WriteEntityTransformFields(void* const* fieldArrayTable, const Archetype* arch,
+	                                       uint32_t localIdx,
+	                                       SimFloat posX, SimFloat posY, SimFloat posZ,
+	                                       SimFloat rotQx, SimFloat rotQy, SimFloat rotQz, SimFloat rotQw);
+
 	// --- Diagnostics ---
 
 	uint32_t GetTotalChunkCount() const;

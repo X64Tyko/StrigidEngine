@@ -112,7 +112,8 @@ void MarkEntityDirty(Registry* reg, Archetype* arch, Chunk* chunk, uint16_t loca
 
     auto* cache = reg->GetTemporalCache();
     auto* flags = reinterpret_cast<int32_t*>(cache->GetWriteFramePtr(base));
-    flags[localIndex] |= static_cast<int32_t>(TemporalFlagBits::Dirty);
+    flags[localIndex] |= static_cast<int32_t>(TemporalFlagBits::Dirty)
+	                  |  static_cast<int32_t>(TemporalFlagBits::DirtiedFrame);
 }
 
 void* GetFieldPtr(Archetype* arch, Chunk* chunk, const char* fieldName, uint16_t localIndex, Registry* reg)
