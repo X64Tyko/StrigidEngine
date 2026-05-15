@@ -85,7 +85,7 @@ bool StreamingManager::AddJob(StreamingRequestID id, LAMBDA lambda, TrinyxJobs::
     Request* r = Find(id);
     if (!r)
     {
-        LOG_ENG_WARN_F("[StreamingManager] AddJob: unknown request %u", id);
+        LOG_ENG_WARN_F("[StreamingManager] AddJob: unknown request %u", id.Value);
         return false;
     }
     TrinyxJobs::Dispatch(lambda, &r->Counter, queue);
