@@ -175,30 +175,11 @@ void OwnerNet::HandleEntitySpawn(Registry* reg, const EntitySpawnPayload& payloa
 		initFn(initTable, initTable[0], localIdx);
 	}
 
-	// Write into both write and read frames so FieldProxy reads see correct data immediately.
-	WriteEntitySpawnFields(reg, record, payload,
-						   reg->GetTemporalCache()->GetActiveWriteFrame(),
-						   reg->GetVolatileCache()->GetActiveWriteFrame());
-	WriteEntitySpawnFields(reg, record, payload,
-						   reg->GetTemporalCache()->GetActiveReadFrame(),
-						   reg->GetVolatileCache()->GetActiveReadFrame());
-
-	// WriteEntitySpawnFields bypasses FieldProxy so Dirty|DirtiedFrame are never ORed in.
-	// Set them explicitly on the write frame so the GPU dirty-bit upload sees this entity.
-	{
-		ComponentCacheBase* cache       = reg->GetTemporalCache();
-		TemporalFrameHeader* writeHdr   = cache->GetFrameHeader(cache->GetActiveWriteFrame());
-		const ComponentTypeID flagsSlot = CacheSlotMeta<>::StaticTemporalIndex();
-		auto* writeFlags = static_cast<int32_t*>(cache->GetFieldData(writeHdr, flagsSlot, 0));
-		if (writeFlags)
-		{
-			const uint32_t slabIdx = static_cast<uint32_t>(record->CacheEntityIndex);
-			writeFlags[slabIdx] |= static_cast<int32_t>(TemporalFlagBits::Dirty)
-			                    |  static_cast<int32_t>(TemporalFlagBits::DirtiedFrame);
-		}
-	}
-
 #ifdef TNX_ENABLE_ROLLBACK
+	// Skip writing fields into the current frame — the entity's initial state belongs at
+	// spawnFrame in the ring buffer, not at the current frame. EnqueueSpawnRollback (called
+	// in FlushDeferredEntitySpawns) drives a resim to spawnFrame where GetActiveWriteFrame()
+	// points to the correct historical slot; PropagateFrameResim then fills forward.
 	{
 		GlobalEntityHandle capturedGH      = gHandle;
 		EntitySpawnPayload capturedPayload = payload;
@@ -224,6 +205,29 @@ void OwnerNet::HandleEntitySpawn(Registry* reg, const EntitySpawnPayload& payloa
 				}
 			}
 		});
+	}
+#else
+	// Write into both write and read frames so FieldProxy reads see correct data immediately.
+	WriteEntitySpawnFields(reg, record, payload,
+						   reg->GetTemporalCache()->GetActiveWriteFrame(),
+						   reg->GetVolatileCache()->GetActiveWriteFrame());
+	WriteEntitySpawnFields(reg, record, payload,
+						   reg->GetTemporalCache()->GetActiveReadFrame(),
+						   reg->GetVolatileCache()->GetActiveReadFrame());
+
+	// WriteEntitySpawnFields bypasses FieldProxy so Dirty|DirtiedFrame are never ORed in.
+	// Set them explicitly on the write frame so the GPU dirty-bit upload sees this entity.
+	{
+		ComponentCacheBase* cache       = reg->GetTemporalCache();
+		TemporalFrameHeader* writeHdr   = cache->GetFrameHeader(cache->GetActiveWriteFrame());
+		const ComponentTypeID flagsSlot = CacheSlotMeta<>::StaticTemporalIndex();
+		auto* writeFlags = static_cast<int32_t*>(cache->GetFieldData(writeHdr, flagsSlot, 0));
+		if (writeFlags)
+		{
+			const uint32_t slabIdx = static_cast<uint32_t>(record->CacheEntityIndex);
+			writeFlags[slabIdx] |= static_cast<int32_t>(TemporalFlagBits::Dirty)
+			                    |  static_cast<int32_t>(TemporalFlagBits::DirtiedFrame);
+		}
 	}
 #endif
 }
