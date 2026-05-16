@@ -490,3 +490,12 @@ FORCE_INLINE SimFloatImpl<T> FastTan(SimFloatImpl<T> x)
 	}
 	else return SimFloatImpl<T>(std::tan(x.value));
 }
+
+template <typename T>
+FORCE_INLINE SimFloatImpl<T> Fmod(SimFloatImpl<T> a, SimFloatImpl<T> b)
+{
+	if constexpr (std::is_same_v<T, Fixed32>)
+		return SimFloatImpl<T>(Fixed32::FromRaw(a.value.value % b.value.value));
+	else
+		return SimFloatImpl<T>(std::fmod(a.value, b.value));
+}

@@ -1,0 +1,8 @@
+{
+	"name": "BrainStem",
+	"prefabType": "Construct",
+	"constructType": "BrainStemConstruct",
+	"defaults": {
+		"MeshRef": "BrainStem"
+	}
+}

@@ -28,6 +28,8 @@
 #else
 #include "GameplayRenderer.h"
 #endif
+#include "AnimationManager.h"
+#include "SkeletonManager.h"
 #endif
 #include "JoltPhysics.h"
 #if defined(TNX_ENABLE_NETWORK) && !TNX_ENABLE_EDITOR
@@ -486,6 +488,12 @@ void TrinyxEngine::Shutdown()
 	Flow.reset();
 
 #ifndef TNX_HEADLESS
+	// Release singleton GPU buffers before VMA is destroyed.
+	// These Meyers singletons outlive RendererCore so their VulkanBuffer
+	// destructors would otherwise fire after vmaDestroyAllocator.
+	AnimationManager::Get().Shutdown();
+	SkeletonManager::Get().Shutdown();
+
 	// Tear down Vulkan
 	VkMem.Shutdown();
 	VkCtx.Shutdown();

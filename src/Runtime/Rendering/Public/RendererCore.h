@@ -6,6 +6,7 @@
 
 #include "Input.h"
 #include "MeshManager.h"
+#include "SkinningPass.h"
 #include "VulkanContext.h"
 #include "VulkanMemory.h"
 
@@ -138,7 +139,8 @@ protected:
 	uint32_t DirtyWordCount = 0;
 	bool FirstSlabWrite[InstanceBufferCount]{true, true, true, true, true};
 
-	MeshManager Meshes;
+	MeshManager  Meshes;
+	SkinningPass Skinning;
 
 	vk::raii::PipelineLayout PipelineLayout{nullptr};
 	vk::raii::Pipeline Pipeline{nullptr};

@@ -883,6 +883,7 @@ bool Registry::CheckAndCorrectEntityTransform(const EntityTransformCorrection& c
 
 	return true;
 }
+#endif
 
 void Registry::WriteEntityTransformFields(void* const* fieldArrayTable, const Archetype* arch,
                                           uint32_t localIdx,
@@ -914,6 +915,7 @@ void Registry::WriteEntityTransformFields(void* const* fieldArrayTable, const Ar
 		                    | static_cast<int32_t>(TemporalFlagBits::DirtiedFrame);
 }
 
+#ifdef TNX_ENABLE_ROLLBACK
 void Registry::PushEntityReinitEvent(GlobalEntityHandle gHandle, uint32_t frame)
 {
 	EntityRecord* rec = GlobalEntityRegistry.Records[gHandle.GetIndex()];

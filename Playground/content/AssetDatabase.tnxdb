@@ -48,12 +48,49 @@
 			"path": "Audio\\firered_00A1.wav",
 			"type": 6.0,
 			"contentHash": 1.5625005118455796e+19
+		},
+		{
+			"uuid": 768.0,
+			"name": "BrainStem_mesh",
+			"path": "BrainStem.tnxmesh",
+			"type": 2.0,
+			"contentHash": 2.9481342841858816e+18
+		},
+		{
+			"uuid": 1792.0,
+			"name": "BrainStem",
+			"path": "BrainStem.tnxprefab",
+			"type": 9.0,
+			"contentHash": 2.5223584874371533e+18
+		},
+		{
+			"uuid": 256.0,
+			"name": "",
+			"path": "BrainStem.tnxskel",
+			"type": 3.0,
+			"contentHash": 6.589767945435902e+18
+		},
+		{
+			"uuid": 512.0,
+			"name": "",
+			"path": "BrainStem.tnxskin",
+			"type": 3.0,
+			"contentHash": 8.0530128508956723e+18
+		},
+		{
+			"uuid": 256.0,
+			"name": "",
+			"path": "BrainStem_anim.tnxanim",
+			"type": 7.0,
+			"contentHash": 1.7169550444358408e+19
 		}
 	],
 	"counters": {
-		"2": 2.0,
+		"2": 4.0,
+		"3": 3.0,
 		"6": 2.0,
+		"7": 2.0,
 		"8": 2.0,
-		"9": 6.0
+		"9": 8.0
 	}
 }

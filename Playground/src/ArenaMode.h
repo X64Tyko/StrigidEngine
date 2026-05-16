@@ -1,6 +1,7 @@
 
 #pragma once
 #include "AssetRegistry.h"
+#include "BrainStemConstruct.h"
 #include "ConstructRegistry.h"
 #include "GameMode.h"
 #include "Logger.h"
@@ -70,6 +71,14 @@ public:
 				tv->HalfZ = SimFloat(1.5f);
 
 				tv->OnEnter.Bind<ArenaMode, &ArenaMode::OnTriggerOverlap>(this);
+			});
+
+			// Spawn the BrainStem skeletal mesh for animation display
+			cr->Create<BrainStemConstruct>(world, [](BrainStemConstruct* bs)
+			{
+				bs->SpawnPosX = SimFloat(0.0f);
+				bs->SpawnPosY = SimFloat(0.0f);
+				bs->SpawnPosZ = SimFloat(-4.0f);
 			});
 		});
 	}

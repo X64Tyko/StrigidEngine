@@ -1,0 +1,196 @@
+#include "AnimationManager.h"
+#include "AssetRegistry.h"
+#include "AnimationAsset.h"
+#include "Logger.h"
+
+#include <cstring>
+
+// -----------------------------------------------------------------------
+// Initialize
+// -----------------------------------------------------------------------
+
+bool AnimationManager::Initialize(VulkanMemory* vkMem)
+{
+	TrackBuffer = vkMem->AllocateBuffer(
+		MAX_TOTAL_BONE_TRACKS * sizeof(GpuAnimBoneTrack),
+		VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+		GpuMemoryDomain::PersistentMapped,
+		/*requestDeviceAddress=*/ true);
+
+	if (!TrackBuffer.IsValid())
+	{
+		LOG_ENG_ERROR("[AnimationManager] Track buffer allocation failed");
+		return false;
+	}
+
+	KeyframeBuffer = vkMem->AllocateBuffer(
+		MAX_TOTAL_KEYFRAMES * sizeof(GpuAnimKeyframe),
+		VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+		GpuMemoryDomain::PersistentMapped,
+		/*requestDeviceAddress=*/ true);
+
+	if (!KeyframeBuffer.IsValid())
+	{
+		LOG_ENG_ERROR("[AnimationManager] Keyframe buffer allocation failed");
+		return false;
+	}
+
+	std::memset(TrackBuffer.MappedPtr,    0, MAX_TOTAL_BONE_TRACKS * sizeof(GpuAnimBoneTrack));
+	std::memset(KeyframeBuffer.MappedPtr, 0, MAX_TOTAL_KEYFRAMES   * sizeof(GpuAnimKeyframe));
+
+	LOG_ENG_INFO_F("[AnimationManager] Initialized (tracks: %u @ %u KB, keyframes: %u @ %u MB)",
+				   MAX_TOTAL_BONE_TRACKS,
+				   static_cast<uint32_t>(MAX_TOTAL_BONE_TRACKS * sizeof(GpuAnimBoneTrack) / 1024),
+				   MAX_TOTAL_KEYFRAMES,
+				   static_cast<uint32_t>(MAX_TOTAL_KEYFRAMES * sizeof(GpuAnimKeyframe) / (1024 * 1024)));
+	return true;
+}
+
+// -----------------------------------------------------------------------
+// Shutdown
+// -----------------------------------------------------------------------
+
+void AnimationManager::Shutdown()
+{
+	TrackBuffer.Free();
+	KeyframeBuffer.Free();
+}
+
+// -----------------------------------------------------------------------
+// CommitToSlot — internal; packs tracks + keyframes, mirrors to GPU.
+// Does NOT call Register() — caller owns that.
+// -----------------------------------------------------------------------
+
+uint32_t AnimationManager::CommitToSlot(const AnimationAsset& asset, AssetID id)
+{
+	if (AnimCount >= MAX_ANIM_SLOTS)
+	{
+		LOG_ENG_ERROR("[AnimationManager] Animation slot limit reached");
+		return UINT32_MAX;
+	}
+
+	const uint32_t keyframeCount = static_cast<uint32_t>(asset.keyframes.size());
+
+	if (NextTrack + asset.boneCount > MAX_TOTAL_BONE_TRACKS)
+	{
+		LOG_ENG_ERROR("[AnimationManager] Track buffer overflow");
+		return UINT32_MAX;
+	}
+
+	if (NextKeyframe + keyframeCount > MAX_TOTAL_KEYFRAMES)
+	{
+		LOG_ENG_ERROR("[AnimationManager] Keyframe buffer overflow");
+		return UINT32_MAX;
+	}
+
+	uint32_t slotID  = AnimCount++;
+	SlotIDs[slotID]  = id;
+
+	if (id.IsValid()) AssetRegistry::Get().RegisterSlot(AssetType::Animation, slotID, id);
+
+	Slots[slotID].trackOffset    = NextTrack;
+	Slots[slotID].boneCount      = asset.boneCount;
+	Slots[slotID].keyframeOffset = NextKeyframe;
+	Slots[slotID].duration       = asset.duration;
+
+	// Copy tracks to GPU buffer. keyframeOffset is stored as an absolute global index
+	// so the skinning shader can index directly without a per-slot base.
+	auto* gpuTracks = static_cast<GpuAnimBoneTrack*>(TrackBuffer.MappedPtr) + NextTrack;
+	for (uint32_t i = 0; i < asset.boneCount; ++i)
+	{
+		gpuTracks[i].keyframeOffset = NextKeyframe + asset.boneTracks[i].keyframeOffset;
+		gpuTracks[i].keyframeCount  = asset.boneTracks[i].keyframeCount;
+	}
+
+	// Copy keyframes to GPU buffer.
+	auto* gpuKfs = static_cast<GpuAnimKeyframe*>(KeyframeBuffer.MappedPtr) + NextKeyframe;
+	for (uint32_t i = 0; i < keyframeCount; ++i)
+	{
+		const AnimKeyframe& k = asset.keyframes[i];
+		gpuKfs[i].time = k.time;
+		gpuKfs[i].tx   = k.tx; gpuKfs[i].ty = k.ty; gpuKfs[i].tz = k.tz;
+		gpuKfs[i].rx   = k.rx; gpuKfs[i].ry = k.ry;
+		gpuKfs[i].rz   = k.rz; gpuKfs[i].rw = k.rw;
+	}
+
+	CpuCopies[slotID] = asset; // full copy — vectors included
+
+	if (id.IsValid())
+	{
+		if (AssetEntry* entry = AssetRegistry::Get().FindMutable(id))
+		{
+			entry->Data  = reinterpret_cast<void*>(static_cast<uintptr_t>(slotID));
+			entry->State = RuntimeFlags::Loaded;
+			entry->OnLoaded(slotID);
+			entry->OnLoaded.Reset();
+		}
+	}
+
+	NextTrack    += asset.boneCount;
+	NextKeyframe += keyframeCount;
+
+	LOG_ENG_INFO_F("[AnimationManager] Loaded anim slot %u (%.2fs, %u bones, %u keyframes)",
+				   slotID, asset.duration, asset.boneCount, keyframeCount);
+	return slotID;
+}
+
+// -----------------------------------------------------------------------
+// LoadAnimation
+// -----------------------------------------------------------------------
+
+uint32_t AnimationManager::LoadAnimation(const AnimationAsset& asset, TnxName name, AssetID id)
+{
+	if (id.IsValid()) AssetRegistry::Get().Register(id, name.GetStr(), {}, AssetType::Animation);
+	return CommitToSlot(asset, id);
+}
+
+uint32_t AnimationManager::LoadAnimation(AssetID id)
+{
+	uint32_t slot = FindSlotByID(id);
+	if (slot != UINT32_MAX) return slot;
+
+	const AssetEntry* entry = AssetRegistry::Get().Find(id);
+	if (!entry || entry->Type != AssetType::Animation)
+	{
+		LOG_ENG_ERROR("[AnimationManager] LoadAnimation: AssetID not in registry");
+		return UINT32_MAX;
+	}
+
+	std::string path = AssetRegistry::Get().ResolvePath(id);
+	if (path.empty())
+	{
+		LOG_ENG_ERROR("[AnimationManager] LoadAnimation: no resolvable path for AssetID");
+		return UINT32_MAX;
+	}
+
+	AnimationAsset asset;
+	if (!LoadAnimationAsset(asset, path))
+	{
+		LOG_ENG_ERROR_F("[AnimationManager] LoadAnimation: failed to decode '%s'", path.c_str());
+		return UINT32_MAX;
+	}
+
+	return CommitToSlot(asset, id);
+}
+
+uint32_t AnimationManager::LoadAnimation(TnxName name)
+{
+	const AssetEntry* entry = AssetRegistry::Get().FindByTName(name);
+	if (!entry || entry->Type != AssetType::Animation)
+	{
+		LOG_ENG_ERROR_F("[AnimationManager] LoadAnimation: TnxName '%s' not in registry",
+						name.GetStr());
+		return UINT32_MAX;
+	}
+	return LoadAnimation(entry->ID);
+}
+
+// -----------------------------------------------------------------------
+// GetAnimCPU
+// -----------------------------------------------------------------------
+
+const AnimationAsset* AnimationManager::GetAnimCPU(uint32_t slot) const
+{
+	if (slot == 0 || slot >= AnimCount) return nullptr;
+	return &CpuCopies[slot];
+}

@@ -21,6 +21,12 @@
 #include "MeshAsset.h"
 #include "MeshImporter.h"
 #include "MeshManager.h"
+#include "SkeletonImporter.h"
+#include "SkeletonAsset.h"
+#include "SkinWeightsAsset.h"
+#include "AnimationAsset.h"
+#include "SkeletonManager.h"
+#include "AnimationManager.h"
 #include "Registry.h"
 #include "CacheSlotMeta.h"
 #include "NetConnectionManager.h"
@@ -1095,25 +1101,98 @@ uint32_t EditorContext::ImportMeshAsset(const std::string& gltfPath)
 {
 	if (!MeshMgr || !State.ConfigPtr) return UINT32_MAX;
 
-	// Derive output .tnxmesh path in content/
 	std::filesystem::path src(gltfPath);
-	std::string stem    = src.stem().string();
-	std::string outPath = std::string(State.ConfigPtr->ProjectDir)
-		+ "/content/" + stem + ".tnxmesh";
+	std::string stem       = src.stem().string();
+	std::string contentDir = std::string(State.ConfigPtr->ProjectDir) + "/content/";
 
-	// Import glTF → .tnxmesh
+	// Try skeletal import first — if the glTF contains skins, use the full pipeline.
+	SkeletalImportResult skelResult;
+	if (ImportSkeletalGLTF(gltfPath, skelResult) && skelResult.IsValid())
+	{
+		// Write all skeletal assets to content/
+		std::string meshPath = contentDir + stem + ".tnxmesh";
+		std::string skinPath = contentDir + stem + ".tnxskin";
+		std::string skelPath = contentDir + stem + ".tnxskel";
+
+		if (!SaveMeshAsset(skelResult.mesh, meshPath))
+		{
+			LOG_ENG_ERROR_F("[Editor] SaveMeshAsset failed: %s", meshPath.c_str());
+			return UINT32_MAX;
+		}
+		if (!SaveSkinWeightsAsset(skelResult.skin, skinPath))
+		{
+			LOG_ENG_ERROR_F("[Editor] SaveSkinWeightsAsset failed: %s", skinPath.c_str());
+			return UINT32_MAX;
+		}
+		if (!SaveSkeletonAsset(skelResult.skeleton, skelPath))
+		{
+			LOG_ENG_ERROR_F("[Editor] SaveSkeletonAsset failed: %s", skelPath.c_str());
+			return UINT32_MAX;
+		}
+		for (size_t i = 0; i < skelResult.animations.size(); ++i)
+		{
+			const char* animStr = skelResult.animNames[i].IsValid()
+				? skelResult.animNames[i].GetStr() : nullptr;
+			std::string animName = animStr ? animStr : ("anim" + std::to_string(i));
+			std::string animPath = contentDir + stem + "_" + animName + ".tnxanim";
+			if (!SaveAnimationAsset(skelResult.animations[i], animPath))
+				LOG_ENG_WARN_F("[Editor] SaveAnimationAsset failed: %s", animPath.c_str());
+		}
+
+		// Reconcile to register all new files in the asset database
+		AssetDB.Reconcile();
+
+		// Load mesh geometry + skin weights into MeshManager
+		const auto* meshEntry = AssetDB.FindByPath(stem + ".tnxmesh");
+		AssetID meshID  = meshEntry ? meshEntry->ID : AssetID{};
+		uint32_t meshSlot = MeshMgr->LoadMesh(skelResult.mesh, stem, meshID);
+		if (meshSlot == UINT32_MAX)
+		{
+			LOG_ENG_ERROR_F("[Editor] MeshManager::LoadMesh failed for '%s'", stem.c_str());
+			return UINT32_MAX;
+		}
+		MeshMgr->LoadSkinWeights(meshSlot, skelResult.skin);
+
+		// Load skeleton
+		const auto* skelEntry = AssetDB.FindByPath(stem + ".tnxskel");
+		AssetID skelID = skelEntry ? skelEntry->ID : AssetID{};
+		uint32_t skelSlot = SkeletonManager::Get().LoadSkeleton(
+			skelResult.skeleton, TnxName(stem.c_str()), skelID);
+		if (skelSlot == UINT32_MAX)
+			LOG_ENG_WARN_F("[Editor] SkeletonManager::LoadSkeleton failed: %s", stem.c_str());
+
+		// Load animations
+		for (size_t i = 0; i < skelResult.animations.size(); ++i)
+		{
+			const char* animStr = skelResult.animNames[i].IsValid()
+				? skelResult.animNames[i].GetStr() : nullptr;
+			std::string animName = animStr ? animStr : ("anim" + std::to_string(i));
+			std::string relAnim  = stem + "_" + animName + ".tnxanim";
+			const auto* animEntry = AssetDB.FindByPath(relAnim);
+			AssetID animID = animEntry ? animEntry->ID : AssetID{};
+			uint32_t animSlot = AnimationManager::Get().LoadAnimation(
+				skelResult.animations[i], TnxName(animName.c_str()), animID);
+			if (animSlot == UINT32_MAX)
+				LOG_ENG_WARN_F("[Editor] AnimationManager::LoadAnimation failed: %s", animName.c_str());
+		}
+
+		LOG_ENG_INFO_F("[Editor] Imported skeletal mesh '%s' → mesh slot %u, skel slot %u, %u anim(s)",
+					   stem.c_str(), meshSlot, skelSlot,
+					   static_cast<uint32_t>(skelResult.animations.size()));
+		return meshSlot;
+	}
+
+	// Fall back: static mesh import
+	std::string outPath = contentDir + stem + ".tnxmesh";
 	if (!ImportGLTF(gltfPath, outPath))
 	{
 		LOG_ENG_ERROR_F("[Editor] ImportGLTF failed: %s", gltfPath.c_str());
 		return UINT32_MAX;
 	}
-
 	LOG_ENG_INFO_F("[Editor] Wrote %s", outPath.c_str());
 
-	// Reconcile AssetDatabase to pick up the new file
 	AssetDB.Reconcile();
 
-	// Load the .tnxmesh into MeshManager
 	MeshAsset asset;
 	if (!LoadMeshAsset(asset, outPath))
 	{
@@ -1121,15 +1200,12 @@ uint32_t EditorContext::ImportMeshAsset(const std::string& gltfPath)
 		return UINT32_MAX;
 	}
 
-	// Look up AssetID from AssetDatabase after reconcile
-	std::string relPath = stem + ".tnxmesh";
-	const auto* dbEntry = AssetDB.FindByPath(relPath);
+	const auto* dbEntry = AssetDB.FindByPath(stem + ".tnxmesh");
 	AssetID meshID      = dbEntry ? dbEntry->ID : AssetID{};
-
-	uint32_t slot = MeshMgr->LoadMesh(asset, stem, meshID);
+	uint32_t slot       = MeshMgr->LoadMesh(asset, stem, meshID);
 	if (slot != UINT32_MAX)
-	LOG_ENG_INFO_F("[Editor] Registered mesh '%s' at slot %u (AssetID: %lld)",
-				   stem.c_str(), slot, static_cast<long long>(meshID.GetUUID() >> 8));
+		LOG_ENG_INFO_F("[Editor] Registered mesh '%s' at slot %u (AssetID: %lld)",
+					   stem.c_str(), slot, static_cast<long long>(meshID.GetUUID() >> 8));
 
 	return slot;
 }

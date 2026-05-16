@@ -1,0 +1,104 @@
+#pragma once
+#include <cstdint>
+#include <string>
+
+#include "AssetRegistry.h"
+#include "AssetTypes.h"
+#include "SkeletonAsset.h"
+#include "VulkanMemory.h"
+
+// -----------------------------------------------------------------------
+// GpuBoneData — per-bone inverse bind pose uploaded to GPU.
+// One entry per bone across all loaded skeletons (indexed by global bone
+// offset, not per-skeleton index).
+// -----------------------------------------------------------------------
+
+struct GpuBoneData
+{
+	float inverseBindPose[16]; // column-major mat4
+};
+
+static_assert(sizeof(GpuBoneData) == 64, "GpuBoneData must be 64 bytes");
+
+// -----------------------------------------------------------------------
+// SkeletonManager — mega-buffer management for all skeleton bone data.
+//
+// All loaded skeletons sub-allocate into a single GpuBoneData mega-buffer.
+// CPU copies of SkeletonAsset are retained for hierarchy chain-walking
+// during socket evaluation in ESkeletalEntity::GetSocketTransform.
+//
+// AssetRegistry is the authority for name/ID lookup.
+// Slot 0 is reserved as the invalid/error sentinel.
+// -----------------------------------------------------------------------
+
+class SkeletonManager
+{
+public:
+	static constexpr uint32_t MAX_SKELETON_SLOTS = 256;
+	static constexpr uint32_t MAX_TOTAL_BONES    = 65536;
+
+	struct SkeletonSlot
+	{
+		uint32_t boneOffset = 0; // first GpuBoneData entry for this skeleton
+		uint32_t boneCount  = 0;
+	};
+
+	bool Initialize(VulkanMemory* vkMem);
+
+	/// Free GPU buffers. Must be called before VulkanMemory::Shutdown().
+	void Shutdown();
+
+	/// Load a SkeletonAsset — copies bone data into the mega-buffer and retains
+	/// a CPU copy for chain walking. Records name/ID in AssetRegistry.
+	/// Returns the slot ID, or UINT32_MAX on failure.
+	uint32_t LoadSkeleton(const SkeletonAsset& asset, TnxName name, AssetID id = {});
+
+	/// Resolve by AssetID from AssetRegistry, decode from disk, and load.
+	uint32_t LoadSkeleton(AssetID id);
+
+	/// Resolve by TnxName from AssetRegistry, decode from disk, and load.
+	uint32_t LoadSkeleton(TnxName name);
+
+	/// CPU skeleton for hierarchy queries (chain walking, socket lookup).
+	const SkeletonAsset* GetSkeletonCPU(uint32_t slot) const;
+
+	uint64_t           GetBoneDataAddr()  const { return BoneDataBuffer.DeviceAddr; }
+	const SkeletonSlot& GetSlot(uint32_t slot) const { return Slots[slot]; }
+	uint32_t           GetSkeletonCount() const { return SkeletonCount; }
+
+	uint32_t FindSlotByTName(TnxName name) const
+	{
+		const AssetEntry* e = AssetRegistry::Get().FindByTName(name);
+		if (!e || e->Type != AssetType::SkeletalMesh) return UINT32_MAX;
+		return static_cast<uint32_t>(reinterpret_cast<uintptr_t>(e->Data));
+	}
+
+	uint32_t FindSlotByID(AssetID id) const
+	{
+		const AssetEntry* e = AssetRegistry::Get().Find(id);
+		if (!e || e->Type != AssetType::SkeletalMesh) return UINT32_MAX;
+		return static_cast<uint32_t>(reinterpret_cast<uintptr_t>(e->Data));
+	}
+
+	AssetID GetSlotID(uint32_t slot) const { return SlotIDs[slot]; }
+
+	static SkeletonManager& Get()
+	{
+		static SkeletonManager instance;
+		return instance;
+	}
+
+private:
+	/// Copy asset data into mega-buffer and CPU copy array, update AssetRegistry.
+	/// Does NOT call Register() — caller is responsible for registration.
+	uint32_t CommitToSlot(const SkeletonAsset& asset, AssetID id);
+
+	VulkanBuffer BoneDataBuffer; // GpuBoneData[MAX_TOTAL_BONES], PersistentMapped + BDA
+
+	GpuBoneData   BoneData[MAX_TOTAL_BONES]{};
+	SkeletonSlot  Slots[MAX_SKELETON_SLOTS]{};
+	AssetID       SlotIDs[MAX_SKELETON_SLOTS]{};
+	SkeletonAsset CpuCopies[MAX_SKELETON_SLOTS]; // retained for EvaluateBlendedBone + chain walks
+	uint32_t      NextBoneOffset = 0;
+	uint32_t      SkeletonCount  = 1; // slot 0 reserved as invalid sentinel
+};

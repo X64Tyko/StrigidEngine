@@ -1,6 +1,7 @@
 #include "MeshManager.h"
 #include "AssetRegistry.h"
 #include "MeshAsset.h"
+#include "SkinWeightsAsset.h"
 #include "VertexFormat.h"
 #include "Logger.h"
 
@@ -121,10 +122,58 @@ bool MeshManager::Initialize(VulkanMemory* vkMem)
 	}
 	std::memset(MeshTableBuffer.MappedPtr, 0, MAX_MESH_SLOTS * sizeof(GpuMeshInfo));
 
-	LOG_ENG_INFO_F("[MeshManager] Initialized (vertex: %u MB, index: %u MB)",
+	SkinWeightMegaBuffer = vkMem->AllocateBuffer(
+		MAX_TOTAL_SKIN_WEIGHTS * sizeof(SkinWeights),
+		VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+		GpuMemoryDomain::PersistentMapped,
+		/*requestDeviceAddress=*/ true);
+
+	if (!SkinWeightMegaBuffer.IsValid())
+	{
+		LOG_ENG_ERROR("[MeshManager] Skin weight buffer allocation failed");
+		return false;
+	}
+	std::memset(SkinWeightMegaBuffer.MappedPtr, 0, MAX_TOTAL_SKIN_WEIGHTS * sizeof(SkinWeights));
+
+	LOG_ENG_INFO_F("[MeshManager] Initialized (vertex: %u MB, index: %u MB, skin: %u MB)",
 				   VERTEX_MEGA_BUFFER_SIZE / (1024 * 1024),
-			   INDEX_MEGA_BUFFER_SIZE / (1024 * 1024));
+				   INDEX_MEGA_BUFFER_SIZE / (1024 * 1024),
+				   static_cast<uint32_t>(MAX_TOTAL_SKIN_WEIGHTS * sizeof(SkinWeights) / (1024 * 1024)));
 	return true;
+}
+
+// -----------------------------------------------------------------------
+// LoadSkinWeights — associate bone influence data with an existing mesh slot.
+// The skin buffer mirrors the vertex buffer: SkinSlots[meshSlot] parallel to
+// Slots[meshSlot], indexed identically per vertex.
+// -----------------------------------------------------------------------
+
+uint32_t MeshManager::LoadSkinWeights(uint32_t meshSlot, const SkinWeightsAsset& skin)
+{
+	if (meshSlot == 0 || meshSlot >= MeshCount)
+	{
+		LOG_ENG_ERROR("[MeshManager] LoadSkinWeights: invalid mesh slot");
+		return UINT32_MAX;
+	}
+
+	const uint32_t count = static_cast<uint32_t>(skin.Weights.size());
+	if (NextSkinOffset + count > MAX_TOTAL_SKIN_WEIGHTS)
+	{
+		LOG_ENG_ERROR("[MeshManager] Skin weight buffer overflow");
+		return UINT32_MAX;
+	}
+
+	auto* dst = static_cast<SkinWeights*>(SkinWeightMegaBuffer.MappedPtr) + NextSkinOffset;
+	std::memcpy(dst, skin.Weights.data(), count * sizeof(SkinWeights));
+
+	SkinSlots[meshSlot].vertexOffset = NextSkinOffset;
+	SkinSlots[meshSlot].vertexCount  = count;
+
+	NextSkinOffset += count;
+
+	LOG_ENG_INFO_F("[MeshManager] Loaded skin weights for mesh slot %u (%u vertices)",
+				   meshSlot, count);
+	return meshSlot;
 }
 
 // -----------------------------------------------------------------------

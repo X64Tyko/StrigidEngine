@@ -168,9 +168,17 @@ inline AssetType AssetTypeFromExtension(const char* ext)
 	// Scene/prefab (engine formats)
 	if (ext[0] == 't' && ext[1] == 'n' && ext[2] == 'x')
 	{
-		if (ext[3] == 's') return AssetType::Level;  // .tnxscene
+		if (ext[3] == 's')
+		{
+			if (ext[4] == 'c') return AssetType::Level;        // .tnxscene
+			if (ext[4] == 'k') return AssetType::SkeletalMesh; // .tnxskel, .tnxskin
+		}
 		if (ext[3] == 'p') return AssetType::Prefab; // .tnxprefab
-		if (ext[3] == 'a') return AssetType::Audio;  // .tnxaudio
+		if (ext[3] == 'a')
+		{
+			if (ext[4] == 'u') return AssetType::Audio;     // .tnxaudio
+			if (ext[4] == 'n') return AssetType::Animation; // .tnxanim
+		}
 	}
 
 	// Common asset formats

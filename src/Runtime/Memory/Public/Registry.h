@@ -582,6 +582,9 @@ inline void Registry::InvokeScalarUpdate(SimFloat dt)
 #endif
 		return;
 	}
+#ifndef TNX_ENABLE_ROLLBACK
+	hisWrite = volWrite; // Without rollback, Temporal fields share the VolatileSlab — match frame indices.
+#endif
 
 	TrinyxJobs::JobCounter ScalarUpdateCounter;
 
@@ -639,6 +642,9 @@ inline void Registry::InvokePrePhys(SimFloat dt)
 #endif
 		return;
 	}
+#ifndef TNX_ENABLE_ROLLBACK
+	hisWrite = volWrite;
+#endif
 
 	TrinyxJobs::JobCounter prePhysCounter;
 
@@ -702,6 +708,9 @@ inline void Registry::InvokePostPhys(SimFloat dt)
 #endif
 		return;
 	}
+#ifndef TNX_ENABLE_ROLLBACK
+	hisWrite = volWrite;
+#endif
 
 	TrinyxJobs::JobCounter postPhysCounter;
 

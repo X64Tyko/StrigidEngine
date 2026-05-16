@@ -63,6 +63,14 @@ struct GpuFrameData
     uint64_t MeshTableAddr;            // GpuMeshInfo[MeshCount]
     uint     MeshCount;                // number of registered mesh types
     uint     _pad0;
+    // Animation / skinning addresses (populated by SkinningPass)
+    uint64_t AnimBlendAddr;            // GpuAnimEntry[MAX_CACHED_ENTITIES] per-frame upload
+    uint64_t GpuBoneDataAddr;          // GpuBoneData[MAX_TOTAL_BONES]
+    uint64_t AnimTrackAddr;            // GpuAnimBoneTrack[MAX_TOTAL_BONE_TRACKS]
+    uint64_t AnimKeyframeAddr;         // GpuAnimKeyframe[MAX_TOTAL_KEYFRAMES]
+    uint64_t SkinWeightAddr;           // SkinWeights[MAX_TOTAL_SKIN_WEIGHTS]
+    uint     SkeletalEntityCount;      // entities processed by skinning pass
+    uint     _pad_anim;
     uint64_t PrevFieldAddrs[MaxGpuFields];
     uint64_t CurrFieldAddrs[MaxGpuFields];
     uint     FieldSemantics[MaxGpuFields];

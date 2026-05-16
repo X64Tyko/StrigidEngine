@@ -24,6 +24,10 @@
 #include "CVisualTransform.h"
 #include "VulkanDebug.h"
 
+#include "AnimationManager.h"
+#include "SkeletonManager.h"
+#include "SkinningPass.h"
+
 #include <immintrin.h>
 #include "LogicThread.h"
 #include "TrinyxEngine.h"
@@ -561,6 +565,17 @@ void RendererCore<Derived>::RecordCommandBuffer(FrameSync& frame, uint32_t image
 			d.pMemoryBarriers    = &mb;
 			vkCmdPipelineBarrier2(cmd, &d);
 		};
+
+		// Skinning pass — must run before predicate/scatter (M1: SkeletalEntityCount=0 → no-op)
+		{
+			const auto* fd = static_cast<const GpuFrameData*>(frame.GpuData.MappedPtr);
+			if (fd->SkeletalEntityCount > 0)
+			{
+				TNX_VKDBG_SCOPE(cmd, "SkinningPass", VulkanDebug::ColorCompute);
+				Skinning.Dispatch(cmd, frame.GpuData.DeviceAddr, fd->SkeletalEntityCount);
+				ComputeBarrier();
+			}
+		}
 
 		// Zero CompactCounter and MeshHistogram before compute passes
 		vkCmdFillBuffer(cmd, static_cast<VkBuffer>(frame.CompactCounterBuffer.Buffer), 0, sizeof(uint32_t), 0u);
@@ -1236,6 +1251,25 @@ bool RendererCore<Derived>::CreateMeshBuffers()
 
 	LOG_ENG_INFO_F("[Renderer] MeshManager ready — cube at slot %u, capsule at slot %u (slot 0 reserved as invalid)",
 				   cubeSlot, capsuleSlot);
+
+	if (!SkeletonManager::Get().Initialize(VkMem))
+	{
+		LOG_ENG_ERROR("[Renderer] SkeletonManager initialization failed");
+		return false;
+	}
+
+	if (!AnimationManager::Get().Initialize(VkMem))
+	{
+		LOG_ENG_ERROR("[Renderer] AnimationManager initialization failed");
+		return false;
+	}
+
+	if (!Skinning.Initialize(Device, *PipelineLayout, VkMem, static_cast<uint32_t>(ConfigPtr->MAX_CACHED_ENTITIES)))
+	{
+		LOG_ENG_ERROR("[Renderer] SkinningPass initialization failed");
+		return false;
+	}
+
 	return true;
 }
 
@@ -1293,6 +1327,13 @@ void RendererCore<Derived>::FillGpuFrameData(FrameSync& frame)
 	FrameData->MeshWriteIdxAddr      = frame.MeshWriteIdxBuffer.DeviceAddr;
 	FrameData->MeshTableAddr         = Meshes.GetMeshTableAddr();
 	FrameData->MeshCount             = Meshes.GetMeshCount();
+
+	FrameData->AnimBlendAddr         = Skinning.GetAnimBlendAddr();
+	FrameData->GpuBoneDataAddr       = SkeletonManager::Get().GetBoneDataAddr();
+	FrameData->AnimTrackAddr         = AnimationManager::Get().GetTrackBufferAddr();
+	FrameData->AnimKeyframeAddr      = AnimationManager::Get().GetKeyframeBufferAddr();
+	FrameData->SkinWeightAddr        = Meshes.GetSkinWeightAddr();
+	FrameData->SkeletalEntityCount   = 0; // M1: populated by LogicThread when ESkeletalEntity is registered
 
 	const uint32_t Fields[GpuOutFieldCount] = {
 		SemFlags,

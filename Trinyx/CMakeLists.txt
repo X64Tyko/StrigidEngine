@@ -135,6 +135,7 @@ target_include_directories(${PROJECT_NAME} PUBLIC
     "${CMAKE_SOURCE_DIR}/src/Runtime/Input/Public"
         "${CMAKE_SOURCE_DIR}/src/Runtime/Physics/Public"
         "${CMAKE_SOURCE_DIR}/src/Runtime/Assets/Public"
+        "${CMAKE_SOURCE_DIR}/src/Runtime/Animation/Public"
         "${CMAKE_SOURCE_DIR}/src/Runtime/Net/Public"
         "${CMAKE_SOURCE_DIR}/src/Runtime/Construct/Public"
         "${CMAKE_SOURCE_DIR}/src/Runtime/Entities/Public"
@@ -301,6 +302,7 @@ set(SLANG_SHADER_SOURCES
         "${CMAKE_SOURCE_DIR}/shaders/compute/scatter.slang"
         "${CMAKE_SOURCE_DIR}/shaders/compute/build_draws.slang"
         "${CMAKE_SOURCE_DIR}/shaders/compute/sort_instances.slang"
+        "${CMAKE_SOURCE_DIR}/shaders/compute/skinning.slang"
         "${CMAKE_SOURCE_DIR}/shaders/graphics/cube.vert.slang"
         "${CMAKE_SOURCE_DIR}/shaders/graphics/cube.frag.slang"
 )

@@ -1,5 +1,4 @@
-#define CGLTF_IMPLEMENTATION
-#include "cgltf.h"
+#include "cgltf.h" // implementation provided by cgltf_impl.cpp
 
 #include "MeshImporter.h"
 #include "MeshAsset.h"

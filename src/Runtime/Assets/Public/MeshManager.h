@@ -5,6 +5,7 @@
 #include "AssetRegistry.h"
 #include "AssetTypes.h"
 #include "GpuFrameData.h"
+#include "SkinWeightsAsset.h"
 #include "VulkanMemory.h"
 
 struct MeshAsset;
@@ -52,6 +53,7 @@ public:
 	static constexpr uint32_t MAX_MESH_SLOTS          = 256;
 	static constexpr uint32_t VERTEX_MEGA_BUFFER_SIZE = 16 * 1024 * 1024; // 16 MB
 	static constexpr uint32_t INDEX_MEGA_BUFFER_SIZE  = 4 * 1024 * 1024;  //  4 MB
+	static constexpr uint32_t MAX_TOTAL_SKIN_WEIGHTS  = 4000000;           //  4M vertices of skin data (~32 MB)
 
 	struct MeshSlot
 	{
@@ -60,6 +62,12 @@ public:
 		int32_t VertexOffset = 0; // signed per Vulkan spec
 		float AABBMin[3]     = {};
 		float AABBMax[3]     = {};
+	};
+
+	struct SkinWeightSlot
+	{
+		uint32_t vertexOffset = 0; // first SkinWeights entry in SkinWeightMegaBuffer
+		uint32_t vertexCount  = 0;
 	};
 
 	bool Initialize(VulkanMemory* vkMem);
@@ -81,10 +89,16 @@ public:
 	/// Load a built-in capsule mesh (two hemispheres + cylinder body).
 	uint32_t LoadBuiltinCapsule(float radius, float halfHeight, uint32_t segments);
 
-	uint64_t GetVertexBufferAddr() const { return VertexMegaBuffer.DeviceAddr; }
-	VkBuffer GetIndexBufferHandle() const { return static_cast<VkBuffer>(IndexMegaBuffer.Buffer); }
-	uint64_t GetMeshTableAddr() const { return MeshTableBuffer.DeviceAddr; }
-	const MeshSlot& GetSlot(uint32_t id) const { return Slots[id]; }
+	/// Load skin weights associated with an already-loaded mesh slot.
+	/// Returns the same meshSlot on success, or UINT32_MAX on failure.
+	uint32_t LoadSkinWeights(uint32_t meshSlot, const SkinWeightsAsset& skin);
+
+	uint64_t GetVertexBufferAddr()     const { return VertexMegaBuffer.DeviceAddr; }
+	VkBuffer GetIndexBufferHandle()    const { return static_cast<VkBuffer>(IndexMegaBuffer.Buffer); }
+	uint64_t GetMeshTableAddr()        const { return MeshTableBuffer.DeviceAddr; }
+	uint64_t GetSkinWeightAddr()       const { return SkinWeightMegaBuffer.DeviceAddr; }
+	const MeshSlot&        GetSlot(uint32_t id)       const { return Slots[id]; }
+	const SkinWeightSlot&  GetSkinSlot(uint32_t id)   const { return SkinSlots[id]; }
 	uint32_t GetMeshCount() const { return MeshCount; }
 
 	/// Find a mesh slot by TnxName (primary API). Returns UINT32_MAX if not registered.
@@ -126,11 +140,14 @@ private:
 
 	VulkanBuffer VertexMegaBuffer;
 	VulkanBuffer IndexMegaBuffer;
-	VulkanBuffer MeshTableBuffer; // GpuMeshInfo[MAX_MESH_SLOTS], PersistentMapped + BDA
+	VulkanBuffer MeshTableBuffer;      // GpuMeshInfo[MAX_MESH_SLOTS], PersistentMapped + BDA
+	VulkanBuffer SkinWeightMegaBuffer; // SkinWeights[MAX_TOTAL_SKIN_WEIGHTS], PersistentMapped + BDA
 
-	uint32_t NextVertexOffset = 0; // in vertices (not bytes)
-	uint32_t NextIndexOffset  = 0; // in indices  (not bytes)
-	uint32_t MeshCount        = 1; // slot 0 reserved as invalid sentinel
-	MeshSlot Slots[MAX_MESH_SLOTS]{};
-	AssetID  SlotIDs[MAX_MESH_SLOTS]{}; // slot → AssetID reverse map for GetSlotName/GetSlotID
+	uint32_t NextVertexOffset  = 0; // in vertices (not bytes)
+	uint32_t NextIndexOffset   = 0; // in indices  (not bytes)
+	uint32_t NextSkinOffset    = 0; // in SkinWeights entries (not bytes)
+	uint32_t MeshCount         = 1; // slot 0 reserved as invalid sentinel
+	MeshSlot       Slots[MAX_MESH_SLOTS]{};
+	SkinWeightSlot SkinSlots[MAX_MESH_SLOTS]{};
+	AssetID        SlotIDs[MAX_MESH_SLOTS]{}; // slot → AssetID reverse map for GetSlotName/GetSlotID
 };

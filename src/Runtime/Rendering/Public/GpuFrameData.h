@@ -76,11 +76,19 @@ struct GpuFrameData
 	uint64_t MeshTableAddr;                   // offset 152
 	uint32_t MeshCount;                       // offset 160
 	uint32_t _pad0;                           // offset 164
-	uint64_t PrevFieldAddrs[MaxGpuFields];   // offset 168
-	uint64_t CurrFieldAddrs[MaxGpuFields];   // offset 1192
-	uint32_t FieldSemantics[MaxGpuFields];   // offset 2216
-	uint32_t FieldElementSize[MaxGpuFields]; // offset 2728
-};                                            // total  3240
+	// --- Animation / skinning addresses (populated by SkinningPass) ---
+	uint64_t AnimBlendAddr;                   // offset 168 — GpuAnimEntry[MAX_CACHED_ENTITIES] per-frame upload
+	uint64_t GpuBoneDataAddr;                 // offset 176 — GpuBoneData[MAX_TOTAL_BONES]
+	uint64_t AnimTrackAddr;                   // offset 184 — GpuAnimBoneTrack[MAX_TOTAL_BONE_TRACKS]
+	uint64_t AnimKeyframeAddr;                // offset 192 — GpuAnimKeyframe[MAX_TOTAL_KEYFRAMES]
+	uint64_t SkinWeightAddr;                  // offset 200 — SkinWeights[MAX_TOTAL_SKIN_WEIGHTS]
+	uint32_t SkeletalEntityCount;             // offset 208 — entities processed by skinning pass
+	uint32_t _pad_anim;                       // offset 212
+	uint64_t PrevFieldAddrs[MaxGpuFields];   // offset 216
+	uint64_t CurrFieldAddrs[MaxGpuFields];   // offset 1240
+	uint32_t FieldSemantics[MaxGpuFields];   // offset 2264
+	uint32_t FieldElementSize[MaxGpuFields]; // offset 2776
+};                                            // total  3288
 
-static_assert(sizeof(GpuFrameData) == 3240,
+static_assert(sizeof(GpuFrameData) == 3288,
 			  "GpuFrameData size mismatch — layout must match GpuFrameData.slang exactly");

@@ -34,6 +34,26 @@ static_assert(sizeof(Vertex) == 32, "Vertex must be exactly 32 bytes");
 static_assert(alignof(Vertex) == 16, "Vertex must be 16-byte aligned");
 
 // -----------------------------------------------------------------------
+// SkinWeights — bone influence data for skeletal meshes.
+//
+// Stored in a parallel buffer alongside the mesh vertex buffer — not
+// embedded in Vertex so static meshes pay zero cost.  One SkinWeights
+// entry per vertex, indexed identically to the vertex buffer.
+//
+// boneIndices: up to 4 joint indices into the skeleton's joint array.
+// boneWeights: UNORM8 [0..255] = [0.0..1.0].  Entries must sum to 255.
+//              A zero weight entry (and its paired index) is inactive.
+// -----------------------------------------------------------------------
+
+struct SkinWeights
+{
+	uint8_t boneIndices[4]; // 4B
+	uint8_t boneWeights[4]; // 4B  UNORM8
+};
+
+static_assert(sizeof(SkinWeights) == 8, "SkinWeights must be 8 bytes");
+
+// -----------------------------------------------------------------------
 // Octahedral encoding — maps unit sphere ↔ [-1,1]² octahedron
 // Stored as two snorm16 packed into a uint32.
 // -----------------------------------------------------------------------
