@@ -109,15 +109,27 @@ private:
 	void DrawFileDialog();
 	void DrawImportDialog();
 	void DrawUnsavedWarning();
+	void DrawAssetIssuesDialog();
 	void DrawGizmo();
 	void ConsumePick();
+
+	void CheckForAssetIssues();
+
+	struct AssetIssue
+	{
+		AssetID     ID;
+		std::string Name;
+		std::string RegisteredPath;
+		std::string SuggestedSourcePath; // pre-filled reimport path, user-editable
+		char        ReimportBuf[512]  = {};
+		bool        ShowReimportInput = false;
+	};
+	std::vector<AssetIssue> AssetIssues;
+	bool bShowAssetIssuesDialog = false;
 
 	/// Import a glTF/glb file: convert to .tnxmesh in content/, register with
 	/// AssetDatabase and MeshManager. Returns the mesh slot or UINT32_MAX on failure.
 	uint32_t ImportMeshAsset(const std::string& gltfPath);
-
-	/// Load all .tnxmesh files from AssetDatabase into MeshManager at startup.
-	void LoadAllMeshAssets();
 
 	// --- Play/Stop scene snapshot ---
 	// On Play: snapshot all field data so Stop can restore it.

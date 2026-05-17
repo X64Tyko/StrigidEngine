@@ -53,18 +53,48 @@ void main(uint3 gid : SV_DispatchThreadID)
         if (sem == SemGeneric || sem == SemFlags)
             continue;   // Flags are uint, not interpolatable
 
-        if (sem > GpuOutFieldCount)
-            continue;   // Out-of-range
+        // EntityCacheIdx: always-on, no slab backing — write entity loop index i directly.
+        // Vertex shader reads this to find the compact skeletal index for LBS; fragment shader
+        // reads it for GPU picking. Must be handled before the anim-skip guard below.
+        if (sem == SemEntityCacheIdx)
+        {
+            outBuf[(sem - 1u) * stride + outIdx] = asfloat(i);
 
-        // MeshID: uint field, no interpolation — copy current value and build histogram
+            // Skeletal entity registration: claim a compact slot so skinning knows which entities to skin.
+            // SkeletalIdxByEntityAddr is pre-cleared to UINT32_MAX; non-skeletal entities keep the sentinel.
+            if (fd->SkeletalListAddr != 0)
+            {
+                uint skelID = ((uint*)fd->CurrFieldAddrs[SlabIdx_SkeletonID])[i];
+                if (skelID != 0)
+                {
+                    uint slot;
+                    InterlockedAdd(((uint*)fd->SkeletalDispatchArgsAddr)[0], 1u, slot);
+                    ((uint*)fd->SkeletalListAddr)[slot]     = i;
+                    ((uint*)fd->SkeletalIdxByEntityAddr)[i] = slot;
+                }
+            }
+            continue;
+        }
+
+        if (sem > GpuOutFieldCount)
+            continue;   // Animation slab fields — read by skinning compute directly, not scatter output
+
+        // MeshID: uint field, no interpolation — copy current value and build histogram.
+        // Skeletal entities have no CMeshRef; fall back to SkinMeshID as the draw mesh.
         if (sem == SemMeshID)
         {
             uint meshID = ((uint*)fd->CurrFieldAddrs[f])[i];
+            if (meshID == 0)
+                meshID = ((uint*)fd->CurrFieldAddrs[SlabIdx_SkinMeshID])[i];
+
             outBuf[(sem - 1u) * stride + outIdx] = asfloat(meshID);
 
-            // Atomically increment mesh histogram for counting sort
-            uint* histogram = (uint*)fd->MeshHistogramAddr;
-            InterlockedAdd(histogram[meshID], 1u);
+            // Slot 0 is the invalid sentinel — skip histogram to avoid polluting bucket 0.
+            if (meshID != 0)
+            {
+                uint* histogram = (uint*)fd->MeshHistogramAddr;
+                InterlockedAdd(histogram[meshID], 1u);
+            }
             continue;
         }
 
@@ -79,11 +109,4 @@ void main(uint3 gid : SV_DispatchThreadID)
         outBuf[(sem - 1u) * stride + outIdx] = lerped;
     }
 
-#ifdef TNX_GPU_PICKING
-    // Write the entity's cache index (i) into the pick output slot.
-    // This is a uint reinterpreted as float in the SoA buffer; the vertex
-    // shader reads it back as uint via asuint(). CPU resolves cache index
-    // to EntityRecord on readback.
-    outBuf[(SemEntityCacheIdx - 1u) * stride + outIdx] = asfloat(i);
-#endif
 }

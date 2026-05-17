@@ -78,6 +78,13 @@ struct EngineConfig
 	int TemporalFrameCount = Unset; ///< Temporal ring depth. Min 8, power-of-2. At 512 Hz: 128 frames ≈ 0.25 s of history.
 	int JobCacheSize       = Unset; ///< Pre-allocated job queue capacity. Exceeding this value will assert.
 
+	/// @brief Dirty entity count below which GPU slab upload runs inline on the render thread.
+	/// @note Below this count, job dispatch + WaitForCounter overhead exceeds the upload work. Default: 256.
+	int SlabUploadInlineThreshold    = Unset;
+	/// @brief Dirty entity count below which a single bundled job uploads all fields sequentially.
+	/// @note Above this threshold, one job per field is dispatched for parallel throughput. Default: 4096.
+	int SlabUploadSingleJobThreshold = Unset;
+
 	char ProjectDir[512]   = ""; ///< Project root directory (set from TNX_PROJECT_DIR or Initialize() argument).
 	char DefaultScene[256] = ""; ///< Scene to load on startup (relative to ProjectDir/content/).
 	char DefaultState[256] = ""; ///< Flow state name to load on startup (e.g., "MainMenu").
@@ -141,6 +148,17 @@ struct EngineConfig
 	double GetInputNetStepTime() const
 	{
 		return 1.0 / GetInputNetHz();
+	}
+
+	/// @brief Dirty entity count below which slab upload runs inline on the render thread (no job dispatch).
+	int GetSlabUploadInlineThreshold() const
+	{
+		return (SlabUploadInlineThreshold == Unset) ? 256 : SlabUploadInlineThreshold;
+	}
+	/// @brief Dirty entity count below which a single bundled job uploads all fields.
+	int GetSlabUploadSingleJobThreshold() const
+	{
+		return (SlabUploadSingleJobThreshold == Unset) ? 4096 : SlabUploadSingleJobThreshold;
 	}
 };
 

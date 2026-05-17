@@ -41,6 +41,10 @@ public:
 	/// ImGui texture handle for the editor's main viewport. Valid after OnPostStart.
 	VkDescriptorSet GetEditorViewportTexture() const;
 
+	/// Enable or disable rendering the editor world. Call with false during PIE to
+	/// avoid running the full compute pipeline for a world that isn't displayed.
+	void SetEditorViewportActive(bool active) { EditorViewport.bActive = active; }
+
 	// ── Multi-viewport (PIE) ────────────────────────────────────────────
 	void AddViewport(WorldViewport* vp);
 	void RemoveViewport(WorldViewport* vp);
@@ -68,6 +72,7 @@ private:
 
 	// PIE viewport rendering
 	void WriteToViewportSlab(WorldViewport* vp);
+	void FlushViewportSlabUpload(WorldViewport* vp);
 	void FillGpuFrameDataForViewport(WorldViewport* vp, FrameSync& frame);
 	void RecordViewportScenePass(VkCommandBuffer cmd, FrameSync& frame, WorldViewport* vp);
 	void RecordPIEFrame(FrameSync& frame, uint32_t imageIndex);

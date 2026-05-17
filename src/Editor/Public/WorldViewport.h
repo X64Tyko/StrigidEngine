@@ -67,6 +67,16 @@ struct WorldViewport
 	uint64_t PrevVolatileFrame = 0;
 	uint64_t PrevTemporalFrame = 0;
 
+	// ── Deferred slab upload ─────────────────────────────────────────────
+	// Jobs dispatched in WriteToViewportSlab overlap with command recording.
+	// FlushViewportSlabUpload() waits before FillGpuFrameDataForViewport.
+	SlabFieldUploadInfo    VpUploadFields[GpuTotalFieldCount]{};
+	TrinyxJobs::JobCounter SlabUploadCounter;
+	bool     bSlabUploadPending       = false;
+	uint64_t PendingRenderAckFrame    = 0;
+	uint64_t PendingVolatileFrameLock = 0;
+	uint64_t PendingTemporalFrameLock = 0;
+
 	// ── Viewport dimensions ─────────────────────────────────────────────
 	uint32_t Width    = 0;
 	uint32_t Height   = 0;

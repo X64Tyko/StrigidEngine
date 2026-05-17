@@ -1,5 +1,6 @@
 #pragma once
 #include "EInterpEntity.h"
+#include "CScale.h"
 #include "CSkeletonRef.h"
 #include "CAnimBase.h"
 #include "CAnimLayer.h"
@@ -25,9 +26,10 @@
 template <template <FieldWidth> class Derived, FieldWidth WIDTH = FieldWidth::Scalar>
 class ESkeletalEntity : public EInterpEntity<Derived, WIDTH>
 {
-    TNX_REGISTER_SUPER_SCHEMA(ESkeletalEntity, EInterpEntity, SkeletonRef, AnimBase, AnimLayer)
+    TNX_REGISTER_SUPER_SCHEMA(ESkeletalEntity, EInterpEntity, Scale, SkeletonRef, AnimBase, AnimLayer)
 
 public:
+    CScale<WIDTH>       Scale;
     CSkeletonRef<WIDTH> SkeletonRef;
     CAnimBase<WIDTH>    AnimBase;
     CAnimLayer<WIDTH>   AnimLayer;
@@ -35,6 +37,9 @@ public:
     void Initialize()
     {
         EInterpEntity<Derived, WIDTH>::Initialize();
+        Scale.ScaleX = SimFloat(1.f);
+        Scale.ScaleY = SimFloat(1.f);
+        Scale.ScaleZ = SimFloat(1.f);
         AnimBase.Clear();
         AnimLayer.Clear();
     }

@@ -36,6 +36,14 @@
 #define TNX_CTZ64(x) __builtin_ctzll(x)
 #endif
 
+// Cross-platform popcount intrinsics
+#ifdef _MSC_VER
+/// @brief Count set bits (32-bit).
+#define TNX_POPCOUNT32(x) static_cast<uint32_t>(__popcnt(static_cast<unsigned int>(x)))
+#else
+#define TNX_POPCOUNT32(x) static_cast<uint32_t>(__builtin_popcount(static_cast<unsigned int>(x)))
+#endif
+
 // Suppress warnings for anonymous structs in unions used by math types.
 #ifdef _MSC_VER
 #pragma warning(push)

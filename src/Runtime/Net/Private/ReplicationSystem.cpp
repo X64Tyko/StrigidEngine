@@ -406,13 +406,16 @@ void ReplicationSystem::DispatchSpawnJobs(uint32_t frameNumber)
 		}
 	}
 
+	FlowManagerBase* serverFlow = AuthorityWorld ? AuthorityWorld->GetFlowManager() : nullptr;
+
 	// ServerReady must reach LevelLoaded channels even with no spawn candidates —
 	// scene entities aren't individually Replicated; the client loads the scene file itself.
 	bool anyInitialFlush = false;
 	for (uint8_t oid : ActiveOwnerIDs)
 	{
 		if (ServerClientChannel* ch = GetChannelIfActive(oid))
-			if (ch->CI && ch->CI->RepState == ClientRepState::LevelLoaded && !ch->CI->bInitialSpawnFlushed)
+			if (ch->CI && ch->CI->RepState == ClientRepState::LevelLoaded && !ch->CI->bInitialSpawnFlushed
+			    && (serverFlow ? serverFlow->IsGameModeReady() : true))
 				anyInitialFlush = true;
 	}
 
@@ -445,14 +448,13 @@ void ReplicationSystem::DispatchSpawnJobs(uint32_t frameNumber)
 		const uint32_t* meshID;
 	};
 
-	FlowManagerBase* serverFlow = AuthorityWorld ? AuthorityWorld->GetFlowManager() : nullptr;
-
 	for (uint8_t oid : ActiveOwnerIDs)
 	{
 		ServerClientChannel* ch = GetChannelIfActive(oid);
 		if (!ch || !ch->CI) continue;
 
-		const bool bInitialFlush = ch->CI->RepState == ClientRepState::LevelLoaded && !ch->CI->bInitialSpawnFlushed;
+		const bool bInitialFlush = ch->CI->RepState == ClientRepState::LevelLoaded && !ch->CI->bInitialSpawnFlushed
+		                        && (serverFlow ? serverFlow->IsGameModeReady() : true);
 		const bool bIncremental  = ch->CI->RepState >= ClientRepState::Loaded && ch->CI->bInitialSpawnFlushed;
 		if (!bInitialFlush && !bIncremental) continue;
 

@@ -1,12 +1,16 @@
 #pragma once
+#include <array>
 #include <atomic>
+#include <cstdint>
 #include <thread>
 #include <vector>
 #include <SDL3/SDL_video.h>
 
+#include "GpuFrameData.h"
 #include "Input.h"
 #include "MeshManager.h"
 #include "SkinningPass.h"
+#include "TrinyxJobs.h"
 #include "VulkanContext.h"
 #include "VulkanMemory.h"
 
@@ -44,6 +48,33 @@ struct FrameSync
 	VulkanImage PickAttachment;      // R32_UINT color attachment for entity cache index
 	VulkanBuffer PickReadbackBuffer; // Staging buffer for single-pixel readback
 #endif
+};
+
+// -----------------------------------------------------------------------
+// GPU slab field descriptors — shared between RendererCore and WorldViewport.
+// -----------------------------------------------------------------------
+
+enum class GpuSlabTier : uint8_t { Temporal, Volatile };
+enum class GpuSlabKind : uint8_t {
+	SimFloat,    // SoA float field, converted from SimFloat if Fixed32
+	RawU32,      // SoA uint32 field, copied verbatim
+	EntityIndex, // No slab backing — scatter writes entity loop index i (always-on)
+};
+
+struct GpuSlabFieldDesc
+{
+	GpuSlabTier tier;
+	GpuSlabKind kind;
+	uint32_t    slot; // CacheSlotID value (uint8_t range); 0 for EntityIndex
+	uint32_t    fi;   // field index within the component's SoA; 0 for EntityIndex
+	uint32_t    sem;  // GpuFieldSemantic constant
+};
+
+struct SlabFieldUploadInfo
+{
+	const uint8_t* src = nullptr;
+	uint8_t*       dst = nullptr;
+	GpuSlabKind    kind = GpuSlabKind::SimFloat;
 };
 
 // -----------------------------------------------------------------------
@@ -139,6 +170,25 @@ protected:
 	uint32_t DirtyWordCount = 0;
 	bool FirstSlabWrite[InstanceBufferCount]{true, true, true, true, true};
 
+	// ── Deferred slab upload ────────────────────────────────────────────
+	// Upload jobs (single or per-field) are dispatched in WriteToFrameSlab,
+	// then the render thread overlaps command buffer recording with the upload.
+	// FlushPendingSlabUpload() waits for completion just before vkQueueSubmit.
+	SlabFieldUploadInfo SlabUploadFields[GpuTotalFieldCount]{};
+
+	TrinyxJobs::JobCounter SlabUploadCounter{};
+	bool     bSlabUploadPending       = false;
+	uint32_t PendingSlabIdx           = 0;
+	uint64_t PendingRenderAckFrame    = 0;
+	uint64_t PendingVolatileFrameLock = 0;
+	uint64_t PendingTemporalFrameLock = 0;
+
+	// Slab field descriptor — cached once in Initialize(), shared by WriteToFrameSlab
+	// and EditorRenderer::WriteToViewportSlab. Eliminates duplicated component slot
+	// lookups and field tables across gameplay and editor renderers.
+	// GpuTotalFieldCount slab fields + 1 always-on EntityCacheIdx slot.
+	std::array<GpuSlabFieldDesc, GpuTotalFieldCount + 1> SlabFieldDescs{};
+
 	MeshManager  Meshes;
 	SkinningPass Skinning;
 
@@ -188,6 +238,7 @@ protected:
 	// ── Methods accessible to derived renderers ────────────────────────
 	void FillGpuFrameData(FrameSync& frame);
 	void WriteToFrameSlab();
+	void FlushPendingSlabUpload();
 	void RecordCommandBuffer(FrameSync& frame, uint32_t imageIndex);
 
 private:

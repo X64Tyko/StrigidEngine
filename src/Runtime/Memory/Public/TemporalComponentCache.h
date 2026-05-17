@@ -460,6 +460,7 @@ public:
 									targetSlot, base->GetFrameHeader(targetSlot)->OwnershipFlags.load(std::memory_order_relaxed));
 					return;
 				}
+				_mm_pause();
 			}
 		}
 

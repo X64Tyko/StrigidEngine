@@ -23,7 +23,6 @@
 #include "MeshManager.h"
 #include "SkeletonImporter.h"
 #include "SkeletonAsset.h"
-#include "SkinWeightsAsset.h"
 #include "AnimationAsset.h"
 #include "SkeletonManager.h"
 #include "AnimationManager.h"
@@ -83,8 +82,21 @@ void EditorContext::Initialize(TrinyxEngine* engine, LogicThreadBase* logic, Mes
 		AssetDB.Initialize(contentDir.c_str());
 		State.AssetDB = &AssetDB;
 
-		// Load all existing .tnxmesh files into MeshManager
-		LoadAllMeshAssets();
+		// Register demand loaders — assets load on first Checkout(), not at boot.
+		AssetRegistry::Get().RegisterLoader(
+			AssetType::StaticMesh,
+			[](void* ctx, AssetID id) { static_cast<MeshManager*>(ctx)->LoadMesh(id); },
+			MeshMgr);
+		AssetRegistry::Get().RegisterLoader(
+			AssetType::SkeletalMesh,
+			[](void*, AssetID id) { SkeletonManager::Get().LoadSkeleton(id); },
+			nullptr);
+		AssetRegistry::Get().RegisterLoader(
+			AssetType::Animation,
+			[](void*, AssetID id) { AnimationManager::Get().LoadAnimation(id); },
+			nullptr);
+
+		CheckForAssetIssues();
 	}
 
 	// Load default scene if configured
@@ -523,6 +535,7 @@ void EditorContext::BuildFrame()
 	DrawImportDialog();
 	DrawUnsavedWarning();
 	DrawPrefabSaveDialog();
+	DrawAssetIssuesDialog();
 
 	// PIE viewport panels
 	if (bPIEActive)
@@ -1053,6 +1066,135 @@ void EditorContext::DrawPrefabSaveDialog()
 	}
 }
 
+void EditorContext::CheckForAssetIssues()
+{
+	AssetRegistry::Get().ValidateAll();
+
+	AssetIssues.clear();
+	const std::string contentBase = State.ConfigPtr
+		? std::string(State.ConfigPtr->ProjectDir) + "/content/" : std::string{};
+
+	for (const auto& [id, entry] : AssetRegistry::Get().GetAllEntries())
+	{
+		const bool missing = (static_cast<uint8_t>(entry.State)
+		                      & static_cast<uint8_t>(RuntimeFlags::Missing)) != 0;
+		if (!missing) continue;
+
+		AssetIssue issue;
+		issue.ID             = id;
+		issue.Name           = entry.Name.GetStr();
+		issue.RegisteredPath = entry.Path;
+
+		// Infer source path from the registered asset extension.
+		if (!contentBase.empty() && !entry.Path.empty())
+		{
+			std::filesystem::path p(entry.Path);
+			std::string stem = (std::filesystem::path(contentBase) / p.parent_path() / p.stem()).string();
+			for (const char* ext : { ".gltf", ".glb" })
+			{
+				if (std::filesystem::exists(stem + ext))
+				{
+					issue.SuggestedSourcePath = stem + ext;
+					break;
+				}
+			}
+		}
+
+		snprintf(issue.ReimportBuf, sizeof(issue.ReimportBuf),
+		         "%s", issue.SuggestedSourcePath.c_str());
+
+		AssetIssues.push_back(std::move(issue));
+	}
+
+	if (!AssetIssues.empty())
+		bShowAssetIssuesDialog = true;
+}
+
+void EditorContext::DrawAssetIssuesDialog()
+{
+	if (!bShowAssetIssuesDialog) return;
+
+	ImGui::OpenPopup("Asset Issues");
+
+	ImVec2 center = ImGui::GetMainViewport()->GetCenter();
+	ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+	ImGui::SetNextWindowSize(ImVec2(700, 0), ImGuiCond_Appearing);
+
+	if (ImGui::BeginPopupModal("Asset Issues", &bShowAssetIssuesDialog, ImGuiWindowFlags_AlwaysAutoResize))
+	{
+		ImGui::TextUnformatted("The following registered assets are missing from disk:");
+		ImGui::Spacing();
+
+		for (int i = static_cast<int>(AssetIssues.size()) - 1; i >= 0; --i)
+		{
+			AssetIssue& issue = AssetIssues[i];
+			ImGui::PushID(i);
+
+			ImGui::TextUnformatted(issue.Name.c_str());
+			ImGui::SameLine(160);
+			ImGui::TextDisabled("%s", issue.RegisteredPath.c_str());
+
+			ImGui::SameLine(ImGui::GetContentRegionAvail().x - 150);
+
+			const bool canReimport = (AssetRegistry::Get().Find(issue.ID) != nullptr)
+			                        && (issue.ID.GetType() == AssetType::StaticMesh
+			                            || issue.ID.GetType() == AssetType::SkeletalMesh);
+
+			if (canReimport)
+			{
+				if (ImGui::Button("Reimport"))
+					issue.ShowReimportInput = !issue.ShowReimportInput;
+				ImGui::SameLine();
+			}
+
+			if (ImGui::Button("Remove"))
+			{
+				AssetDB.Remove(issue.ID);
+				AssetDB.Save();
+				AssetIssues.erase(AssetIssues.begin() + i);
+				ImGui::PopID();
+				continue;
+			}
+
+			if (issue.ShowReimportInput)
+			{
+				ImGui::SetNextItemWidth(-90);
+				ImGui::InputText("##repath", issue.ReimportBuf, sizeof(issue.ReimportBuf));
+				ImGui::SameLine();
+				if (ImGui::Button("Import"))
+				{
+					if (ImportMeshAsset(issue.ReimportBuf) != UINT32_MAX)
+					{
+						AssetIssues.erase(AssetIssues.begin() + i);
+						ImGui::PopID();
+						continue;
+					}
+				}
+			}
+
+			ImGui::Separator();
+			ImGui::PopID();
+		}
+
+		if (AssetIssues.empty())
+		{
+			bShowAssetIssuesDialog = false;
+			ImGui::CloseCurrentPopup();
+		}
+		else
+		{
+			ImGui::Spacing();
+			if (ImGui::Button("Dismiss", ImVec2(100, 0)))
+			{
+				bShowAssetIssuesDialog = false;
+				ImGui::CloseCurrentPopup();
+			}
+		}
+
+		ImGui::EndPopup();
+	}
+}
+
 void EditorContext::DrawImportDialog()
 {
 	if (!bShowImportDialog) return;
@@ -1111,17 +1253,11 @@ uint32_t EditorContext::ImportMeshAsset(const std::string& gltfPath)
 	{
 		// Write all skeletal assets to content/
 		std::string meshPath = contentDir + stem + ".tnxmesh";
-		std::string skinPath = contentDir + stem + ".tnxskin";
 		std::string skelPath = contentDir + stem + ".tnxskel";
 
 		if (!SaveMeshAsset(skelResult.mesh, meshPath))
 		{
 			LOG_ENG_ERROR_F("[Editor] SaveMeshAsset failed: %s", meshPath.c_str());
-			return UINT32_MAX;
-		}
-		if (!SaveSkinWeightsAsset(skelResult.skin, skinPath))
-		{
-			LOG_ENG_ERROR_F("[Editor] SaveSkinWeightsAsset failed: %s", skinPath.c_str());
 			return UINT32_MAX;
 		}
 		if (!SaveSkeletonAsset(skelResult.skeleton, skelPath))
@@ -1151,7 +1287,6 @@ uint32_t EditorContext::ImportMeshAsset(const std::string& gltfPath)
 			LOG_ENG_ERROR_F("[Editor] MeshManager::LoadMesh failed for '%s'", stem.c_str());
 			return UINT32_MAX;
 		}
-		MeshMgr->LoadSkinWeights(meshSlot, skelResult.skin);
 
 		// Load skeleton
 		const auto* skelEntry = AssetDB.FindByPath(stem + ".tnxskel");
@@ -1210,33 +1345,6 @@ uint32_t EditorContext::ImportMeshAsset(const std::string& gltfPath)
 	return slot;
 }
 
-void EditorContext::LoadAllMeshAssets()
-{
-	if (!MeshMgr || !State.ConfigPtr) return;
-
-	const auto& entries     = AssetDB.GetEntries();
-	std::string contentBase = std::string(State.ConfigPtr->ProjectDir) + "/content/";
-
-	for (const auto& entry : entries)
-	{
-		if (entry.Type != AssetType::StaticMesh) continue;
-
-		// Only load .tnxmesh files (skip raw .gltf/.glb/.obj/.fbx source files)
-		if (entry.Path.size() < 8 || entry.Path.substr(entry.Path.size() - 8) != ".tnxmesh") continue;
-
-		std::string fullPath = contentBase + entry.Path;
-		MeshAsset asset;
-		if (!LoadMeshAsset(asset, fullPath))
-		{
-			LOG_ENG_WARN_F("[Editor] Failed to load mesh asset: %s", entry.Path.c_str());
-			continue;
-		}
-
-		uint32_t slot = MeshMgr->LoadMesh(asset, entry.Name, entry.ID);
-		if (slot != UINT32_MAX)
-			LOG_ENG_INFO_F("[Editor] Loaded mesh '%s' → slot %u", entry.Path.c_str(), slot);
-	}
-}
 
 void EditorContext::HandleDroppedFile(const std::string& path)
 {
@@ -1635,12 +1743,22 @@ void EditorContext::StartPIELocal()
 	WorldBase* pieWorld = LocalPIEFlow->GetWorld();
 	pieWorld->SetJobsInitialized(true);
 
-	// Allocate at a reasonable default — DrawEditorViewportPanel resizes to panel on first draw.
+	// Allocate at the current panel size — ViewportPanelSize is set by DrawEditorViewportPanel
+	// on the frame before the Play button is clicked, so it's the correct stable size.
+	// Allocating here at the right size avoids an immediate vkDeviceWaitIdle + realloc on the
+	// first frame when ResizeViewport would otherwise fire due to the 1280x720 mismatch.
 	EditorRenderer* renderer = EnginePtr->GetRenderer();
+	const uint32_t vpW = ViewportPanelSize.x > 1.0f ? static_cast<uint32_t>(ViewportPanelSize.x) : 1280u;
+	const uint32_t vpH = ViewportPanelSize.y > 1.0f ? static_cast<uint32_t>(ViewportPanelSize.y) : 720u;
 	LocalPIEViewport              = std::make_unique<WorldViewport>();
 	LocalPIEViewport->TargetWorld = pieWorld;
-	renderer->AllocateViewportResources(LocalPIEViewport.get(), 1280, 720);
+	renderer->AllocateViewportResources(LocalPIEViewport.get(), vpW, vpH);
 	renderer->AddViewport(LocalPIEViewport.get());
+
+	// Stop rendering the editor world while PIE is running — it's not visible and running
+	// two full GPU compute pipelines (predicate→scatter for editor + PIE) every frame
+	// with a full pipeline barrier between them cuts throughput roughly in half.
+	renderer->SetEditorViewportActive(false);
 
 	LocalPIEFlow->StartWorld();
 
@@ -1934,9 +2052,15 @@ void EditorContext::StopPIE()
 
 	if (bPIELocalMode)
 	{
-		// Resume if paused so the logic thread can exit its fixed loop cleanly.
+		// Resume if paused so the logic thread can observe the stop signal.
 		if (bPIEPaused && LocalPIEFlow && LocalPIEFlow->GetWorld() && LocalPIEFlow->GetWorld()->GetLogicThread())
 			LocalPIEFlow->GetWorld()->GetLogicThread()->SetSimPaused(false);
+
+		// Stop and join the logic thread BEFORE freeing any resources it touches.
+		// ~FlowManagerBase() calls ConstructReg.DestroyAll() before World::Shutdown(),
+		// so without an explicit join here the logic thread can be mid-tick (EnsureHydrated,
+		// HydrateAllViews) when ConstructViews and the Registry are being destroyed.
+		if (LocalPIEFlow) { LocalPIEFlow->StopWorld(); LocalPIEFlow->JoinWorld(); }
 
 		renderer->WaitForGPU();
 		if (LocalPIEViewport)
@@ -1946,8 +2070,9 @@ void EditorContext::StopPIE()
 		}
 
 		LocalPIEViewport.reset();
-		LocalPIEFlow.reset();
+		LocalPIEFlow.reset(); // logic thread already dead — safe to destroy Constructs + World
 
+		renderer->SetEditorViewportActive(true);
 		if (LogicPtr) LogicPtr->SetSimPaused(bPrePIESimWasPaused);
 
 		bPIELocalMode = false;
@@ -2033,7 +2158,17 @@ void EditorContext::StopPIE()
 		bPIEPaused = false;
 	}
 
-	// 6. Shutdown and destroy worlds (FlowManager destructors handle World shutdown)
+	// 6. Stop and join all PIE logic threads before destroying anything they touch.
+	// ~FlowManagerBase() runs ConstructReg.DestroyAll() before World::Shutdown(), so the logic
+	// thread must be fully exited before the reset calls below or EnsureHydrated/HydrateAllViews
+	// can race against ConstructView and Registry teardown.
+	for (auto& c : PIEClients)
+	{
+		if (c.Flow) { c.Flow->StopWorld(); c.Flow->JoinWorld(); }
+	}
+	if (ServerFlow) { ServerFlow->StopWorld(); ServerFlow->JoinWorld(); }
+
+	// Destroy worlds — logic threads already dead, safe to tear down Constructs + Registry.
 	PIEClients.clear();
 	Replicator.reset();
 	ServerViewport.reset();

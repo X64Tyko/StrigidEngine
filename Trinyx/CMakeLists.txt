@@ -91,27 +91,41 @@ if (TNX_ENABLE_EDITOR AND NOT MSVC)
 endif ()
 
 # -----------------------------------------------------------------------------
-# FORCE RELWITHDEBINFO FOR ENGINE
+# RUNTIME LIBRARY (must match whatever CMAKE_BUILD_TYPE the caller uses)
 # -----------------------------------------------------------------------------
-# Always build the engine with optimizations + debug info
 set_target_properties(${PROJECT_NAME} PROPERTIES
     MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL"
 )
 
-if(MSVC)
-    # Remove default Debug flags that conflict with optimization
-    #string(REPLACE "/RTC1" "" CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG}")
-    #string(REPLACE "/Od" "" CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG}")
-    #set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG}")
+# -----------------------------------------------------------------------------
+# TNX_ENGINE_OPTIMIZED — engine = RelWithDebInfo, game targets = Debug
+# -----------------------------------------------------------------------------
+# The string(REPLACE) calls below operate on the CMAKE_CXX_FLAGS_DEBUG variable
+# in this directory scope only. Because Testbed/Playground are add_subdirectory
+# siblings (not children) of Trinyx, they inherit their value from the root scope
+# and are unaffected — their full Debug flags (/Od /RTC1) are preserved.
+#
+# Jolt and other third-party deps live in the root scope and are also unaffected.
+# If Jolt perf matters during testing, use a RelWithDebInfo build instead.
+if(TNX_ENGINE_OPTIMIZED)
+    if(MSVC)
+        # /RTC1 is illegal with /O2 (MSVC C2025). Strip it from the directory-local
+        # copy of CMAKE_CXX_FLAGS_DEBUG before any targets in this scope are compiled.
+        # /Od disables optimization; /Ob0 disables inlining. Both must go.
+        string(REPLACE "/RTC1" "" CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG}")
+        string(REPLACE "/Od"   "" CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG}")
+        string(REPLACE "/Ob0"  "" CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG}")
 
-    # Apply optimized flags to Debug builds
-    #target_compile_options(${PROJECT_NAME} PRIVATE
-    #    $<$<CONFIG:Debug>:/O2 /Ob2 /Zi>
-    #)
-
-    #target_link_options(${PROJECT_NAME} PRIVATE
-    #    $<$<CONFIG:Debug>:/DEBUG:FULL /OPT:REF /OPT:ICF>
-    #)
+        target_compile_options(${PROJECT_NAME} PRIVATE
+            $<$<CONFIG:Debug>:/O2 /Ob2>
+        )
+    else()
+        # GCC/Clang: Debug flags are -g only (no -O0 from CMake defaults),
+        # so just adding -O2 is sufficient. -g is kept for debug symbols.
+        target_compile_options(${PROJECT_NAME} PRIVATE
+            $<$<CONFIG:Debug>:-O2>
+        )
+    endif()
 endif()
 
 # -----------------------------------------------------------------------------

@@ -11,8 +11,12 @@
 #include "imgui_impl_sdl3.h"
 #include "imgui_impl_vulkan.h"
 
+#include "AnimationManager.h"
 #include "CacheSlotMeta.h"
+#include "CAnimBase.h"
+#include "CAnimLayer.h"
 #include "CColor.h"
+#include "CSkeletonRef.h"
 #include "CVisualTransform.h"
 #include "EditorContext.h"
 #include "GpuFrameData.h"
@@ -22,9 +26,11 @@
 #include "CMeshRef.h"
 #include "Registry.h"
 #include "CScale.h"
+#include "SkeletonManager.h"
 #include "TemporalComponentCache.h"
 #include "TrinyxEngine.h"
 #include "CTransform.h"
+#include "VulkanDebug.h"
 #include "World.h"
 #include "WorldViewport.h"
 
@@ -355,9 +361,9 @@ void EditorRenderer::AllocateViewportResources(WorldViewport* vp, uint32_t width
 		VK_IMAGE_ASPECT_COLOR_BIT);
 #endif
 
-	// Per-world field slabs (same layout as main renderer's)
+	// Per-world field slabs — same layout as main renderer, all 35 fields (render + anim).
 	const VkDeviceSize slabSize = static_cast<VkDeviceSize>(ConfigPtr->MAX_CACHED_ENTITIES)
-		* sizeof(float) * GpuOutFieldCount;
+		* sizeof(float) * GpuTotalFieldCount;
 	for (auto& slab : vp->FieldSlabs)
 	{
 		slab = VkMem->AllocateBuffer(
@@ -398,6 +404,10 @@ void EditorRenderer::AllocateViewportResources(WorldViewport* vp, uint32_t width
 
 void EditorRenderer::FreeViewportResources(WorldViewport* vp)
 {
+	// Drain any CPU upload jobs writing into this viewport's slab buffers before freeing them.
+	// vkDeviceWaitIdle drains GPU work but does NOT drain CPU job threads.
+	FlushViewportSlabUpload(vp);
+
 	// Remove ImGui texture registration
 	if (vp->ImGuiTexture != VK_NULL_HANDLE)
 	{
@@ -471,6 +481,9 @@ void EditorRenderer::RecordFrame(FrameSync& frame, uint32_t imageIndex)
 
 void EditorRenderer::WriteToViewportSlab(WorldViewport* vp)
 {
+	// Safety flush: drain any previous upload before overwriting VpUploadFields / reusing counter.
+	FlushViewportSlabUpload(vp);
+
 	uint32_t nextSlab = vp->CurrentFieldSlab;
 	do
 	{
@@ -499,87 +512,251 @@ void EditorRenderer::WriteToViewportSlab(WorldViewport* vp)
 	const VkDeviceSize fieldStride = static_cast<VkDeviceSize>(ConfigPtr->MAX_CACHED_ENTITIES) * sizeof(float);
 	uint8_t* slabPtr               = static_cast<uint8_t*>(vp->FieldSlabs[nextSlab].MappedPtr);
 
-	const ComponentTypeID transformSlot       = CTransform<>::StaticTemporalIndex();
-	const ComponentTypeID scaleSlot           = CScale<>::StaticTemporalIndex();
-	const ComponentTypeID colorSlot           = CColor<>::StaticTemporalIndex();
-	const ComponentTypeID flagsSlot           = CacheSlotMeta<>::StaticTemporalIndex();
-	const ComponentTypeID meshRefSlot         = CMeshRef<>::StaticTemporalIndex();
-	const ComponentTypeID visualTransformSlot = CVisualTransform<>::StaticTemporalIndex();
-
-	enum class FieldKind : uint8_t { SimFloat, RawU32 };
-	struct FD
+	auto resolveVPField = [&](const GpuSlabFieldDesc& desc)
+		-> std::pair<ComponentCacheBase*, TemporalFrameHeader*>
 	{
-		ComponentCacheBase* cache;
-		TemporalFrameHeader* hdr;
-		ComponentTypeID slot;
-		size_t fi;
-		FieldKind kind;
-	};
-	const FD fieldDescs[GpuOutFieldCount] = {
-		{temporalC, temporalHdr, flagsSlot,           0, FieldKind::RawU32},
-		{volatileC, volatileHdr, visualTransformSlot, 0, FieldKind::SimFloat},
-		{volatileC, volatileHdr, visualTransformSlot, 1, FieldKind::SimFloat},
-		{volatileC, volatileHdr, visualTransformSlot, 2, FieldKind::SimFloat},
-		{temporalC, temporalHdr, transformSlot,       3, FieldKind::SimFloat},
-		{temporalC, temporalHdr, transformSlot,       4, FieldKind::SimFloat},
-		{temporalC, temporalHdr, transformSlot,       5, FieldKind::SimFloat},
-		{temporalC, temporalHdr, transformSlot,       6, FieldKind::SimFloat},
-		{volatileC, volatileHdr, scaleSlot,           0, FieldKind::SimFloat},
-		{volatileC, volatileHdr, scaleSlot,           1, FieldKind::SimFloat},
-		{volatileC, volatileHdr, scaleSlot,           2, FieldKind::SimFloat},
-		{volatileC, volatileHdr, colorSlot,           0, FieldKind::SimFloat},
-		{volatileC, volatileHdr, colorSlot,           1, FieldKind::SimFloat},
-		{volatileC, volatileHdr, colorSlot,           2, FieldKind::SimFloat},
-		{volatileC, volatileHdr, colorSlot,           3, FieldKind::SimFloat},
-		{volatileC, volatileHdr, meshRefSlot,         0, FieldKind::RawU32},
+		if (desc.tier == GpuSlabTier::Temporal) return {temporalC, temporalHdr};
+		return {volatileC, volatileHdr};
 	};
 
-	// One job per field — all 16 run in parallel on the Render queue.
-	// SimFloat fields go through .ToFloat() in Fixed32 builds so the GPU sees IEEE 754 meters,
-	// not raw Fixed32 integers. RawU32 fields (flags, mesh ID) are copied verbatim.
-	TrinyxJobs::JobCounter transferCounter;
-	for (uint32_t f = 0; f < GpuOutFieldCount; ++f)
+	auto flushImmediate = [&]()
 	{
-		const FD& fd    = fieldDescs[f];
-		const void* src = fd.cache->GetFieldData(fd.hdr, fd.slot, fd.fi);
-		uint8_t* dst    = slabPtr + static_cast<size_t>(f) * static_cast<size_t>(fieldStride);
-		const FieldKind kind = fd.kind;
+		vp->bHasSlabData       = true;
+		vp->bSlabUploadPending = false;
+		std::memset(vp->DirtyPlanes[nextSlab], 0, vp->DirtyWordCount * sizeof(uint64_t));
+		reg->RenderAck.store(temporalHdr->FrameNumber, std::memory_order_release);
+		reg->RenderHasAcked = true;
+		volatileC->UnlockFrameRead(vp->LastVolatileFrame);
+#ifdef TNX_ENABLE_ROLLBACK
+		temporalC->UnlockFrameRead(vp->LastTemporalFrame);
+#endif
+	};
 
-		TrinyxJobs::Dispatch([src, dst, fieldStride, kind](uint32_t)
+	// ── Step 1: Scan flags → build dirty snapshot, count dirty entities ──
+	uint32_t dirtyEntityCount = 0;
+	const auto* flagsSrc = static_cast<const int32_t*>(
+		temporalC->GetFieldData(temporalHdr, static_cast<uint8_t>(SlabFieldDescs[0].slot), 0));
+
+	if (flagsSrc)
+	{
+		constexpr int32_t dirtyBit = static_cast<int32_t>(TemporalFlagBits::Dirty);
+		const uint32_t entityCount = (ConfigPtr->MAX_RENDERABLE_ENTITIES + 7) & ~7u;
+
+		std::memset(vp->DirtySnapshot, 0, vp->DirtyWordCount * sizeof(uint64_t));
+		for (uint32_t i = 0; i < entityCount; i += 8)
 		{
-			if (kind == FieldKind::RawU32)
+			__m256i flags = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(&flagsSrc[i]));
+			__m256i test  = _mm256_and_si256(flags, _mm256_set1_epi32(dirtyBit));
+			int mask      = _mm256_movemask_ps(_mm256_castsi256_ps(
+				_mm256_cmpeq_epi32(test, _mm256_set1_epi32(dirtyBit))));
+			if (mask)
 			{
-				if (src) std::memcpy(dst, src, static_cast<size_t>(fieldStride));
-				else std::memset(dst, 0, static_cast<size_t>(fieldStride));
+				vp->DirtySnapshot[i / 64] |= static_cast<uint64_t>(mask) << (i % 64);
+				dirtyEntityCount += TNX_POPCOUNT32(mask);
 			}
-			else if constexpr (std::is_same_v<SimFloat, SimFloatImpl<float>>)
+		}
+
+		for (uint32_t s = 0; s < kViewportSlabCount; ++s)
+			for (uint32_t w = 0; w < vp->DirtyWordCount; ++w)
+				vp->DirtyPlanes[s][w] |= vp->DirtySnapshot[w];
+	}
+
+	// ── Step 2: Upload ──
+	const bool fullCopy = vp->FirstSlabWrite[nextSlab];
+	uint64_t* plane     = vp->DirtyPlanes[nextSlab];
+
+	if (fullCopy) [[unlikely]]
+	{
+		TrinyxJobs::JobCounter counter;
+		for (uint32_t f = 0; f < GpuTotalFieldCount; ++f)
+		{
+			const GpuSlabFieldDesc& desc = SlabFieldDescs[f];
+			if (desc.kind == GpuSlabKind::EntityIndex) continue;
+			auto [cache, hdr] = resolveVPField(desc);
+			const void* src   = cache->GetFieldData(hdr, static_cast<uint8_t>(desc.slot), desc.fi);
+			uint8_t* dst      = slabPtr + static_cast<size_t>(f) * static_cast<size_t>(fieldStride);
+			const bool isSF   = (desc.kind == GpuSlabKind::SimFloat);
+			TrinyxJobs::DispatchNamed("VP_Slab_FullCopy", [src, dst, fieldStride, isSF](uint32_t)
 			{
-				if (src) std::memcpy(dst, src, static_cast<size_t>(fieldStride));
-				else std::memset(dst, 0, static_cast<size_t>(fieldStride));
+				if (!isSF)
+				{
+					if (src) std::memcpy(dst, src, static_cast<size_t>(fieldStride));
+					else std::memset(dst, 0, static_cast<size_t>(fieldStride));
+				}
+				else if constexpr (std::is_same_v<SimFloat, SimFloatImpl<float>>)
+				{
+					if (src) std::memcpy(dst, src, static_cast<size_t>(fieldStride));
+					else std::memset(dst, 0, static_cast<size_t>(fieldStride));
+				}
+				else
+				{
+					if (src)
+					{
+						const Fixed32* fsrc = static_cast<const Fixed32*>(src);
+						float* fdst         = reinterpret_cast<float*>(dst);
+						const size_t count  = static_cast<size_t>(fieldStride) / sizeof(float);
+						for (size_t i = 0; i < count; ++i) fdst[i] = fsrc[i].ToFloat();
+					}
+					else std::memset(dst, 0, static_cast<size_t>(fieldStride));
+				}
+			}, &counter, TrinyxJobs::Queue::Render);
+		}
+		vp->FirstSlabWrite[nextSlab] = false;
+		TrinyxJobs::WaitForCounter(&counter, TrinyxJobs::Queue::Render);
+		flushImmediate();
+		return;
+	}
+
+	const auto inlineThreshold    = static_cast<uint32_t>(ConfigPtr->GetSlabUploadInlineThreshold());
+	const auto singleJobThreshold = static_cast<uint32_t>(ConfigPtr->GetSlabUploadSingleJobThreshold());
+
+	if (dirtyEntityCount < inlineThreshold)
+	{
+		for (uint32_t f = 0; f < GpuTotalFieldCount; ++f)
+		{
+			const GpuSlabFieldDesc& desc = SlabFieldDescs[f];
+			if (desc.kind == GpuSlabKind::EntityIndex) continue;
+			auto [cache, hdr]            = resolveVPField(desc);
+			const auto* src              = static_cast<const uint8_t*>(
+				cache->GetFieldData(hdr, static_cast<uint8_t>(desc.slot), desc.fi));
+			uint8_t* dst = slabPtr + static_cast<size_t>(f) * static_cast<size_t>(fieldStride);
+			if (!src) continue;
+
+			if (desc.kind == GpuSlabKind::SimFloat)
+			{
+				const SimFloat* ssrc = static_cast<const SimFloat*>(static_cast<const void*>(src));
+				float* fdst          = reinterpret_cast<float*>(dst);
+				for (uint32_t w = 0; w < vp->DirtyWordCount; ++w)
+				{
+					uint64_t bits = plane[w];
+					while (bits)
+					{
+						const uint32_t idx = w * 64 + TNX_CTZ64(bits);
+						fdst[idx]          = ssrc[idx].ToFloat();
+						bits              &= bits - 1;
+					}
+				}
 			}
 			else
 			{
-				if (src)
+				const uint32_t* usrc = reinterpret_cast<const uint32_t*>(src);
+				uint32_t* udst       = reinterpret_cast<uint32_t*>(dst);
+				for (uint32_t w = 0; w < vp->DirtyWordCount; ++w)
 				{
-					const Fixed32* fsrc = static_cast<const Fixed32*>(src);
-					float* fdst         = reinterpret_cast<float*>(dst);
-					const size_t count  = static_cast<size_t>(fieldStride) / sizeof(float);
-					for (size_t i = 0; i < count; ++i) fdst[i] = fsrc[i].ToFloat();
+					uint64_t bits = plane[w];
+					while (bits)
+					{
+						const uint32_t idx = w * 64 + TNX_CTZ64(bits);
+						udst[idx]          = usrc[idx];
+						bits              &= bits - 1;
+					}
 				}
-				else std::memset(dst, 0, static_cast<size_t>(fieldStride));
 			}
-		}, &transferCounter, TrinyxJobs::Queue::Render);
+		}
+		flushImmediate();
+		return;
 	}
-	TrinyxJobs::WaitForCounter(&transferCounter, TrinyxJobs::Queue::Render);
 
-	vp->bHasSlabData = true;
+	for (uint32_t f = 0; f < GpuTotalFieldCount; ++f)
+	{
+		const GpuSlabFieldDesc& desc = SlabFieldDescs[f];
+		if (desc.kind == GpuSlabKind::EntityIndex) { vp->VpUploadFields[f].src = nullptr; continue; }
+		auto [cache, hdr]              = resolveVPField(desc);
+		vp->VpUploadFields[f].src       = static_cast<const uint8_t*>(
+			cache->GetFieldData(hdr, static_cast<uint8_t>(desc.slot), desc.fi));
+		vp->VpUploadFields[f].dst       = slabPtr + static_cast<size_t>(f) * static_cast<size_t>(fieldStride);
+		vp->VpUploadFields[f].kind      = desc.kind;
+	}
 
-	reg->RenderAck.store(temporalHdr->FrameNumber, std::memory_order_release);
+	const uint64_t* capturedPlane = plane;
+	const uint32_t  capturedWords = vp->DirtyWordCount;
+
+	if (dirtyEntityCount < singleJobThreshold)
+	{
+		TrinyxJobs::DispatchNamed("VP_Slab_SingleJob", [vp, capturedPlane, capturedWords](uint32_t)
+		{
+			for (uint32_t f = 0; f < GpuTotalFieldCount; ++f)
+			{
+				const auto& info = vp->VpUploadFields[f];
+				if (!info.src) continue;
+				if (info.kind == GpuSlabKind::SimFloat)
+				{
+					const SimFloat* ssrc = static_cast<const SimFloat*>(static_cast<const void*>(info.src));
+					float* fdst          = reinterpret_cast<float*>(info.dst);
+					for (uint32_t w = 0; w < capturedWords; ++w)
+					{
+						uint64_t bits = capturedPlane[w];
+						while (bits) { const uint32_t idx = w * 64 + TNX_CTZ64(bits); fdst[idx] = ssrc[idx].ToFloat(); bits &= bits - 1; }
+					}
+				}
+				else
+				{
+					const uint32_t* usrc = reinterpret_cast<const uint32_t*>(info.src);
+					uint32_t* udst       = reinterpret_cast<uint32_t*>(info.dst);
+					for (uint32_t w = 0; w < capturedWords; ++w)
+					{
+						uint64_t bits = capturedPlane[w];
+						while (bits) { const uint32_t idx = w * 64 + TNX_CTZ64(bits); udst[idx] = usrc[idx]; bits &= bits - 1; }
+					}
+				}
+			}
+		}, &vp->SlabUploadCounter, TrinyxJobs::Queue::Render);
+	}
+	else
+	{
+		for (uint32_t f = 0; f < GpuTotalFieldCount; ++f)
+		{
+			const SlabFieldUploadInfo info = vp->VpUploadFields[f];
+			if (!info.src) continue;
+			TrinyxJobs::DispatchNamed("VP_Slab_FieldUpload", [info, capturedPlane, capturedWords](uint32_t)
+			{
+				if (info.kind == GpuSlabKind::SimFloat)
+				{
+					const SimFloat* ssrc = static_cast<const SimFloat*>(static_cast<const void*>(info.src));
+					float* fdst          = reinterpret_cast<float*>(info.dst);
+					for (uint32_t w = 0; w < capturedWords; ++w)
+					{
+						uint64_t bits = capturedPlane[w];
+						while (bits) { const uint32_t idx = w * 64 + TNX_CTZ64(bits); fdst[idx] = ssrc[idx].ToFloat(); bits &= bits - 1; }
+					}
+				}
+				else
+				{
+					const uint32_t* usrc = reinterpret_cast<const uint32_t*>(info.src);
+					uint32_t* udst       = reinterpret_cast<uint32_t*>(info.dst);
+					for (uint32_t w = 0; w < capturedWords; ++w)
+					{
+						uint64_t bits = capturedPlane[w];
+						while (bits) { const uint32_t idx = w * 64 + TNX_CTZ64(bits); udst[idx] = usrc[idx]; bits &= bits - 1; }
+					}
+				}
+			}, &vp->SlabUploadCounter, TrinyxJobs::Queue::Render);
+		}
+	}
+
+	vp->bSlabUploadPending       = true;
+	vp->PendingRenderAckFrame    = temporalHdr->FrameNumber;
+	vp->PendingVolatileFrameLock = vp->LastVolatileFrame;
+	vp->PendingTemporalFrameLock = vp->LastTemporalFrame;
+}
+
+void EditorRenderer::FlushViewportSlabUpload(WorldViewport* vp)
+{
+	if (!vp->bSlabUploadPending) return;
+
+	TNX_ZONE_MEDIUM_NC("Slab_ViewportUploadFlush", TNX_COLOR_RENDERING)
+	TrinyxJobs::WaitForCounter(&vp->SlabUploadCounter, TrinyxJobs::Queue::Render);
+
+	vp->bHasSlabData       = true;
+	vp->bSlabUploadPending = false;
+
+	Registry* reg = vp->TargetWorld->GetRegistry();
+	reg->RenderAck.store(vp->PendingRenderAckFrame, std::memory_order_release);
 	reg->RenderHasAcked = true;
 
-	volatileC->UnlockFrameRead(vp->LastVolatileFrame);
+	reg->GetVolatileCache()->UnlockFrameRead(vp->PendingVolatileFrameLock);
 #ifdef TNX_ENABLE_ROLLBACK
-	temporalC->UnlockFrameRead(vp->LastTemporalFrame);
+	reg->GetTemporalCache()->UnlockFrameRead(vp->PendingTemporalFrameLock);
 #endif
 }
 
@@ -639,27 +816,29 @@ void EditorRenderer::FillGpuFrameDataForViewport(WorldViewport* vp, FrameSync& f
 	data->Alpha          = logic ? static_cast<float>(std::clamp(logic->GetFixedAlpha(), 0.0, 1.0)) : 1.0f;
 	data->EntityCount    = static_cast<uint32_t>(ConfigPtr->MAX_CACHED_ENTITIES);
 	data->OutFieldStride = static_cast<uint32_t>(ConfigPtr->MAX_CACHED_ENTITIES);
-	data->FieldCount     = GpuOutFieldCount;
+	data->FieldCount     = GpuTotalFieldCount;
 
-	// Field addresses from viewport's slabs
-	const uint32_t Fields[GpuOutFieldCount] = {
-		SemFlags,
-		SemPosX, SemPosY, SemPosZ,
-		SemRotQx, SemRotQy, SemRotQz, SemRotQw,
-		SemScaleX, SemScaleY, SemScaleZ,
-		SemColorR, SemColorG, SemColorB, SemColorA,
-		SemMeshID,
-	};
+	data->SkinMatrixAddr           = Skinning.GetSkinMatrixAddr();
+	data->SkeletalListAddr         = Skinning.GetSkeletalListAddr();
+	data->SkeletalIdxByEntityAddr  = Skinning.GetSkeletalIdxByEntityAddr();
+	data->GpuBoneDataAddr          = SkeletonManager::Get().GetBoneDataAddr();
+	data->GpuBoneParentAddr        = SkeletonManager::Get().GetBoneParentAddr();
+	data->AnimTrackAddr            = AnimationManager::Get().GetTrackBufferAddr();
+	data->AnimKeyframeAddr         = AnimationManager::Get().GetKeyframeBufferAddr();
+	data->SkinWeightAddr           = Meshes.GetSkinWeightAddr();
+	data->SkinSlotTableAddr        = Meshes.GetSkinSlotTableAddr();
+	data->SkeletalDispatchArgsAddr = Skinning.GetSkeletalDispatchArgsAddr();
 
+	// Field addresses from viewport's slabs — semantics from shared SlabFieldDescs.
 	const VkDeviceSize fieldStride = static_cast<VkDeviceSize>(ConfigPtr->MAX_CACHED_ENTITIES) * sizeof(float);
 	const uint64_t currBase        = vp->FieldSlabs[vp->CurrentFieldSlab].DeviceAddr;
 	const uint64_t prevBase        = vp->FieldSlabs[vp->PrevFieldSlab].DeviceAddr;
 
-	for (uint32_t f = 0; f < GpuOutFieldCount; ++f)
+	for (uint32_t f = 0; f < GpuTotalFieldCount; ++f)
 	{
 		data->CurrFieldAddrs[f]   = currBase + static_cast<uint64_t>(f) * fieldStride;
 		data->PrevFieldAddrs[f]   = prevBase + static_cast<uint64_t>(f) * fieldStride;
-		data->FieldSemantics[f]   = Fields[f];
+		data->FieldSemantics[f]   = SlabFieldDescs[f].sem;
 		data->FieldElementSize[f] = sizeof(float);
 	}
 
@@ -783,10 +962,13 @@ void EditorRenderer::RecordViewportScenePass(VkCommandBuffer cmd, FrameSync& fra
 			vkCmdPipelineBarrier2(cmd, &d);
 		};
 
-		// Zero CompactCounter and MeshHistogram
+		// Zero CompactCounter, MeshHistogram, and SkeletalDispatchArgs.x before scatter.
+		// SkeletalIdxByEntity cleared to UINT32_MAX so non-skeletal entities keep the sentinel.
 		vkCmdFillBuffer(cmd, static_cast<VkBuffer>(frame.CompactCounterBuffer.Buffer), 0, sizeof(uint32_t), 0u);
 		vkCmdFillBuffer(cmd, static_cast<VkBuffer>(frame.MeshHistogramBuffer.Buffer), 0,
 						MaxMeshSlots * sizeof(uint32_t), 0u);
+		vkCmdFillBuffer(cmd, Skinning.GetSkeletalDispatchBuffer(), 0, sizeof(uint32_t), 0u);
+		vkCmdFillBuffer(cmd, Skinning.GetSkeletalIdxByEntityBuffer(), 0, VK_WHOLE_SIZE, 0xFFFFFFFFu);
 		{
 			VkMemoryBarrier2 mb{};
 			mb.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
@@ -833,18 +1015,45 @@ void EditorRenderer::RecordViewportScenePass(VkCommandBuffer cmd, FrameSync& fra
 #endif
 		vkCmdDispatch(cmd, dispatchX, 1, 1);
 
-		// Final barrier: sorted instances + draw args → vertex shader + indirect draw
-		VkMemoryBarrier2 sortDone{};
-		sortDone.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
-		sortDone.srcStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-		sortDone.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-		sortDone.dstStageMask  = VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT;
-		sortDone.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT;
-		VkDependencyInfo sortDep{};
-		sortDep.sType              = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-		sortDep.memoryBarrierCount = 1;
-		sortDep.pMemoryBarriers    = &sortDone;
-		vkCmdPipelineBarrier2(cmd, &sortDep);
+		// Barrier: sort done → skinning compute (reads sorted buffer + indirect dispatch args)
+		{
+			VkMemoryBarrier2 mb{};
+			mb.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
+			mb.srcStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+			mb.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+			mb.dstStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
+				VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT;
+			mb.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT |
+				VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT;
+			VkDependencyInfo d{};
+			d.sType              = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+			d.memoryBarrierCount = 1;
+			d.pMemoryBarriers    = &mb;
+			vkCmdPipelineBarrier2(cmd, &d);
+		}
+
+		// Pass 6: skinning — one thread per skeletal entity, indirect dispatch
+		{
+			TNX_VKDBG_SCOPE(cmd, "SkinningPass (indirect)", VulkanDebug::ColorCompute);
+			Skinning.Dispatch(cmd, gpuDataAddr);
+		}
+
+		// Final barrier: skin matrices + sorted instances + draw args → vertex shader + indirect draw
+		{
+			VkMemoryBarrier2 mb{};
+			mb.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
+			mb.srcStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+			mb.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+			mb.dstStageMask  = VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT |
+				VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT;
+			mb.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT |
+				VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT;
+			VkDependencyInfo d{};
+			d.sType              = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+			d.memoryBarrierCount = 1;
+			d.pMemoryBarriers    = &mb;
+			vkCmdPipelineBarrier2(cmd, &d);
+		}
 	}
 
 	// Scene render pass to offscreen targets
@@ -1052,6 +1261,7 @@ void EditorRenderer::RecordPIEFrame(FrameSync& frame, uint32_t imageIndex)
 			vkCmdPipelineBarrier2(cmd, &dep);
 		}
 
+		FlushViewportSlabUpload(vp);
 		FillGpuFrameDataForViewport(vp, frame);
 		RecordViewportScenePass(cmd, frame, vp);
 		needScratchBarrier = true;

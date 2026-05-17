@@ -45,8 +45,7 @@ void main(uint3 gid : SV_DispatchThreadID)
         sorted[s * stride + destIdx] = unsorted[s * stride + srcIdx];
     }
 
-#ifdef TNX_GPU_PICKING
+    // Always copy entity cache index — needed by skinning (skelIdx LUT) and GPU picking.
     sorted[(SemEntityCacheIdx - 1u) * stride + destIdx] =
         unsorted[(SemEntityCacheIdx - 1u) * stride + srcIdx];
-#endif
 }

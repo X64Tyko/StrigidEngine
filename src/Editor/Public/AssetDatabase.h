@@ -93,8 +93,11 @@ public:
 	// Lookup by relative path.
 	const AssetDatabaseEntry* FindByPath(const std::string& relativePath) const;
 
-	// Rename an asset's display name. Updates database and runtime registry.
+	/// Rename an asset's display name. Updates database and runtime registry.
 	bool Rename(AssetID id, const std::string& newName);
+
+	/// Remove an asset from the database, delete its sidecar, and unregister it from the runtime registry.
+	bool Remove(AssetID id);
 
 private:
 	// Generate a sequential UUID for the given asset type (counter-based, dev builds).

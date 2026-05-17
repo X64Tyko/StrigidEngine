@@ -7,6 +7,8 @@
 #include <optional>
 #include <string>
 
+#include "TrinyxJobs.h"
+
 #include "AssetRegistry.h"
 #include "ConstructRegistry.h"
 #include "NetTypes.h"
@@ -143,6 +145,11 @@ public:
 	void SetGameMode(const char* modeName);
 	GameMode* GetGameMode() const { return ActiveMode.get(); }
 
+	/// True once the pending GameMode's OnPreload() has finished and AreUploadsReady()
+	/// returns true. ReplicationSystem gates ServerReady on this.
+	/// Returns true immediately when no mode is pending (solo/headless worlds aren't blocked).
+	bool IsGameModeReady() const { return PendingMode == nullptr; }
+
 #ifdef TNX_ENABLE_NETWORK
 	std::optional<PlayerBeginResult> HandlePlayerBeginRequest(Soul* soul, const PlayerBeginRequestPayload& req);
 	void SendPlayerBeginRequest(NetChannel channel, uint32_t frameNumber, PredictionLedger& ledger);
@@ -212,6 +219,8 @@ protected:
 
 	std::unique_ptr<WorldBase> ActiveWorld;
 	std::unique_ptr<GameMode> ActiveMode;
+	std::unique_ptr<GameMode> PendingMode;
+	TrinyxJobs::JobCounter    PendingPreloadCounter;
 	std::string ActiveLevelPath;
 	std::string PendingTravelPath;
 	PlayerBeginConfirmPayload PendingPlayerBeginConfirm{};
@@ -223,7 +232,12 @@ protected:
 
 	std::atomic<uint32_t> PendingNetEvents{0};
 
+	// Bitmask of ownerIDs that called OnClientLoaded while a mode was preloading.
+	// CheckPendingMode() drains this after Initialize() completes.
+	uint32_t PendingPlayerJoins = 0;
+
 	// Internal helpers
+	void CheckPendingMode();
 	StateFactory FindStateFactory(const char* name) const;
 	ModeFactory FindModeFactory(const char* name) const;
 	void EnforceRequirements(FlowState* currentState, FlowState* nextState);

@@ -5,6 +5,7 @@
 #include "AssetRegistry.h"
 #include "AssetTypes.h"
 #include "SkeletonAsset.h"
+#include "TrinyxJobs.h"
 #include "VulkanMemory.h"
 
 // -----------------------------------------------------------------------
@@ -62,9 +63,16 @@ public:
 	/// CPU skeleton for hierarchy queries (chain walking, socket lookup).
 	const SkeletonAsset* GetSkeletonCPU(uint32_t slot) const;
 
-	uint64_t           GetBoneDataAddr()  const { return BoneDataBuffer.DeviceAddr; }
+	uint64_t           GetBoneDataAddr()   const { return BoneDataBuffer.DeviceAddr; }
+	uint64_t           GetBoneParentAddr() const { return BoneParentBuffer.DeviceAddr; }
 	const SkeletonSlot& GetSlot(uint32_t slot) const { return Slots[slot]; }
 	uint32_t           GetSkeletonCount() const { return SkeletonCount; }
+
+	/// Block until all pending GPU bone-data upload jobs have completed.
+	void FlushPendingUploads();
+
+	/// Non-blocking poll — true when all GPU upload jobs have completed.
+	bool IsUploadComplete() const { return GpuUploadCounter.Value.load(std::memory_order_acquire) == 0; }
 
 	uint32_t FindSlotByTName(TnxName name) const
 	{
@@ -93,12 +101,14 @@ private:
 	/// Does NOT call Register() — caller is responsible for registration.
 	uint32_t CommitToSlot(const SkeletonAsset& asset, AssetID id);
 
-	VulkanBuffer BoneDataBuffer; // GpuBoneData[MAX_TOTAL_BONES], PersistentMapped + BDA
+	VulkanBuffer BoneDataBuffer;   // GpuBoneData[MAX_TOTAL_BONES], PersistentMapped + BDA
+	VulkanBuffer BoneParentBuffer; // uint32[MAX_TOTAL_BONES] parent indices, PersistentMapped + BDA
 
-	GpuBoneData   BoneData[MAX_TOTAL_BONES]{};
-	SkeletonSlot  Slots[MAX_SKELETON_SLOTS]{};
-	AssetID       SlotIDs[MAX_SKELETON_SLOTS]{};
-	SkeletonAsset CpuCopies[MAX_SKELETON_SLOTS]; // retained for EvaluateBlendedBone + chain walks
-	uint32_t      NextBoneOffset = 0;
-	uint32_t      SkeletonCount  = 1; // slot 0 reserved as invalid sentinel
+	GpuBoneData            BoneData[MAX_TOTAL_BONES]{};
+	SkeletonSlot           Slots[MAX_SKELETON_SLOTS]{};
+	AssetID                SlotIDs[MAX_SKELETON_SLOTS]{};
+	SkeletonAsset          CpuCopies[MAX_SKELETON_SLOTS];
+	TrinyxJobs::JobCounter GpuUploadCounter;
+	uint32_t               NextBoneOffset = 0;
+	uint32_t               SkeletonCount  = 1; // slot 0 reserved as invalid sentinel
 };

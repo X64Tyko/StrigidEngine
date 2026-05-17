@@ -71,6 +71,16 @@
       }
     },
     {
+      "name": "debug-engine-opt-windows",
+      "displayName": "DebugGame | Engine Optimized | Windows",
+      "inherits": "windows",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "TNX_ENGINE_OPTIMIZED": "ON",
+        "TNX_ENABLE_EDITOR": "ON"
+      }
+    },
+    {
       "name": "headless",
       "displayName": "Headless | Dedicated Server | Linux",
       "inherits": "linux",
@@ -156,6 +166,15 @@
       "configuration": "Debug",
       "targets": [
         "Testbed"
+      ]
+    },
+    {
+      "name": "debug-playground-opt-windows",
+      "displayName": "DebugGame | Playground (Engine Optimized) | Windows",
+      "configurePreset": "debug-engine-opt-windows",
+      "configuration": "Debug",
+      "targets": [
+        "Playground"
       ]
     },
     {

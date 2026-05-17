@@ -456,10 +456,9 @@ bool ImportSkeletalGLTF(const std::string& srcPath, SkeletalImportResult& outRes
 
 	outResult.mesh.Vertices = std::move(dedupVerts);
 	outResult.mesh.Indices  = std::move(dedupIndices);
+	outResult.mesh.Skin     = std::move(dedupWeights);
 	std::memcpy(outResult.mesh.AABBMin, aabbMin, sizeof(float) * 3);
 	std::memcpy(outResult.mesh.AABBMax, aabbMax, sizeof(float) * 3);
-
-	outResult.skin.Weights = std::move(dedupWeights);
 
 	LOG_ENG_INFO_F("[SkeletonImporter] Mesh: %zu verts, %zu indices (deduped from %zu)",
 	               outResult.mesh.Vertices.size(), outResult.mesh.Indices.size(), rawVerts.size());

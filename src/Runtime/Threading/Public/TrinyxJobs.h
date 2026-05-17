@@ -8,6 +8,10 @@
 
 #include "TrinyxMPMCRing.h"
 
+#ifdef TRACY_ENABLE
+#include <tracy/Tracy.hpp>
+#endif
+
 struct EngineConfig;
 
 /**
@@ -64,6 +68,14 @@ namespace TrinyxJobs
 	{
 		{ t(threadIdx) } -> std::same_as<void>;
 	} && sizeof(T) <= 48 && std::is_trivially_copyable_v<T>;
+
+	/// A valid named job lambda — same as ValidJobLambda but must fit in 40 bytes.
+	/// DispatchNamed packs {name*(8) + lambda(40)} into the 48-byte Job payload.
+	template <typename T>
+	concept ValidNamedJobLambda = requires(T t, uint32_t threadIdx)
+	{
+		{ t(threadIdx) } -> std::same_as<void>;
+	} && sizeof(T) <= 40 && std::is_trivially_copyable_v<T>;
 
 	// ---- Job struct (one cache line) -------------------------------------
 
@@ -125,6 +137,43 @@ namespace TrinyxJobs
 		std::memcpy(job.Payload, &lambda, sizeof(LAMBDA));
 
 		// Increment BEFORE submission so counter never transiently hits 0
+		counter->Value.fetch_add(1, std::memory_order_relaxed);
+		SubmitJob(job, queue);
+	}
+
+	/// Dispatch a named lambda as a job. Identical to Dispatch but emits a profiler zone
+	/// with the given name when the job executes. Name must be a string literal (static storage).
+	/// Lambda captures are limited to 40 bytes (vs. 48 for Dispatch) — the name pointer
+	/// occupies the remaining 8 bytes of the 48-byte payload.
+	template <ValidNamedJobLambda LAMBDA>
+	void DispatchNamed(const char* name, LAMBDA lambda, JobCounter* counter, Queue queue = Queue::General)
+	{
+		struct Capture
+		{
+			const char* name;
+			LAMBDA      fn;
+		};
+		static_assert(sizeof(Capture) <= 48, "Named job capture exceeds payload — reduce lambda captures");
+
+		struct Trampoline
+		{
+			static void Invoke(void* payload, uint32_t threadIdx)
+			{
+				auto* c = reinterpret_cast<Capture*>(payload);
+#ifdef TRACY_ENABLE
+				ZoneScoped;
+				ZoneName(c->name, std::strlen(c->name));
+#endif
+				c->fn(threadIdx);
+			}
+		};
+
+		Capture cap{name, lambda};
+		Job job;
+		job.EntryPoint = &Trampoline::Invoke;
+		job.Counter    = &counter->Value;
+		std::memcpy(job.Payload, &cap, sizeof(Capture));
+
 		counter->Value.fetch_add(1, std::memory_order_relaxed);
 		SubmitJob(job, queue);
 	}

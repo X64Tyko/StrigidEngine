@@ -3,6 +3,7 @@
 #include "AssetRegistry.h"
 #include "GameMode.h"
 #include "FlowState.h"
+#include "TrinyxJobs.h"
 #include "Logger.h"
 #include "NetChannel.h"
 #include "NetTypes.h"
@@ -19,6 +20,13 @@ FlowManagerBase::FlowManagerBase() = default;
 
 FlowManagerBase::~FlowManagerBase()
 {
+	// If a preload job is still in-flight, wait for it before destroying PendingMode
+	// and PendingPreloadCounter. The job holds a raw pointer to PendingMode and
+	// decrements &PendingPreloadCounter — both are members of this object.
+	if (PendingPreloadCounter.Value.load(std::memory_order_acquire) != 0)
+		TrinyxJobs::WaitForCounter(&PendingPreloadCounter, TrinyxJobs::Queue::General);
+	PendingMode.reset();
+
 	// Destroy all states top-down.
 	for (int32_t i = static_cast<int32_t>(StateStackCount) - 1; i >= 0; --i)
 	{
@@ -272,6 +280,15 @@ void FlowManagerBase::SetGameMode(const char* modeName)
 		ActiveMode.reset();
 	}
 
+	// If a previous preload job is still running, wait for it before destroying the mode.
+	// The job lambda captures a raw pointer to PendingMode — destroying the mode while
+	// the job runs is UB. This only blocks if SetGameMode is called twice in quick succession.
+	if (PendingMode && PendingPreloadCounter.Value.load(std::memory_order_acquire) != 0)
+		TrinyxJobs::WaitForCounter(&PendingPreloadCounter, TrinyxJobs::Queue::General);
+
+	PendingMode.reset();
+	PendingPlayerJoins = 0;
+
 	if (!modeName) return;
 
 	auto factory = FindModeFactory(modeName);
@@ -281,13 +298,16 @@ void FlowManagerBase::SetGameMode(const char* modeName)
 		return;
 	}
 
-	ActiveMode = factory();
-	if (ActiveWorld)
-	{
-		ActiveMode->Initialize(ActiveWorld.get());
-	}
+	PendingMode = factory();
 
-	LOG_ENG_INFO_F("[FlowManager] GameMode set: %s", modeName);
+	// Dispatch OnPreload to a General worker — Sentinel stays responsive to
+	// client connections while assets load from disk.
+	// Initialize() is called from Tick() once preload and uploads are complete.
+	GameMode* mode = PendingMode.get();
+	TrinyxJobs::Dispatch([mode](uint32_t) { mode->OnPreload(); },
+	                     &PendingPreloadCounter, TrinyxJobs::Queue::General);
+
+	LOG_ENG_INFO_F("[FlowManager] GameMode preloading: %s", modeName);
 }
 
 // ---------------------------------------------------------------------------
@@ -336,8 +356,39 @@ void FlowManagerBase::PostPlayerBeginConfirm(const PlayerBeginConfirmPayload& pa
 	PostNetEvent(static_cast<uint8_t>(FlowEventID::PlayerBeginConfirm));
 }
 
+void FlowManagerBase::CheckPendingMode()
+{
+	if (!PendingMode) return;
+
+	// OnPreload() job not yet done.
+	if (PendingPreloadCounter.Value.load(std::memory_order_acquire) != 0) return;
+
+	// GPU uploads dispatched during OnPreload() not yet complete.
+	if (!PendingMode->AreUploadsReady()) return;
+
+	// Both CPU and GPU work are done — promote and initialize.
+	ActiveMode = std::move(PendingMode);
+	if (ActiveWorld)
+		ActiveMode->Initialize(ActiveWorld.get());
+
+	// Drain any player joins that arrived while the mode was preloading.
+	uint32_t pending = PendingPlayerJoins;
+	PendingPlayerJoins = 0;
+	while (pending)
+	{
+		const uint32_t bit  = pending & (~pending + 1);
+		const uint8_t  oid  = static_cast<uint8_t>(TNX_CTZ32(bit));
+		if (Souls[oid]) ActiveMode->OnPlayerJoined(*Souls[oid]);
+		pending &= pending - 1;
+	}
+
+	LOG_ENG_INFO_F("[FlowManager] GameMode ready: %s", ActiveMode->GetModeName());
+}
+
 void FlowManagerBase::Tick(SimFloat dt)
 {
+	CheckPendingMode();
+
 	const uint32_t events = PendingNetEvents.exchange(0, std::memory_order_acquire);
 	if (events)
 	{
@@ -446,7 +497,16 @@ void FlowManagerBase::OnClientLoaded(uint8_t ownerID)
 
 	LOG_NET_INFO_F(Souls[ownerID].get(), "[FlowMgr] OnClientLoaded: ownerID=%u joined", ownerID);
 
-	if (ActiveMode) ActiveMode->OnPlayerJoined(*Souls[ownerID]);
+	if (ActiveMode)
+	{
+		ActiveMode->OnPlayerJoined(*Souls[ownerID]);
+	}
+	else if (PendingMode)
+	{
+		// Mode is preloading — defer OnPlayerJoined until CheckPendingMode promotes it.
+		PendingPlayerJoins |= (1u << ownerID);
+		LOG_ENG_INFO_F("[FlowMgr] Deferred OnPlayerJoined for ownerID=%u (mode preloading)", ownerID);
+	}
 }
 
 void FlowManagerBase::OnLocalOwnerConnected(uint8_t ownerID)

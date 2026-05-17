@@ -78,10 +78,8 @@ public:
 	// --- Startup ---
 	// void IngestManifest(const AssetManifest& manifest);  // TODO: cooked manifest
 
-	// Content root — absolute path to the content directory.
-	// Must be set before any ResolvePath call. Called by AssetDatabase::Initialize()
-	// (editor) and by TrinyxEngine startup (runtime, from EngineConfig::ProjectDir).
-	void SetContentRoot(const std::string& root) { ContentRoot = root; }
+	/// Sets the absolute content root and triggers ValidateAll() on any already-registered entries.
+	void SetContentRoot(const std::string& root);
 	const std::string& GetContentRoot() const { return ContentRoot; }
 
 	// Resolve an entry's relative path to an absolute filesystem path.
@@ -113,20 +111,19 @@ public:
 	}
 
 	// --- Registration (editor/import pipeline) ---
+	/// Registers the entry and validates it immediately if ContentRoot is set.
 	void Register(const AssetID& id, const std::string& name, const std::string& path,
-				  AssetType type, uint32_t schemaVersion = 0, AssetFlags flags = AssetFlags::None)
-	{
-		AssetEntry& entry   = Entries[id];
-		entry.ID            = id;
-		entry.Name          = TnxName(name.c_str());
-		entry.Path          = path;
-		entry.Type          = type;
-		entry.SchemaVersion = schemaVersion;
-		entry.Flags         = flags;
-		entry.State         = RuntimeFlags::None;
+				  AssetType type, uint32_t schemaVersion = 0, AssetFlags flags = AssetFlags::None);
 
-		if (!name.empty()) NameIndex[entry.Name.Value] = id;
-	}
+	/// Checks file existence on disk; sets/clears @c RuntimeFlags::Missing. Returns true if valid.
+	/// Entries with no path (code-registered types) are always considered valid.
+	bool Validate(const AssetID& id);
+
+	/// Validates all registered entries. Called by SetContentRoot(); call again after a reconcile.
+	void ValidateAll();
+
+	/// Removes an entry from the registry entirely, including its name and slot mappings.
+	void Unregister(const AssetID& id);
 
 	// --- Lookup ---
 	FORCE_INLINE const AssetEntry* Find(const AssetID& id) const
@@ -186,12 +183,27 @@ public:
 		if (e && e->PinCount > 0) --e->PinCount;
 	}
 
+	// --- Loader registry — demand-load on first Checkout ---
+	//
+	// Register one loader per AssetType. The loader is called synchronously the
+	// first time Checkout() is called for an unloaded asset of that type.
+	// Loaders are plain function pointers + context so they compose with lambdas
+	// without heap allocation.
+	void RegisterLoader(AssetType type, void (*fn)(void*, AssetID), void* ctx)
+	{
+		uint8_t idx      = static_cast<uint8_t>(type);
+		Loaders[idx].Fn  = fn;
+		Loaders[idx].Ctx = ctx;
+	}
+
 	// --- Checkout / Checkin — callback-driven asset lifetime ---
 	//
 	// Checkout increments PinCount and registers OnLoaded/OnEvicted callbacks
 	// identified by a context pointer (the owning entity record, Construct, etc).
 	// If the asset is already loaded, OnLoaded fires immediately with the current
 	// slot index. OnEvicted is persistent and will fire on any future eviction.
+	// If a loader is registered and the asset is not yet loaded, it is triggered
+	// synchronously before this call returns.
 	//
 	// Checkin decrements PinCount and removes all callbacks bound to bindCtx from
 	// both OnLoaded and OnEvicted — works regardless of whether Bind or BindStatic
@@ -222,6 +234,14 @@ public:
 		if (onEvicted.IsBound())
 		{
 			e->OnEvicted.BindStatic(onEvicted.stub, onEvicted.bindObj);
+		}
+
+		// Demand-load: trigger loader if asset is not yet loaded.
+		if (!HasFlag(e->State, RuntimeFlags::Loaded))
+		{
+			uint8_t typeIdx = static_cast<uint8_t>(e->Type);
+			if (Loaders[typeIdx].Fn)
+				Loaders[typeIdx].Fn(Loaders[typeIdx].Ctx, id);
 		}
 	}
 
@@ -398,7 +418,10 @@ private:
 		return (static_cast<uint8_t>(state) & static_cast<uint8_t>(flag)) != 0;
 	}
 
+	struct AssetLoader { void (*Fn)(void*, AssetID) = nullptr; void* Ctx = nullptr; };
+
 	std::string ContentRoot;
+	AssetLoader Loaders[256];
 	std::unordered_map<AssetID, AssetID, AssetIDHash> AliasTable;
 	std::unordered_map<AssetID, AssetEntry, AssetIDHash> Entries;
 	std::unordered_map<uint32_t, AssetID> NameIndex; // TnxName hash → AssetID

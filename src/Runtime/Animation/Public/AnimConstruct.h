@@ -89,6 +89,11 @@ protected:
     SocketTransformLocal SocketTransforms;
     AnimNotifyState      NotifyState;
 
+    // Root motion delta accumulated in StoreRootMotionDelta; applied by ApplyRootMotion.
+    SimFloat RootMotionDeltaX{};
+    SimFloat RootMotionDeltaY{};
+    SimFloat RootMotionDeltaZ{};
+
     // -----------------------------------------------------------------------
     // Call at the start of each PostPhysics to reset per-tick caches.
     // -----------------------------------------------------------------------
@@ -96,6 +101,40 @@ protected:
     {
         BoneCache.Clear();
         SocketTransforms.Clear();
+    }
+
+    // -----------------------------------------------------------------------
+    // Compute and cache the root motion delta for animID over [fromT, toT).
+    // Call at end of PostPhysics after advancing the timestamp so PrePhysics
+    // of the next tick can apply the delta before physics integration.
+    // No-op if the animation has no root motion track.
+    // -----------------------------------------------------------------------
+    void StoreRootMotionDelta(uint32_t animID, SimFloat fromT, SimFloat toT)
+    {
+        RootMotionDeltaX = SimFloat{};
+        RootMotionDeltaY = SimFloat{};
+        RootMotionDeltaZ = SimFloat{};
+
+        const AnimationAsset* anim = AnimationManager::Get().GetAnimCPU(animID);
+        if (!anim || !anim->hasRootMotion) return;
+
+        BoneTransform delta = anim->EvaluateRootMotionDelta(fromT.ToFloat(), toT.ToFloat());
+        RootMotionDeltaX   = delta.tx;
+        RootMotionDeltaY   = delta.ty;
+        RootMotionDeltaZ   = delta.tz;
+    }
+
+    // -----------------------------------------------------------------------
+    // Apply the cached root motion delta to the entity's position fields.
+    // Call at the start of PrePhysics so physics sees the moved position.
+    // -----------------------------------------------------------------------
+    void ApplyRootMotion(FieldProxy<SimFloat, FieldWidth::Scalar>& posX,
+                         FieldProxy<SimFloat, FieldWidth::Scalar>& posY,
+                         FieldProxy<SimFloat, FieldWidth::Scalar>& posZ)
+    {
+        posX += RootMotionDeltaX;
+        posY += RootMotionDeltaY;
+        posZ += RootMotionDeltaZ;
     }
 
     // -----------------------------------------------------------------------

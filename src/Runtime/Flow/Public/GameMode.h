@@ -42,6 +42,16 @@ class GameMode
 public:
 	virtual ~GameMode();
 
+	/// Called before Initialize() and before any spawn window opens.
+	/// Dispatched on a General worker so the Sentinel thread stays responsive to
+	/// client connections during the load. Do not spawn entities here.
+	virtual void OnPreload() {}
+
+	/// Non-blocking poll called each Tick() after OnPreload() completes.
+	/// Return true when all GPU upload jobs dispatched in OnPreload() are done.
+	/// Initialize() will not be called until this returns true.
+	virtual bool AreUploadsReady() const { return true; }
+
 	/// Called after the GameMode is created and the World is ready.
 	virtual void Initialize(WorldBase* world) { OwnerWorld = world; }
 

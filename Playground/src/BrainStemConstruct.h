@@ -8,6 +8,7 @@
 #include "ConstructView.h"
 #include "EPlayerCharacter.h"
 #include "Logger.h"
+#include "MeshManager.h"
 #include "SimFloat.h"
 #include "SkeletonAsset.h"
 #include "SkeletonManager.h"
@@ -28,6 +29,15 @@ public:
 
     ConstructView<EPlayerCharacter> Body;
 
+    // Eagerly load BrainStem skeleton + animation from disk.
+    // Call before any BrainStemConstruct is spawned to avoid blocking the spawn handshake.
+    static void PreloadAssets()
+    {
+        BrainStemAssets& assets = GetAssets();
+        if (!assets.Loaded)
+            LoadBrainStemAssets(AssetRegistry::Get().GetContentRoot(), assets);
+    }
+
     void InitializeViews()
     {
         Body.Initialize(this);
@@ -39,8 +49,10 @@ public:
 
         const BrainStemAssets& assets = GetAssets();
         if (!assets.Loaded)
-            LoadBrainStemAssets(AssetRegistry::Get().GetContentRoot(),
-                                const_cast<BrainStemAssets&>(assets));
+        {
+            LOG_WARN("[BrainStemConstruct] Assets not preloaded — call PreloadAssets() before spawning");
+            return;
+        }
 
         if (assets.SkelSlot != UINT32_MAX)
         {
@@ -54,7 +66,8 @@ public:
 
     void PostPhysics(SimFloat dt)
     {
-        const uint32_t animID = GetAssets().AnimSlot;
+        const BrainStemAssets& assets = GetAssets();
+        const uint32_t animID = assets.AnimSlot;
         if (animID == UINT32_MAX) return;
         BeginAnimTick();
 
@@ -70,10 +83,11 @@ public:
         SimFloat t = animBase.GetBaseTimestamp();
         if (WrapTimestamp(t, dur, true))
         {
-	        NotifyState.ClearLoopedRecords(0, SimFloat(dur));
-        	animBase.SetBaseTimestamp(t);
+            NotifyState.ClearLoopedRecords(0, SimFloat(dur));
+            animBase.SetBaseTimestamp(t);
         }
-        LOG_INFO_F("Anim ticking! time: %f", t.ToFloat());
+
+        DebugAnimState(assets, animID, t, dur);
     }
 
     void InitializeForReplication(WorldBase* world,
@@ -84,6 +98,7 @@ public:
     }
 
 private:
+
     struct BrainStemAssets
     {
         uint32_t MeshSlot = 0;
@@ -133,4 +148,48 @@ private:
 
         out.Loaded = true;
     }
+	static constexpr uint32_t kDebugLogInterval = 512; // 512Hz → ~1 log/sec
+
+	uint32_t DebugTickCount = 0;
+	bool     SkeletonDumped = false;
+
+	void DebugAnimState(const BrainStemAssets& assets, uint32_t animID, SimFloat t, float dur)
+	{
+		++DebugTickCount;
+
+		if (!SkeletonDumped && assets.SkelSlot != UINT32_MAX)
+		{
+			const SkeletonAsset* skel = SkeletonManager::Get().GetSkeletonCPU(assets.SkelSlot);
+			if (skel)
+			{
+				LOG_INFO_F("[BrainStem] Skeleton slot=%u  boneCount=%u", assets.SkelSlot, skel->boneCount);
+				for (uint32_t i = 0; i < skel->boneCount; ++i)
+					LOG_INFO_F("[BrainStem]   bone[%2u] %-32s  parent=%u",
+							   i, skel->bones[i].name.GetStr(), skel->bones[i].parentIndex);
+				SkeletonDumped = true;
+			}
+		}
+
+		if (DebugTickCount % kDebugLogInterval != 0) return;
+
+		const float tF = t.ToFloat();
+		LOG_INFO_F("[BrainStem] animSlot=%u  t=%.3f / %.3f s  (%.1f%%)",
+				   animID, tF, dur, dur > 0.f ? 100.f * tF / dur : 0.f);
+
+		// Update kTrackedBone after reading the skeleton dump to pick an animated bone.
+		static constexpr uint32_t kTrackedBone = 1;
+		const AnimationAsset* anim = AnimationManager::Get().GetAnimCPU(animID);
+		if (anim && kTrackedBone < anim->boneCount)
+		{
+			BoneTransform b = anim->EvaluateBone(kTrackedBone, tF);
+			LOG_INFO_F("[BrainStem]   bone[%u] tx=%.4f ty=%.4f tz=%.4f  rx=%.4f ry=%.4f rz=%.4f rw=%.4f",
+					   kTrackedBone,
+					   b.tx.ToFloat(), b.ty.ToFloat(), b.tz.ToFloat(),
+					   b.rx.ToFloat(), b.ry.ToFloat(), b.rz.ToFloat(), b.rw.ToFloat());
+		}
+		else if (anim)
+		{
+			LOG_WARN_F("[BrainStem] kTrackedBone=%u out of range (boneCount=%u)", kTrackedBone, anim->boneCount);
+		}
+	}
 };

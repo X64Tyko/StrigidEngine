@@ -43,7 +43,7 @@ public:
 		Handle      = Reg->Create<TEntity<FieldWidth::Scalar>>();
 		bOwnsEntity = true;
 		RehydrateCursors();
-		this->SetFlags(TemporalFlagBits::Active | TemporalFlagBits::Alive);
+		this->SetFlags(TemporalFlagBits::Active | TemporalFlagBits::Alive | TemporalFlagBits::Dirty);
 
 		using Self = ConstructView;
 		Reg->BindOnCacheSlotChange<Self, &Self::OnCacheSlotChanged>(Handle, this);

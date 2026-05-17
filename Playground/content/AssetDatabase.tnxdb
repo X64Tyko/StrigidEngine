@@ -2,45 +2,10 @@
 	"assets": [
 		{
 			"uuid": 256.0,
-			"name": "Don_char",
-			"path": "Don_char.tnxmesh",
-			"type": 2.0,
-			"contentHash": 1.2562013559474485e+19
-		},
-		{
-			"uuid": 256.0,
-			"name": "Arena",
-			"path": "Arena.tnxscene",
-			"type": 8.0,
-			"contentHash": 4.5045154207554555e+18
-		},
-		{
-			"uuid": 256.0,
-			"name": "DefaultCharacter",
-			"path": "DefaultCharacter.tnxprefab",
-			"type": 9.0,
-			"contentHash": 5.3161583432269373e+18
-		},
-		{
-			"uuid": 256.0,
 			"name": "firered_00A1",
 			"path": "Audio/firered_00A1.wav",
 			"type": 6.0,
 			"contentHash": 1.5625005118455796e+19
-		},
-		{
-			"uuid": 768.0,
-			"name": "StaticCube",
-			"path": "StaticCube.prefab",
-			"type": 9.0,
-			"contentHash": 1.6835617540666714e+19
-		},
-		{
-			"uuid": 1280.0,
-			"name": "Wall",
-			"path": "Wall.prefab",
-			"type": 9.0,
-			"contentHash": 1.5066031282316009e+19
 		},
 		{
 			"uuid": 256.0,
@@ -66,31 +31,59 @@
 		{
 			"uuid": 256.0,
 			"name": "",
+			"path": "BrainStem_anim.tnxanim",
+			"type": 7.0,
+			"contentHash": 1.7169550444358408e+19
+		},
+		{
+			"uuid": 768.0,
+			"name": "",
+			"path": "Arena.tnxscene",
+			"type": 8.0,
+			"contentHash": 4.5045154207554555e+18
+		},
+		{
+			"uuid": 1024.0,
+			"name": "",
 			"path": "BrainStem.tnxskel",
 			"type": 3.0,
 			"contentHash": 6.589767945435902e+18
 		},
 		{
-			"uuid": 512.0,
+			"uuid": 2304.0,
 			"name": "",
-			"path": "BrainStem.tnxskin",
-			"type": 3.0,
-			"contentHash": 8.0530128508956723e+18
+			"path": "DefaultCharacter.tnxprefab",
+			"type": 9.0,
+			"contentHash": 5.3161583432269373e+18
 		},
 		{
-			"uuid": 256.0,
+			"uuid": 1280.0,
 			"name": "",
-			"path": "BrainStem_anim.tnxanim",
-			"type": 7.0,
-			"contentHash": 1.7169550444358408e+19
+			"path": "Don_char.tnxmesh",
+			"type": 2.0,
+			"contentHash": 1.2562013559474485e+19
+		},
+		{
+			"uuid": 2560.0,
+			"name": "",
+			"path": "StaticCube.prefab",
+			"type": 9.0,
+			"contentHash": 1.6835617540666714e+19
+		},
+		{
+			"uuid": 3072.0,
+			"name": "Wall",
+			"path": "Wall.prefab",
+			"type": 9.0,
+			"contentHash": 1.5066031282316009e+19
 		}
 	],
 	"counters": {
-		"2": 4.0,
-		"3": 3.0,
+		"2": 6.0,
+		"3": 5.0,
 		"6": 2.0,
 		"7": 2.0,
-		"8": 2.0,
-		"9": 8.0
+		"8": 4.0,
+		"9": 12.0
 	}
 }

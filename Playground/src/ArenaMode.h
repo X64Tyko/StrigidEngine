@@ -1,7 +1,9 @@
 
 #pragma once
+#include "AnimationManager.h"
 #include "AssetRegistry.h"
 #include "BrainStemConstruct.h"
+#include "SkeletonManager.h"
 #include "ConstructRegistry.h"
 #include "GameMode.h"
 #include "Logger.h"
@@ -27,6 +29,16 @@
 class ArenaMode : public GameMode, public WithSpawnManagement
 {
 public:
+	void OnPreload() override
+	{
+		BrainStemConstruct::PreloadAssets();
+	}
+
+	bool AreUploadsReady() const override
+	{
+		return SkeletonManager::Get().IsUploadComplete() && AnimationManager::Get().IsUploadComplete();
+	}
+
 	void Initialize(WorldBase* world) override
 	{
 		GameMode::Initialize(world);
@@ -77,7 +89,7 @@ public:
 			cr->Create<BrainStemConstruct>(world, [](BrainStemConstruct* bs)
 			{
 				bs->SpawnPosX = SimFloat(0.0f);
-				bs->SpawnPosY = SimFloat(0.0f);
+				bs->SpawnPosY = SimFloat(4.0f);
 				bs->SpawnPosZ = SimFloat(-4.0f);
 			});
 		});

@@ -17,9 +17,12 @@
 #include "TemporalComponentCache.h"
 
 #include "CacheSlotMeta.h"
+#include "CAnimBase.h"
+#include "CAnimLayer.h"
 #include "CColor.h"
 #include "CMeshRef.h"
 #include "CScale.h"
+#include "CSkeletonRef.h"
 #include "CTransform.h"
 #include "CVisualTransform.h"
 #include "VulkanDebug.h"
@@ -81,6 +84,50 @@ void RendererCore<Derived>::Initialize(Registry* registry,
 	DirtyWordCount = (static_cast<uint32_t>(config->MAX_RENDERABLE_ENTITIES) + 63) / 64;
 	DirtySnapshot  = new uint64_t[DirtyWordCount]();
 	for (auto& plane : DirtyPlanes) plane = new uint64_t[DirtyWordCount]();
+
+	// Build slab field descriptor table — static per-component slot IDs resolved once.
+	// cache/hdr pointers are NOT stored here; they're resolved at runtime from tier.
+	SlabFieldDescs = {{
+		{GpuSlabTier::Temporal, GpuSlabKind::RawU32,   static_cast<uint32_t>(CacheSlotMeta<>::StaticTemporalIndex()),    0, SemFlags},
+		{GpuSlabTier::Volatile, GpuSlabKind::SimFloat,  static_cast<uint32_t>(CVisualTransform<>::StaticTemporalIndex()), 0, SemPosX},
+		{GpuSlabTier::Volatile, GpuSlabKind::SimFloat,  static_cast<uint32_t>(CVisualTransform<>::StaticTemporalIndex()), 1, SemPosY},
+		{GpuSlabTier::Volatile, GpuSlabKind::SimFloat,  static_cast<uint32_t>(CVisualTransform<>::StaticTemporalIndex()), 2, SemPosZ},
+		{GpuSlabTier::Temporal, GpuSlabKind::SimFloat,  static_cast<uint32_t>(CTransform<>::StaticTemporalIndex()),       3, SemRotQx},
+		{GpuSlabTier::Temporal, GpuSlabKind::SimFloat,  static_cast<uint32_t>(CTransform<>::StaticTemporalIndex()),       4, SemRotQy},
+		{GpuSlabTier::Temporal, GpuSlabKind::SimFloat,  static_cast<uint32_t>(CTransform<>::StaticTemporalIndex()),       5, SemRotQz},
+		{GpuSlabTier::Temporal, GpuSlabKind::SimFloat,  static_cast<uint32_t>(CTransform<>::StaticTemporalIndex()),       6, SemRotQw},
+		{GpuSlabTier::Volatile, GpuSlabKind::SimFloat,  static_cast<uint32_t>(CScale<>::StaticTemporalIndex()),           0, SemScaleX},
+		{GpuSlabTier::Volatile, GpuSlabKind::SimFloat,  static_cast<uint32_t>(CScale<>::StaticTemporalIndex()),           1, SemScaleY},
+		{GpuSlabTier::Volatile, GpuSlabKind::SimFloat,  static_cast<uint32_t>(CScale<>::StaticTemporalIndex()),           2, SemScaleZ},
+		{GpuSlabTier::Volatile, GpuSlabKind::SimFloat,  static_cast<uint32_t>(CColor<>::StaticTemporalIndex()),           0, SemColorR},
+		{GpuSlabTier::Volatile, GpuSlabKind::SimFloat,  static_cast<uint32_t>(CColor<>::StaticTemporalIndex()),           1, SemColorG},
+		{GpuSlabTier::Volatile, GpuSlabKind::SimFloat,  static_cast<uint32_t>(CColor<>::StaticTemporalIndex()),           2, SemColorB},
+		{GpuSlabTier::Volatile, GpuSlabKind::SimFloat,  static_cast<uint32_t>(CColor<>::StaticTemporalIndex()),           3, SemColorA},
+		{GpuSlabTier::Volatile, GpuSlabKind::RawU32,    static_cast<uint32_t>(CMeshRef<>::StaticTemporalIndex()),         0, SemMeshID},
+		// Animation slab fields (f=16..34, scatter skips sem > GpuOutFieldCount)
+		{GpuSlabTier::Volatile, GpuSlabKind::RawU32,    static_cast<uint32_t>(CSkeletonRef<>::StaticTemporalIndex()),     0, SemSkeletonID},
+		{GpuSlabTier::Volatile, GpuSlabKind::RawU32,    static_cast<uint32_t>(CSkeletonRef<>::StaticTemporalIndex()),     1, SemSkinMeshID},
+		{GpuSlabTier::Temporal, GpuSlabKind::RawU32,    static_cast<uint32_t>(CAnimBase<>::StaticTemporalIndex()),        0, SemAnimBaseAnimID},
+		{GpuSlabTier::Temporal, GpuSlabKind::RawU32,    static_cast<uint32_t>(CAnimBase<>::StaticTemporalIndex()),        1, SemAnimBlendspaceID},
+		{GpuSlabTier::Temporal, GpuSlabKind::SimFloat,  static_cast<uint32_t>(CAnimBase<>::StaticTemporalIndex()),        2, SemAnimBaseTimestamp},
+		{GpuSlabTier::Temporal, GpuSlabKind::SimFloat,  static_cast<uint32_t>(CAnimBase<>::StaticTemporalIndex()),        3, SemAnimBlendCoordX},
+		{GpuSlabTier::Temporal, GpuSlabKind::SimFloat,  static_cast<uint32_t>(CAnimBase<>::StaticTemporalIndex()),        4, SemAnimBlendCoordY},
+		{GpuSlabTier::Temporal, GpuSlabKind::RawU32,    static_cast<uint32_t>(CAnimBase<>::StaticTemporalIndex()),        5, SemAnimFadeAnimID},
+		{GpuSlabTier::Temporal, GpuSlabKind::SimFloat,  static_cast<uint32_t>(CAnimBase<>::StaticTemporalIndex()),        6, SemAnimFadeTimestamp},
+		{GpuSlabTier::Temporal, GpuSlabKind::SimFloat,  static_cast<uint32_t>(CAnimBase<>::StaticTemporalIndex()),        7, SemAnimFadeAlpha},
+		{GpuSlabTier::Temporal, GpuSlabKind::RawU32,    static_cast<uint32_t>(CAnimBase<>::StaticTemporalIndex()),        9, SemAnimFlags},
+		{GpuSlabTier::Temporal, GpuSlabKind::RawU32,    static_cast<uint32_t>(CAnimLayer<>::StaticTemporalIndex()),       0, SemAnimLayer0AnimID},
+		{GpuSlabTier::Temporal, GpuSlabKind::RawU32,    static_cast<uint32_t>(CAnimLayer<>::StaticTemporalIndex()),       1, SemAnimLayer1AnimID},
+		{GpuSlabTier::Temporal, GpuSlabKind::SimFloat,  static_cast<uint32_t>(CAnimLayer<>::StaticTemporalIndex()),       2, SemAnimLayer0Timestamp},
+		{GpuSlabTier::Temporal, GpuSlabKind::SimFloat,  static_cast<uint32_t>(CAnimLayer<>::StaticTemporalIndex()),       3, SemAnimLayer1Timestamp},
+		{GpuSlabTier::Temporal, GpuSlabKind::SimFloat,  static_cast<uint32_t>(CAnimLayer<>::StaticTemporalIndex()),       4, SemAnimLayer0Alpha},
+		{GpuSlabTier::Temporal, GpuSlabKind::SimFloat,  static_cast<uint32_t>(CAnimLayer<>::StaticTemporalIndex()),       5, SemAnimLayer1Alpha},
+		{GpuSlabTier::Temporal, GpuSlabKind::RawU32,    static_cast<uint32_t>(CAnimLayer<>::StaticTemporalIndex()),       6, SemAnimLayer0Config},
+		{GpuSlabTier::Temporal, GpuSlabKind::RawU32,    static_cast<uint32_t>(CAnimLayer<>::StaticTemporalIndex()),       7, SemAnimLayer1Config},
+		// Always-on entity cache index — no slab backing; scatter writes entity loop index directly.
+		// Needed for skinning (LBS reverse LUT) and GPU picking (fragment shader entity ID).
+		{GpuSlabTier::Volatile, GpuSlabKind::EntityIndex, 0, 0, SemEntityCacheIdx},
+	}};
 
 	LOG_ENG_INFO("[Renderer] Initialized");
 }
@@ -245,6 +292,10 @@ void RendererCore<Derived>::ThreadMain()
 		TrackFPS();
 	}
 
+	// Drain any pending slab upload jobs dispatched in the last WriteToFrameSlab call.
+	// The loop may have exited before RenderFrame ran FlushPendingSlabUpload.
+	FlushPendingSlabUpload();
+
 	LOG_ENG_INFO("[Renderer] Thread exiting");
 	bIsRunning.store(false, std::memory_order_release);
 }
@@ -335,6 +386,10 @@ int RendererCore<Derived>::RenderFrame()
 		TNX_ZONE_COARSE_NC("Render_Record", TNX_COLOR_RENDERING)
 		Self().RecordFrame(frame, imageIndex);
 	}
+
+	// Drain any pending slab upload jobs before handing work to the GPU.
+	// Upload jobs overlapped with command buffer recording above.
+	FlushPendingSlabUpload();
 
 	// Submit (sync2 path)
 	VkSemaphoreSubmitInfo waitSemInfo{};
@@ -566,21 +621,13 @@ void RendererCore<Derived>::RecordCommandBuffer(FrameSync& frame, uint32_t image
 			vkCmdPipelineBarrier2(cmd, &d);
 		};
 
-		// Skinning pass — must run before predicate/scatter (M1: SkeletalEntityCount=0 → no-op)
-		{
-			const auto* fd = static_cast<const GpuFrameData*>(frame.GpuData.MappedPtr);
-			if (fd->SkeletalEntityCount > 0)
-			{
-				TNX_VKDBG_SCOPE(cmd, "SkinningPass", VulkanDebug::ColorCompute);
-				Skinning.Dispatch(cmd, frame.GpuData.DeviceAddr, fd->SkeletalEntityCount);
-				ComputeBarrier();
-			}
-		}
-
-		// Zero CompactCounter and MeshHistogram before compute passes
+		// Zero CompactCounter, MeshHistogram, and SkeletalDispatchArgs.x before scatter.
+		// SkeletalIdxByEntity cleared to UINT32_MAX so non-skeletal entities keep the sentinel.
 		vkCmdFillBuffer(cmd, static_cast<VkBuffer>(frame.CompactCounterBuffer.Buffer), 0, sizeof(uint32_t), 0u);
 		vkCmdFillBuffer(cmd, static_cast<VkBuffer>(frame.MeshHistogramBuffer.Buffer), 0,
 						MaxMeshSlots * sizeof(uint32_t), 0u);
+		vkCmdFillBuffer(cmd, Skinning.GetSkeletalDispatchBuffer(), 0, sizeof(uint32_t), 0u);
+		vkCmdFillBuffer(cmd, Skinning.GetSkeletalIdxByEntityBuffer(), 0, VK_WHOLE_SIZE, 0xFFFFFFFFu);
 		{
 			VkMemoryBarrier2 mb{};
 			mb.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
@@ -641,7 +688,7 @@ void RendererCore<Derived>::RecordCommandBuffer(FrameSync& frame, uint32_t image
 		}
 		ComputeBarrier(); // build_draws → sort_instances
 
-		// Pass 5: sort_instances — reorder unsorted → sorted by MeshID
+		// Pass 5: sort_instances — reorder unsorted → sorted by compound key (skeletal first)
 		{
 			TNX_VKDBG_SCOPE(cmd, "SortInstances (Unsorted->Instances)", VulkanDebug::ColorCompute);
 #if defined(TNX_GPU_PICKING_FAST)
@@ -655,20 +702,45 @@ void RendererCore<Derived>::RecordCommandBuffer(FrameSync& frame, uint32_t image
 			vkCmdDispatch(cmd, dispatchX, 1, 1);
 		}
 
-		// Final barrier: sorted instances + draw args → vertex shader + indirect draw
-		VkMemoryBarrier2 sortDone{};
-		sortDone.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
-		sortDone.srcStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-		sortDone.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-		sortDone.dstStageMask  = VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT |
-			VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT;
-		sortDone.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT |
-			VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT;
-		VkDependencyInfo sortDep{};
-		sortDep.sType              = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-		sortDep.memoryBarrierCount = 1;
-		sortDep.pMemoryBarriers    = &sortDone;
-		vkCmdPipelineBarrier2(cmd, &sortDep);
+		// Barrier: sort done → skinning compute (reads sorted buffer + indirect dispatch args)
+		{
+			VkMemoryBarrier2 mb{};
+			mb.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
+			mb.srcStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+			mb.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+			mb.dstStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
+				VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT;
+			mb.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT |
+				VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT;
+			VkDependencyInfo d{};
+			d.sType              = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+			d.memoryBarrierCount = 1;
+			d.pMemoryBarriers    = &mb;
+			vkCmdPipelineBarrier2(cmd, &d);
+		}
+
+		// Pass 6: skinning — one thread per skeletal entity, indirect dispatch
+		{
+			TNX_VKDBG_SCOPE(cmd, "SkinningPass (indirect)", VulkanDebug::ColorCompute);
+			Skinning.Dispatch(cmd, gpuDataAddr);
+		}
+
+		// Final barrier: skin matrices + sorted instances + draw args → vertex shader + indirect draw
+		{
+			VkMemoryBarrier2 mb{};
+			mb.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
+			mb.srcStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+			mb.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+			mb.dstStageMask  = VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT |
+				VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT;
+			mb.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT |
+				VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT;
+			VkDependencyInfo d{};
+			d.sType              = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+			d.memoryBarrierCount = 1;
+			d.pMemoryBarriers    = &mb;
+			vkCmdPipelineBarrier2(cmd, &d);
+		}
 	}
 
 	// Begin rendering pass
@@ -1012,11 +1084,8 @@ bool RendererCore<Derived>::CreateFrameSync()
 		}
 		std::memset(Frames[i].DrawArgsBuffer.MappedPtr, 0, DrawArgsSize);
 
-#ifdef TNX_GPU_PICKING
-		constexpr uint32_t InstanceFieldCount = GpuOutFieldCount + 1; // +1 for entity cache index
-#else
-		constexpr uint32_t InstanceFieldCount = GpuOutFieldCount;
-#endif
+		// Entity cache index is always-on (slot 16 = SemEntityCacheIdx - 1) for LBS lookups.
+		constexpr uint32_t InstanceFieldCount = GpuOutFieldCount + 1;
 		const VkDeviceSize InstancesSize =
 			InstanceFieldCount * static_cast<VkDeviceSize>(ConfigPtr->MAX_CACHED_ENTITIES) * sizeof(float);
 		Frames[i].InstancesBuffer = VkMem->AllocateBuffer(InstancesSize, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
@@ -1058,7 +1127,7 @@ bool RendererCore<Derived>::CreateFrameSync()
 	}
 
 	const VkDeviceSize FieldSlabSize =
-		GpuOutFieldCount * static_cast<VkDeviceSize>(ConfigPtr->MAX_CACHED_ENTITIES) * sizeof(float);
+		GpuTotalFieldCount * static_cast<VkDeviceSize>(ConfigPtr->MAX_CACHED_ENTITIES) * sizeof(float);
 	for (int i = 0; i < InstanceBufferCount; ++i)
 	{
 		FieldSlabs[i] = VkMem->AllocateBuffer(
@@ -1321,39 +1390,46 @@ void RendererCore<Derived>::FillGpuFrameData(FrameSync& frame)
 	FrameData->Alpha                 = std::clamp(LogicPtr->GetFixedAlpha(), 0.0, 1.0);
 	FrameData->EntityCount           = static_cast<uint32_t>(ConfigPtr->MAX_CACHED_ENTITIES);
 	FrameData->OutFieldStride        = static_cast<uint32_t>(ConfigPtr->MAX_CACHED_ENTITIES);
-	FrameData->FieldCount            = GpuOutFieldCount;
 	FrameData->UnsortedInstancesAddr = frame.UnsortedInstancesBuffer.DeviceAddr;
 	FrameData->MeshHistogramAddr     = frame.MeshHistogramBuffer.DeviceAddr;
 	FrameData->MeshWriteIdxAddr      = frame.MeshWriteIdxBuffer.DeviceAddr;
 	FrameData->MeshTableAddr         = Meshes.GetMeshTableAddr();
 	FrameData->MeshCount             = Meshes.GetMeshCount();
 
-	FrameData->AnimBlendAddr         = Skinning.GetAnimBlendAddr();
-	FrameData->GpuBoneDataAddr       = SkeletonManager::Get().GetBoneDataAddr();
-	FrameData->AnimTrackAddr         = AnimationManager::Get().GetTrackBufferAddr();
-	FrameData->AnimKeyframeAddr      = AnimationManager::Get().GetKeyframeBufferAddr();
-	FrameData->SkinWeightAddr        = Meshes.GetSkinWeightAddr();
-	FrameData->SkeletalEntityCount   = 0; // M1: populated by LogicThread when ESkeletalEntity is registered
-
-	const uint32_t Fields[GpuOutFieldCount] = {
-		SemFlags,
-		SemPosX, SemPosY, SemPosZ,
-		SemRotQx, SemRotQy, SemRotQz, SemRotQw,
-		SemScaleX, SemScaleY, SemScaleZ,
-		SemColorR, SemColorG, SemColorB, SemColorA,
-		SemMeshID,
-	};
+	FrameData->SkinMatrixAddr           = Skinning.GetSkinMatrixAddr();
+	FrameData->SkeletalListAddr         = Skinning.GetSkeletalListAddr();
+	FrameData->SkeletalIdxByEntityAddr  = Skinning.GetSkeletalIdxByEntityAddr();
+	FrameData->GpuBoneDataAddr          = SkeletonManager::Get().GetBoneDataAddr();
+	FrameData->GpuBoneParentAddr       = SkeletonManager::Get().GetBoneParentAddr();
+	FrameData->AnimTrackAddr           = AnimationManager::Get().GetTrackBufferAddr();
+	FrameData->AnimKeyframeAddr        = AnimationManager::Get().GetKeyframeBufferAddr();
+	FrameData->SkinWeightAddr           = Meshes.GetSkinWeightAddr();
+	FrameData->SkinSlotTableAddr        = Meshes.GetSkinSlotTableAddr();
+	FrameData->SkeletalDispatchArgsAddr = Skinning.GetSkeletalDispatchArgsAddr();
+	// FieldCount includes GpuTotalFieldCount slab fields + 1 always-on EntityCacheIdx.
+	constexpr uint32_t kFieldCount = GpuTotalFieldCount + 1;
+	FrameData->FieldCount           = kFieldCount;
 
 	const VkDeviceSize fieldStride = static_cast<VkDeviceSize>(ConfigPtr->MAX_CACHED_ENTITIES) * sizeof(float);
 	const uint64_t slabBase        = FieldSlabs[CurrentFieldSlab].DeviceAddr;
 	const uint64_t prevSlabBase    = FieldSlabs[PrevFieldSlab].DeviceAddr;
 
-	for (uint32_t f = 0; f < GpuOutFieldCount; ++f)
+	for (uint32_t f = 0; f < kFieldCount; ++f)
 	{
-		FrameData->CurrFieldAddrs[f]   = slabBase + static_cast<uint64_t>(f) * fieldStride;
-		FrameData->PrevFieldAddrs[f]   = prevSlabBase + static_cast<uint64_t>(f) * fieldStride;
-		FrameData->FieldSemantics[f]   = Fields[f];
+		const GpuSlabFieldDesc& desc  = SlabFieldDescs[f];
+		FrameData->FieldSemantics[f]   = desc.sem;
 		FrameData->FieldElementSize[f] = sizeof(float);
+		if (desc.kind == GpuSlabKind::EntityIndex)
+		{
+			// No slab backing — scatter writes from loop index; leave addrs as 0.
+			FrameData->CurrFieldAddrs[f] = 0;
+			FrameData->PrevFieldAddrs[f] = 0;
+		}
+		else
+		{
+			FrameData->CurrFieldAddrs[f] = slabBase + static_cast<uint64_t>(f) * fieldStride;
+			FrameData->PrevFieldAddrs[f] = prevSlabBase + static_cast<uint64_t>(f) * fieldStride;
+		}
 	}
 
 	GPUActiveFrame = CurrentFieldSlab;
@@ -1388,8 +1464,35 @@ void UploadSimFloatBuffer(const void* cpuData, void* gpuBuffer, size_t count)
 }
 
 template <typename Derived>
+void RendererCore<Derived>::FlushPendingSlabUpload()
+{
+	if (!bSlabUploadPending) return;
+
+	TNX_ZONE_MEDIUM_NC("Slab_UploadFlush", TNX_COLOR_RENDERING)
+	TrinyxJobs::WaitForCounter(&SlabUploadCounter, TrinyxJobs::Queue::Render);
+
+	std::memset(DirtyPlanes[PendingSlabIdx], 0, DirtyWordCount * sizeof(uint64_t));
+
+	RegistryPtr->RenderAck.store(PendingRenderAckFrame, std::memory_order_release);
+	RegistryPtr->RenderHasAcked = true;
+
+	ComponentCacheBase* volatileCache = RegistryPtr->GetVolatileCache();
+	volatileCache->UnlockFrameRead(PendingVolatileFrameLock);
+#ifdef TNX_ENABLE_ROLLBACK
+	ComponentCacheBase* temporalCache = RegistryPtr->GetTemporalCache();
+	temporalCache->UnlockFrameRead(PendingTemporalFrameLock);
+#endif
+
+	bSlabUploadPending = false;
+}
+
+template <typename Derived>
 void RendererCore<Derived>::WriteToFrameSlab()
 {
+	// Safety flush: if RenderFrame returned early before flushing last frame's upload,
+	// drain it now before we overwrite SlabUploadFields and reuse SlabUploadCounter.
+	FlushPendingSlabUpload();
+
 	uint32_t nextSlab = CurrentFieldSlab;
 	do
 	{
@@ -1423,60 +1526,27 @@ void RendererCore<Derived>::WriteToFrameSlab()
 	TemporalFrameHeader* temporalHdr = temporalCache->GetFrameHeader(LastTemporalFrame);
 	TemporalFrameHeader* volatileHdr = volatileCache->GetFrameHeader(LastVolatileFrame);
 
-	const CacheSlotID transformSlot      = CTransform<>::StaticTemporalIndex();
-	const CacheSlotID scaleSlot          = CScale<>::StaticTemporalIndex();
-	const CacheSlotID colorSlot          = CColor<>::StaticTemporalIndex();
-	const CacheSlotID flagsSlot          = CacheSlotMeta<>::StaticTemporalIndex();
-	const CacheSlotID meshRefSlot        = CMeshRef<>::StaticTemporalIndex();
-	const CacheSlotID visualTransformSlot = CVisualTransform<>::StaticTemporalIndex();
-
-	// SimFloat fields go through .ToFloat() on Fixed32 builds; RawU32 fields are
-	// 4-byte-aligned scalar data (flags, mesh handle) that must be copied verbatim.
-	// The kind is a per-field constant so the branch lives outside the entity loop.
-	enum class GpuFieldKind : uint8_t { SimFloat, RawU32 };
-
-	struct FieldDescription
+	auto resolveField = [&](const GpuSlabFieldDesc& desc)
+		-> std::pair<ComponentCacheBase*, TemporalFrameHeader*>
 	{
-		ComponentCacheBase* cache;
-		TemporalFrameHeader* hdr;
-		CacheSlotID slot;
-		size_t fi;
-		uint32_t sem;
-		GpuFieldKind kind;
-	};
-	const FieldDescription fieldDescs[GpuOutFieldCount] = {
-		{temporalCache, temporalHdr, flagsSlot,           0, SemFlags,  GpuFieldKind::RawU32},
-		{volatileCache, volatileHdr, visualTransformSlot, 0, SemPosX,   GpuFieldKind::SimFloat},
-		{volatileCache, volatileHdr, visualTransformSlot, 1, SemPosY,   GpuFieldKind::SimFloat},
-		{volatileCache, volatileHdr, visualTransformSlot, 2, SemPosZ,   GpuFieldKind::SimFloat},
-		{temporalCache, temporalHdr, transformSlot,       3, SemRotQx,  GpuFieldKind::SimFloat},
-		{temporalCache, temporalHdr, transformSlot,       4, SemRotQy,  GpuFieldKind::SimFloat},
-		{temporalCache, temporalHdr, transformSlot,       5, SemRotQz,  GpuFieldKind::SimFloat},
-		{temporalCache, temporalHdr, transformSlot,       6, SemRotQw,  GpuFieldKind::SimFloat},
-		{volatileCache, volatileHdr, scaleSlot,           0, SemScaleX, GpuFieldKind::SimFloat},
-		{volatileCache, volatileHdr, scaleSlot,           1, SemScaleY, GpuFieldKind::SimFloat},
-		{volatileCache, volatileHdr, scaleSlot,           2, SemScaleZ, GpuFieldKind::SimFloat},
-		{volatileCache, volatileHdr, colorSlot,           0, SemColorR, GpuFieldKind::SimFloat},
-		{volatileCache, volatileHdr, colorSlot,           1, SemColorG, GpuFieldKind::SimFloat},
-		{volatileCache, volatileHdr, colorSlot,           2, SemColorB, GpuFieldKind::SimFloat},
-		{volatileCache, volatileHdr, colorSlot,           3, SemColorA, GpuFieldKind::SimFloat},
-		{volatileCache, volatileHdr, meshRefSlot,         0, SemMeshID, GpuFieldKind::RawU32},
+		if (desc.tier == GpuSlabTier::Temporal)
+			return {temporalCache, temporalHdr};
+		return {volatileCache, volatileHdr};
 	};
 
 	// ── Step 1: Scan slab Flags for dirty bit (bit 30) → build current dirty set ──
 	const auto* flagsSrc = static_cast<const int32_t*>(
-		temporalCache->GetFieldData(temporalHdr, flagsSlot, 0));
+		temporalCache->GetFieldData(temporalHdr, static_cast<uint8_t>(SlabFieldDescs[0].slot), 0));
 
+	uint32_t dirtyEntityCount = 0;
 	if (flagsSrc)
 	{
 		constexpr int32_t dirtyBit = static_cast<int32_t>(TemporalFlagBits::Dirty);
-		const uint32_t entityCount = (ConfigPtr->MAX_RENDERABLE_ENTITIES + 7) & ~7u; // round up to SIMD width
+		const uint32_t entityCount = (ConfigPtr->MAX_RENDERABLE_ENTITIES + 7) & ~7u;
 
-		// Scan flags → build DirtySnapshot, then OR into all planes
 		std::memset(DirtySnapshot, 0, DirtyWordCount * sizeof(uint64_t));
 		for (uint32_t i = 0; i < entityCount; i += 8)
 		{
-			// Load 8 flags, test bit 30, pack to bitmask
 			__m256i flags = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(&flagsSrc[i]));
 			__m256i test  = _mm256_and_si256(flags, _mm256_set1_epi32(dirtyBit));
 			int mask      = _mm256_movemask_ps(_mm256_castsi256_ps(
@@ -1485,118 +1555,219 @@ void RendererCore<Derived>::WriteToFrameSlab()
 			if (mask)
 			{
 				DirtySnapshot[i / 64] |= static_cast<uint64_t>(mask) << (i % 64);
+				dirtyEntityCount += TNX_POPCOUNT32(mask);
 			}
 		}
 
-		// Fan out: OR snapshot into ALL 5 GPU slab bitplanes
 		for (uint32_t s = 0; s < InstanceBufferCount; ++s)
-		{
 			for (uint32_t w = 0; w < DirtyWordCount; ++w)
-			{
 				DirtyPlanes[s][w] |= DirtySnapshot[w];
-			}
-		}
 	}
 
-	// ── Step 2: Upload dirty entities for this slab, or full copy on first write ──
+	// ── Step 2: Upload dirty entities ──
 	const bool fullCopy = FirstSlabWrite[nextSlab];
 	uint64_t* plane     = DirtyPlanes[nextSlab];
 
-	TrinyxJobs::JobCounter GPUTransferCounter;
+	// Shared immediate-cleanup path for inline and full-copy: clears plane, publishes RenderAck, unlocks frames.
+	auto flushImmediate = [&]()
+	{
+		std::memset(plane, 0, DirtyWordCount * sizeof(uint64_t));
+		RegistryPtr->RenderAck.store(temporalHdr->FrameNumber, std::memory_order_release);
+		RegistryPtr->RenderHasAcked = true;
+		volatileCache->UnlockFrameRead(LastVolatileFrame);
+#ifdef TNX_ENABLE_ROLLBACK
+		temporalCache->UnlockFrameRead(LastTemporalFrame);
+#endif
+	};
 
 	if (fullCopy) [[unlikely]]
 	{
-		// First time writing to this slab — full copy, all fields
-		for (uint32_t f = 0; f < GpuOutFieldCount; ++f)
+		// First write to this slab — full copy of all fields in parallel, then wait immediately.
+		// This path is rare (5× per lifetime, once per slab slot); latency doesn't matter here.
+		TrinyxJobs::JobCounter counter;
+		for (uint32_t f = 0; f < GpuTotalFieldCount; ++f)
 		{
-			const FieldDescription& fd = fieldDescs[f];
-			const void* src            = fd.cache->GetFieldData(fd.hdr, fd.slot, fd.fi);
-			uint8_t* dst               = slabPtr + static_cast<size_t>(f) * static_cast<size_t>(fieldStride);
-			const GpuFieldKind kind    = fd.kind;
-			TrinyxJobs::Dispatch([src, dst, fieldStride, kind](uint32_t)
+			const GpuSlabFieldDesc& desc = SlabFieldDescs[f];
+			if (desc.kind == GpuSlabKind::EntityIndex) continue;
+			auto [cache, hdr]            = resolveField(desc);
+			const void* src              = cache->GetFieldData(hdr, static_cast<uint8_t>(desc.slot), desc.fi);
+			uint8_t* dst                 = slabPtr + static_cast<size_t>(f) * static_cast<size_t>(fieldStride);
+			const bool isSF              = (desc.kind == GpuSlabKind::SimFloat);
+			TrinyxJobs::DispatchNamed("Slab_FullCopy", [src, dst, fieldStride, isSF](uint32_t)
 			{
-				if (kind == GpuFieldKind::SimFloat)
-				{
-					UploadSimFloatBuffer(src, dst, fieldStride);
-				}
-				else // RawU32 — same width as float on the GPU side, copy verbatim.
+				if (isSF) UploadSimFloatBuffer(src, dst, fieldStride);
+				else
 				{
 					if (src) std::memcpy(dst, src, static_cast<size_t>(fieldStride));
 					else std::memset(dst, 0, static_cast<size_t>(fieldStride));
 				}
-			}, &GPUTransferCounter, TrinyxJobs::Queue::Render);
+			}, &counter, TrinyxJobs::Queue::Render);
 		}
 		FirstSlabWrite[nextSlab] = false;
+		TrinyxJobs::WaitForCounter(&counter, TrinyxJobs::Queue::Render);
+		flushImmediate();
+		return;
+	}
+
+	const auto inlineThreshold    = static_cast<uint32_t>(ConfigPtr->GetSlabUploadInlineThreshold());
+	const auto singleJobThreshold = static_cast<uint32_t>(ConfigPtr->GetSlabUploadSingleJobThreshold());
+
+	if (dirtyEntityCount < inlineThreshold)
+	{
+		// Tier 1: inline — job dispatch overhead exceeds upload work at low entity counts.
+		for (uint32_t f = 0; f < GpuTotalFieldCount; ++f)
+		{
+			const GpuSlabFieldDesc& desc = SlabFieldDescs[f];
+			if (desc.kind == GpuSlabKind::EntityIndex) continue;
+			auto [cache, hdr]            = resolveField(desc);
+			const auto* src              = static_cast<const uint8_t*>(
+				cache->GetFieldData(hdr, static_cast<uint8_t>(desc.slot), desc.fi));
+			uint8_t* dst = slabPtr + static_cast<size_t>(f) * static_cast<size_t>(fieldStride);
+			if (!src) continue;
+
+			if (desc.kind == GpuSlabKind::SimFloat)
+			{
+				const SimFloat* ssrc = static_cast<const SimFloat*>(static_cast<const void*>(src));
+				float* fdst          = reinterpret_cast<float*>(dst);
+				for (uint32_t w = 0; w < DirtyWordCount; ++w)
+				{
+					uint64_t bits = plane[w];
+					while (bits)
+					{
+						const uint32_t idx = w * 64 + TNX_CTZ64(bits);
+						fdst[idx]          = ssrc[idx].ToFloat();
+						bits              &= bits - 1;
+					}
+				}
+			}
+			else
+			{
+				const uint32_t* usrc = reinterpret_cast<const uint32_t*>(src);
+				uint32_t* udst       = reinterpret_cast<uint32_t*>(dst);
+				for (uint32_t w = 0; w < DirtyWordCount; ++w)
+				{
+					uint64_t bits = plane[w];
+					while (bits)
+					{
+						const uint32_t idx = w * 64 + TNX_CTZ64(bits);
+						udst[idx]          = usrc[idx];
+						bits              &= bits - 1;
+					}
+				}
+			}
+		}
+		flushImmediate();
+		return;
+	}
+
+	// Tiers 2 & 3: job dispatch. Populate SlabUploadFields once; jobs read it while render
+	// thread overlaps with command buffer recording. FlushPendingSlabUpload() waits before submit.
+	for (uint32_t f = 0; f < GpuTotalFieldCount; ++f)
+	{
+		const GpuSlabFieldDesc& desc = SlabFieldDescs[f];
+		if (desc.kind == GpuSlabKind::EntityIndex) { SlabUploadFields[f].src = nullptr; continue; }
+		auto [cache, hdr]       = resolveField(desc);
+		SlabUploadFields[f].src  = static_cast<const uint8_t*>(
+			cache->GetFieldData(hdr, static_cast<uint8_t>(desc.slot), desc.fi));
+		SlabUploadFields[f].dst  = slabPtr + static_cast<size_t>(f) * static_cast<size_t>(fieldStride);
+		SlabUploadFields[f].kind = desc.kind;
+	}
+
+	const uint64_t* capturedPlane = plane;
+	const uint32_t  capturedWords = DirtyWordCount;
+
+	if (dirtyEntityCount < singleJobThreshold)
+	{
+		// Tier 2: single job — all fields in one dispatch, eliminates 34/35 of the dispatch overhead.
+		TrinyxJobs::DispatchNamed("Slab_SingleJob", [this, capturedPlane, capturedWords](uint32_t)
+		{
+			for (uint32_t f = 0; f < GpuTotalFieldCount; ++f)
+			{
+				const auto& info = SlabUploadFields[f];
+				if (!info.src) continue;
+				if (info.kind == GpuSlabKind::SimFloat)
+				{
+					const SimFloat* ssrc = static_cast<const SimFloat*>(static_cast<const void*>(info.src));
+					float* fdst          = reinterpret_cast<float*>(info.dst);
+					for (uint32_t w = 0; w < capturedWords; ++w)
+					{
+						uint64_t bits = capturedPlane[w];
+						while (bits)
+						{
+							const uint32_t idx = w * 64 + TNX_CTZ64(bits);
+							fdst[idx]          = ssrc[idx].ToFloat();
+							bits              &= bits - 1;
+						}
+					}
+				}
+				else
+				{
+					const uint32_t* usrc = reinterpret_cast<const uint32_t*>(info.src);
+					uint32_t* udst       = reinterpret_cast<uint32_t*>(info.dst);
+					for (uint32_t w = 0; w < capturedWords; ++w)
+					{
+						uint64_t bits = capturedPlane[w];
+						while (bits)
+						{
+							const uint32_t idx = w * 64 + TNX_CTZ64(bits);
+							udst[idx]          = usrc[idx];
+							bits              &= bits - 1;
+						}
+					}
+				}
+			}
+		}, &SlabUploadCounter, TrinyxJobs::Queue::Render);
 	}
 	else
 	{
-		// Selective upload: one job per field, each scatters only dirty entities.
-		// All jobs read the same bitplane (immutable until cleared after wait).
-		// The kind branch lives outside the per-entity loop — predicts perfectly
-		// (constant per field) and lets RawU32 fields bypass the .ToFloat() path.
-		for (uint32_t f = 0; f < GpuOutFieldCount; ++f)
+		// Tier 3: one job per field — maximum parallel throughput for large dirty sets.
+		for (uint32_t f = 0; f < GpuTotalFieldCount; ++f)
 		{
-			const FieldDescription& fd = fieldDescs[f];
-			const auto* src            = static_cast<const uint8_t*>(fd.cache->GetFieldData(fd.hdr, fd.slot, fd.fi));
-			uint8_t* dst               = slabPtr + static_cast<size_t>(f) * static_cast<size_t>(fieldStride);
-
-			if (!src) continue;
-
-			const uint64_t* dirtyPlane = plane;
-			const uint32_t wordCount   = DirtyWordCount;
-			const GpuFieldKind kind    = fd.kind;
-
-			TrinyxJobs::Dispatch([src, dst, dirtyPlane, wordCount, kind](uint32_t)
+			const SlabFieldUploadInfo info = SlabUploadFields[f]; // copy; lambda owns it
+			if (!info.src) continue;
+			TrinyxJobs::DispatchNamed("Slab_FieldUpload", [info, capturedPlane, capturedWords](uint32_t)
 			{
-				if (kind == GpuFieldKind::SimFloat)
+				if (info.kind == GpuSlabKind::SimFloat)
 				{
-					const SimFloat* ssrc = static_cast<const SimFloat*>(static_cast<const void*>(src));
-					float* fdst          = reinterpret_cast<float*>(dst);
-					for (uint32_t w = 0; w < wordCount; ++w)
+					const SimFloat* ssrc = static_cast<const SimFloat*>(static_cast<const void*>(info.src));
+					float* fdst          = reinterpret_cast<float*>(info.dst);
+					for (uint32_t w = 0; w < capturedWords; ++w)
 					{
-						uint64_t bits = dirtyPlane[w];
+						uint64_t bits = capturedPlane[w];
 						while (bits)
 						{
-							uint32_t bit = TNX_CTZ64(bits);
-							uint32_t idx = w * 64 + bit;
-							fdst[idx]    = ssrc[idx].ToFloat();
-							bits         &= bits - 1;
+							const uint32_t idx = w * 64 + TNX_CTZ64(bits);
+							fdst[idx]          = ssrc[idx].ToFloat();
+							bits              &= bits - 1;
 						}
 					}
 				}
-				else // RawU32 — copy 4 bytes per dirty entity, no conversion.
+				else
 				{
-					const uint32_t* usrc = reinterpret_cast<const uint32_t*>(src);
-					uint32_t* udst       = reinterpret_cast<uint32_t*>(dst);
-					for (uint32_t w = 0; w < wordCount; ++w)
+					const uint32_t* usrc = reinterpret_cast<const uint32_t*>(info.src);
+					uint32_t* udst       = reinterpret_cast<uint32_t*>(info.dst);
+					for (uint32_t w = 0; w < capturedWords; ++w)
 					{
-						uint64_t bits = dirtyPlane[w];
+						uint64_t bits = capturedPlane[w];
 						while (bits)
 						{
-							uint32_t bit = TNX_CTZ64(bits);
-							uint32_t idx = w * 64 + bit;
-							udst[idx]    = usrc[idx];
-							bits         &= bits - 1;
+							const uint32_t idx = w * 64 + TNX_CTZ64(bits);
+							udst[idx]          = usrc[idx];
+							bits              &= bits - 1;
 						}
 					}
 				}
-			}, &GPUTransferCounter, TrinyxJobs::Queue::Render);
+			}, &SlabUploadCounter, TrinyxJobs::Queue::Render);
 		}
 	}
 
-	TrinyxJobs::WaitForCounter(&GPUTransferCounter, TrinyxJobs::Queue::Render);
-
-	// ── Step 3: Clear this slab's dirty plane — it's now up to date ──
-	std::memset(plane, 0, DirtyWordCount * sizeof(uint64_t));
-
-	// ── Step 4: Publish RenderAck so logic knows we consumed this frame ──
-	RegistryPtr->RenderAck.store(temporalHdr->FrameNumber, std::memory_order_release);
-	RegistryPtr->RenderHasAcked = true;
-
-	volatileCache->UnlockFrameRead(LastVolatileFrame);
-#ifdef TNX_ENABLE_ROLLBACK
-	temporalCache->UnlockFrameRead(LastTemporalFrame);
-#endif
+	// Defer cleanup — FlushPendingSlabUpload() waits for jobs before vkQueueSubmit,
+	// overlapping upload with command buffer recording on the render thread.
+	bSlabUploadPending        = true;
+	PendingSlabIdx            = nextSlab;
+	PendingRenderAckFrame     = temporalHdr->FrameNumber;
+	PendingVolatileFrameLock  = LastVolatileFrame;
+	PendingTemporalFrameLock  = LastTemporalFrame;
 }
 
 // -----------------------------------------------------------------------

@@ -5,8 +5,9 @@
 #include "AssetRegistry.h"
 #include "AssetTypes.h"
 #include "GpuFrameData.h"
-#include "SkinWeightsAsset.h"
+#include "TrinyxJobs.h"
 #include "VulkanMemory.h"
+#include "VertexFormat.h"
 
 struct MeshAsset;
 
@@ -70,6 +71,15 @@ public:
 		uint32_t vertexCount  = 0;
 	};
 
+	// GPU-side skin slot info — skinning shader reads this to locate weights for a mesh.
+	struct GpuSkinSlotInfo
+	{
+		uint32_t vertexOffset = 0; // first SkinWeights entry in SkinWeightMegaBuffer
+		uint32_t vertexCount  = 0;
+	};
+
+	static_assert(sizeof(GpuSkinSlotInfo) == 8, "GpuSkinSlotInfo must be 8 bytes");
+
 	bool Initialize(VulkanMemory* vkMem);
 
 	/// Load a MeshAsset — copies vertex/index data into the mega-buffers,
@@ -89,17 +99,18 @@ public:
 	/// Load a built-in capsule mesh (two hemispheres + cylinder body).
 	uint32_t LoadBuiltinCapsule(float radius, float halfHeight, uint32_t segments);
 
-	/// Load skin weights associated with an already-loaded mesh slot.
-	/// Returns the same meshSlot on success, or UINT32_MAX on failure.
-	uint32_t LoadSkinWeights(uint32_t meshSlot, const SkinWeightsAsset& skin);
 
 	uint64_t GetVertexBufferAddr()     const { return VertexMegaBuffer.DeviceAddr; }
 	VkBuffer GetIndexBufferHandle()    const { return static_cast<VkBuffer>(IndexMegaBuffer.Buffer); }
 	uint64_t GetMeshTableAddr()        const { return MeshTableBuffer.DeviceAddr; }
 	uint64_t GetSkinWeightAddr()       const { return SkinWeightMegaBuffer.DeviceAddr; }
+	uint64_t GetSkinSlotTableAddr()    const { return SkinSlotTableBuffer.DeviceAddr; }
 	const MeshSlot&        GetSlot(uint32_t id)       const { return Slots[id]; }
 	const SkinWeightSlot&  GetSkinSlot(uint32_t id)   const { return SkinSlots[id]; }
 	uint32_t GetMeshCount() const { return MeshCount; }
+
+	void FlushPendingUploads() { TrinyxJobs::WaitForCounter(&GpuUploadCounter, TrinyxJobs::Queue::Render); }
+	bool IsUploadComplete()    const { return GpuUploadCounter.Value.load(std::memory_order_acquire) == 0; }
 
 	/// Find a mesh slot by TnxName (primary API). Returns UINT32_MAX if not registered.
 	uint32_t FindSlotByTName(TnxName name) const
@@ -134,15 +145,16 @@ public:
 	AssetID GetSlotID(uint32_t slot) const { return SlotIDs[slot]; }
 
 private:
-	/// Copy asset data into mega-buffers, fill the slot, and update AssetRegistry Data/State.
-	/// Does NOT call Register() — caller is responsible for registration.
 	uint32_t CommitToSlot(const MeshAsset& asset, AssetID id);
+	uint32_t LoadSkinWeights(uint32_t meshSlot, const std::vector<SkinWeights>& weights);
 
 	VulkanBuffer VertexMegaBuffer;
 	VulkanBuffer IndexMegaBuffer;
 	VulkanBuffer MeshTableBuffer;      // GpuMeshInfo[MAX_MESH_SLOTS], PersistentMapped + BDA
 	VulkanBuffer SkinWeightMegaBuffer; // SkinWeights[MAX_TOTAL_SKIN_WEIGHTS], PersistentMapped + BDA
+	VulkanBuffer SkinSlotTableBuffer;  // GpuSkinSlotInfo[MAX_MESH_SLOTS], PersistentMapped + BDA
 
+	TrinyxJobs::JobCounter GpuUploadCounter;
 	uint32_t NextVertexOffset  = 0; // in vertices (not bytes)
 	uint32_t NextIndexOffset   = 0; // in indices  (not bytes)
 	uint32_t NextSkinOffset    = 0; // in SkinWeights entries (not bytes)

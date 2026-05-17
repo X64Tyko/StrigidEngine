@@ -52,6 +52,17 @@ option(TNX_ENABLE_NETWORK "Enable networking (GameNetworkingSockets + Protobuf).
 set(TNX_NET_MODEL "Client" CACHE STRING "Networking role: PIE | Server | Client")
 set_property(CACHE TNX_NET_MODEL PROPERTY STRINGS "PIE" "Server" "Client")
 option(TNX_TESTING "Enable test harnesses (rollback determinism test, etc.). Debug/profiling tool." OFF)
+option(TNX_ENGINE_OPTIMIZED
+    "Build the Trinyx engine library with RelWithDebInfo-equivalent flags even in a Debug build. \
+Testbed/Playground keep full Debug flags so game-layer code (Constructs, GameMode, BrainStem) \
+remains fully debuggable. Jolt and other third-party deps are NOT affected — use RelWithDebInfo \
+for the whole build if physics perf matters during testing."
+    OFF)
+if(TNX_ENGINE_OPTIMIZED)
+    message(STATUS "Engine optimization: ON in Debug builds (Trinyx=RelWithDebInfo, game targets=Debug)")
+else()
+    message(STATUS "Engine optimization: follows CMAKE_BUILD_TYPE for all targets")
+endif()
 option(TNX_GPU_PICKING "Enable GPU-based entity picking (click-to-select). Requires editor." OFF)
 option(TNX_GPU_PICKING_FAST "Enable fast GPU picking mode (picks every frame at mouse cursor). Requires TNX_GPU_PICKING." OFF)
 option(TNX_HEADLESS "Headless build: no window, no GPU/Vulkan. Implied by TNX_NET_MODEL=Server. Also used standalone for CI/CD." OFF)

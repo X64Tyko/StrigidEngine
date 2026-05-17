@@ -15,12 +15,17 @@
 // is always at field index 0 (convention enforced by FillGpuFrameData).
 // ---------------------------------------------------------------------------
 
-constexpr uint32_t MaxGpuFields     = 128;
-constexpr uint32_t MaxMeshSlots     = 256;
-constexpr uint32_t GpuOutFieldCount = 16; // Flags + PosXYZ(3) + RotQxyzw(4) + ScaleXYZ(3) + ColorRGBA(4) + MeshID
+constexpr uint32_t MaxGpuFields      = 128;
+constexpr uint32_t MaxMeshSlots      = 256;
+constexpr uint32_t GpuOutFieldCount  = 16; // Flags + PosXYZ(3) + RotQxyzw(4) + ScaleXYZ(3) + ColorRGBA(4) + MeshID
+constexpr uint32_t GpuAnimFieldCount = 19; // SkeletonID + SkinMeshID + CAnimBase(10) + CAnimLayer(8) - StateNodeID(1)
+constexpr uint32_t GpuTotalFieldCount = GpuOutFieldCount + GpuAnimFieldCount; // 35 slab slots total
 
 // GpuFieldSemantic constants — match values in GpuFrameData.slang.
-// SoA slot index for field k = sem - 1.
+// Render output fields (sems 1-16): SoA slot in instance buffer = sem - 1.
+// Entity cache index (sem 17): always-on, written by scatter from entity loop index.
+// Animation slab fields (sems 18-36): live in slab only; scatter skips (sem > GpuOutFieldCount).
+//   Slab slot index = FieldDescription array index f (16..34 for anim fields).
 constexpr uint32_t SemGeneric = 0;
 constexpr uint32_t SemFlags   = 1;
 constexpr uint32_t SemPosX    = 2;
@@ -38,6 +43,28 @@ constexpr uint32_t SemColorG  = 13;
 constexpr uint32_t SemColorB  = 14;
 constexpr uint32_t SemColorA  = 15;
 constexpr uint32_t SemMeshID  = 16;
+// Always-on: scatter writes this to instance slot 16 from entity loop index i.
+constexpr uint32_t SemEntityCacheIdx = 17;
+// Animation slab fields — slab slot = f index in FieldDescriptions (16..34).
+constexpr uint32_t SemSkeletonID          = 18;
+constexpr uint32_t SemSkinMeshID          = 19;
+constexpr uint32_t SemAnimBaseAnimID      = 20;
+constexpr uint32_t SemAnimBlendspaceID    = 21;
+constexpr uint32_t SemAnimBaseTimestamp   = 22;
+constexpr uint32_t SemAnimBlendCoordX     = 23;
+constexpr uint32_t SemAnimBlendCoordY     = 24;
+constexpr uint32_t SemAnimFadeAnimID      = 25;
+constexpr uint32_t SemAnimFadeTimestamp   = 26;
+constexpr uint32_t SemAnimFadeAlpha       = 27;
+constexpr uint32_t SemAnimFlags           = 28;
+constexpr uint32_t SemAnimLayer0AnimID    = 29;
+constexpr uint32_t SemAnimLayer1AnimID    = 30;
+constexpr uint32_t SemAnimLayer0Timestamp = 31;
+constexpr uint32_t SemAnimLayer1Timestamp = 32;
+constexpr uint32_t SemAnimLayer0Alpha     = 33;
+constexpr uint32_t SemAnimLayer1Alpha     = 34;
+constexpr uint32_t SemAnimLayer0Config    = 35;
+constexpr uint32_t SemAnimLayer1Config    = 36;
 
 // GPU-side mesh slot — mirrors MeshManager::MeshSlot for GPU read.
 // 16 bytes, tightly packed for storage buffer access.
@@ -76,19 +103,22 @@ struct GpuFrameData
 	uint64_t MeshTableAddr;                   // offset 152
 	uint32_t MeshCount;                       // offset 160
 	uint32_t _pad0;                           // offset 164
-	// --- Animation / skinning addresses (populated by SkinningPass) ---
-	uint64_t AnimBlendAddr;                   // offset 168 — GpuAnimEntry[MAX_CACHED_ENTITIES] per-frame upload
-	uint64_t GpuBoneDataAddr;                 // offset 176 — GpuBoneData[MAX_TOTAL_BONES]
-	uint64_t AnimTrackAddr;                   // offset 184 — GpuAnimBoneTrack[MAX_TOTAL_BONE_TRACKS]
-	uint64_t AnimKeyframeAddr;                // offset 192 — GpuAnimKeyframe[MAX_TOTAL_KEYFRAMES]
-	uint64_t SkinWeightAddr;                  // offset 200 — SkinWeights[MAX_TOTAL_SKIN_WEIGHTS]
-	uint32_t SkeletalEntityCount;             // offset 208 — entities processed by skinning pass
-	uint32_t _pad_anim;                       // offset 212
-	uint64_t PrevFieldAddrs[MaxGpuFields];   // offset 216
-	uint64_t CurrFieldAddrs[MaxGpuFields];   // offset 1240
-	uint32_t FieldSemantics[MaxGpuFields];   // offset 2264
-	uint32_t FieldElementSize[MaxGpuFields]; // offset 2776
-};                                            // total  3288
+	// --- Skinning / animation GPU addresses ---
+	uint64_t SkinMatrixAddr;                  // offset 168 — float4x4[MAX_SKELETAL_INSTANCES × MAX_BONES_PER_ENTITY]
+	uint64_t SkeletalListAddr;                // offset 176 — uint[MAX_SKELETAL_INSTANCES] compact entity cache indices (GPU-written by scatter)
+	uint64_t SkeletalIdxByEntityAddr;         // offset 184 — uint[MAX_CACHED_ENTITIES] cacheIdx → compact skeletal idx (GPU-written by scatter)
+	uint64_t GpuBoneDataAddr;                 // offset 192 — GpuBoneData[MAX_TOTAL_BONES]
+	uint64_t GpuBoneParentAddr;               // offset 200 — uint32[MAX_TOTAL_BONES] parent bone indices
+	uint64_t AnimTrackAddr;                   // offset 208 — GpuAnimBoneTrack[MAX_TOTAL_BONE_TRACKS]
+	uint64_t AnimKeyframeAddr;                // offset 216 — GpuAnimKeyframe[MAX_TOTAL_KEYFRAMES]
+	uint64_t SkinWeightAddr;                  // offset 224 — SkinWeights[MAX_TOTAL_SKIN_WEIGHTS]
+	uint64_t SkinSlotTableAddr;               // offset 232 — GpuSkinSlotInfo[MAX_MESH_SLOTS]
+	uint64_t SkeletalDispatchArgsAddr;        // offset 240 — VkDispatchIndirectCommand {x=skeletalCount,y=1,z=1}
+	uint64_t PrevFieldAddrs[MaxGpuFields];   // offset 248
+	uint64_t CurrFieldAddrs[MaxGpuFields];   // offset 1272
+	uint32_t FieldSemantics[MaxGpuFields];   // offset 2296
+	uint32_t FieldElementSize[MaxGpuFields]; // offset 2808
+};                                            // total  3320
 
-static_assert(sizeof(GpuFrameData) == 3288,
+static_assert(sizeof(GpuFrameData) == 3320,
 			  "GpuFrameData size mismatch — layout must match GpuFrameData.slang exactly");

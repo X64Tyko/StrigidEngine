@@ -55,6 +55,26 @@ std::string AssetDatabase::NameFromPath(const std::string& path)
 	return fs::path(path).stem().string();
 }
 
+bool AssetDatabase::Remove(AssetID id)
+{
+	for (size_t i = 0; i < Entries.size(); ++i)
+	{
+		if (Entries[i].ID != id) continue;
+
+		std::string absPath = (fs::path(ContentRoot) / Entries[i].Path).string();
+		fs::remove(SidecarPath(absPath)); // best-effort
+
+		PathIndex.erase(Entries[i].Path);
+		for (auto& [path, idx] : PathIndex)
+			if (idx > i) --idx;
+
+		Entries.erase(Entries.begin() + i);
+		AssetRegistry::Get().Unregister(id);
+		return true;
+	}
+	return false;
+}
+
 bool AssetDatabase::Rename(AssetID id, const std::string& newName)
 {
 	for (auto& entry : Entries)

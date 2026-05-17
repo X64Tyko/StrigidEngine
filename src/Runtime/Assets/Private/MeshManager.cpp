@@ -1,10 +1,8 @@
 #include "MeshManager.h"
 #include "AssetRegistry.h"
 #include "MeshAsset.h"
-#include "SkinWeightsAsset.h"
 #include "VertexFormat.h"
 #include "Logger.h"
-
 #include <cmath>
 #include <cstring>
 
@@ -135,6 +133,19 @@ bool MeshManager::Initialize(VulkanMemory* vkMem)
 	}
 	std::memset(SkinWeightMegaBuffer.MappedPtr, 0, MAX_TOTAL_SKIN_WEIGHTS * sizeof(SkinWeights));
 
+	SkinSlotTableBuffer = vkMem->AllocateBuffer(
+		MAX_MESH_SLOTS * sizeof(GpuSkinSlotInfo),
+		VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+		GpuMemoryDomain::PersistentMapped,
+		/*requestDeviceAddress=*/ true);
+
+	if (!SkinSlotTableBuffer.IsValid())
+	{
+		LOG_ENG_ERROR("[MeshManager] Skin slot table buffer allocation failed");
+		return false;
+	}
+	std::memset(SkinSlotTableBuffer.MappedPtr, 0, MAX_MESH_SLOTS * sizeof(GpuSkinSlotInfo));
+
 	LOG_ENG_INFO_F("[MeshManager] Initialized (vertex: %u MB, index: %u MB, skin: %u MB)",
 				   VERTEX_MEGA_BUFFER_SIZE / (1024 * 1024),
 				   INDEX_MEGA_BUFFER_SIZE / (1024 * 1024),
@@ -148,7 +159,7 @@ bool MeshManager::Initialize(VulkanMemory* vkMem)
 // Slots[meshSlot], indexed identically per vertex.
 // -----------------------------------------------------------------------
 
-uint32_t MeshManager::LoadSkinWeights(uint32_t meshSlot, const SkinWeightsAsset& skin)
+uint32_t MeshManager::LoadSkinWeights(uint32_t meshSlot, const std::vector<SkinWeights>& weights)
 {
 	if (meshSlot == 0 || meshSlot >= MeshCount)
 	{
@@ -156,20 +167,29 @@ uint32_t MeshManager::LoadSkinWeights(uint32_t meshSlot, const SkinWeightsAsset&
 		return UINT32_MAX;
 	}
 
-	const uint32_t count = static_cast<uint32_t>(skin.Weights.size());
-	if (NextSkinOffset + count > MAX_TOTAL_SKIN_WEIGHTS)
+	const uint32_t count      = static_cast<uint32_t>(weights.size());
+	const uint32_t vertOffset = static_cast<uint32_t>(Slots[meshSlot].VertexOffset);
+
+	if (vertOffset + count > MAX_TOTAL_SKIN_WEIGHTS)
 	{
 		LOG_ENG_ERROR("[MeshManager] Skin weight buffer overflow");
 		return UINT32_MAX;
 	}
 
-	auto* dst = static_cast<SkinWeights*>(SkinWeightMegaBuffer.MappedPtr) + NextSkinOffset;
-	std::memcpy(dst, skin.Weights.data(), count * sizeof(SkinWeights));
-
-	SkinSlots[meshSlot].vertexOffset = NextSkinOffset;
+	// Skin weights are parallel to the vertex buffer — store at the same offset as the mesh's
+	// vertices so the vertex shader can index by gl_VertexIndex without an extra lookup.
+	SkinSlots[meshSlot].vertexOffset = vertOffset;
 	SkinSlots[meshSlot].vertexCount  = count;
 
-	NextSkinOffset += count;
+	auto* weightDst     = static_cast<SkinWeights*>(SkinWeightMegaBuffer.MappedPtr) + vertOffset;
+	auto* skinSlotTable = static_cast<GpuSkinSlotInfo*>(SkinSlotTableBuffer.MappedPtr);
+
+	// TODO: blocks the calling thread — true async needs a staging arena.
+	std::memcpy(weightDst, weights.data(), static_cast<size_t>(count) * sizeof(SkinWeights));
+
+	// Skin slot table is PersistentMapped — write directly on the calling thread.
+	skinSlotTable[meshSlot].vertexOffset = SkinSlots[meshSlot].vertexOffset;
+	skinSlotTable[meshSlot].vertexCount  = SkinSlots[meshSlot].vertexCount;
 
 	LOG_ENG_INFO_F("[MeshManager] Loaded skin weights for mesh slot %u (%u vertices)",
 				   meshSlot, count);
@@ -203,19 +223,11 @@ uint32_t MeshManager::CommitToSlot(const MeshAsset& asset, AssetID id)
 		return UINT32_MAX;
 	}
 
-	auto* vertDst = static_cast<uint8_t*>(VertexMegaBuffer.MappedPtr)
-		+ NextVertexOffset * sizeof(Vertex);
-	auto* idxDst = static_cast<uint8_t*>(IndexMegaBuffer.MappedPtr)
-		+ NextIndexOffset * sizeof(uint32_t);
-
-	std::memcpy(vertDst, asset.Vertices.data(), vertBytes);
-	std::memcpy(idxDst, asset.Indices.data(), indexBytes);
-
 	uint32_t slotID   = MeshCount++;
 	SlotIDs[slotID]   = id;
 
-	// Claim: register slot → UUID mapping immediately so CheckinBySlot can find
-	// a pending checkout even if the entity is despawned before data is ready.
+	// Register slot → UUID mapping immediately so CheckinBySlot can resolve a
+	// despawn that arrives before the upload job fires OnLoaded.
 	if (id.IsValid()) AssetRegistry::Get().RegisterSlot(AssetType::StaticMesh, slotID, id);
 
 	MeshSlot& slot    = Slots[slotID];
@@ -225,14 +237,22 @@ uint32_t MeshManager::CommitToSlot(const MeshAsset& asset, AssetID id)
 	std::memcpy(slot.AABBMin, asset.AABBMin, sizeof(float) * 3);
 	std::memcpy(slot.AABBMax, asset.AABBMax, sizeof(float) * 3);
 
-	auto* gpuTable                = static_cast<GpuMeshInfo*>(MeshTableBuffer.MappedPtr);
+	auto* vertDst  = static_cast<uint8_t*>(VertexMegaBuffer.MappedPtr) + NextVertexOffset * sizeof(Vertex);
+	auto* idxDst   = static_cast<uint8_t*>(IndexMegaBuffer.MappedPtr)  + NextIndexOffset  * sizeof(uint32_t);
+	auto* gpuTable = static_cast<GpuMeshInfo*>(MeshTableBuffer.MappedPtr);
+
+	// TODO: these copies block the calling thread — true async loading needs a staging
+	// arena so the job owns the source data without a shared_ptr.
+	std::memcpy(vertDst, asset.Vertices.data(), vertBytes);
+	std::memcpy(idxDst,  asset.Indices.data(),  indexBytes);
+	NextVertexOffset += static_cast<uint32_t>(asset.Vertices.size());
+	NextIndexOffset  += static_cast<uint32_t>(asset.Indices.size());
+
+	// GPU table is PersistentMapped — write directly on the calling thread.
 	gpuTable[slotID].FirstIndex   = slot.FirstIndex;
 	gpuTable[slotID].IndexCount   = slot.IndexCount;
 	gpuTable[slotID].VertexOffset = slot.VertexOffset;
 	gpuTable[slotID]._pad         = 0;
-
-	NextVertexOffset += static_cast<uint32_t>(asset.Vertices.size());
-	NextIndexOffset  += static_cast<uint32_t>(asset.Indices.size());
 
 	if (id.IsValid())
 	{
@@ -244,6 +264,9 @@ uint32_t MeshManager::CommitToSlot(const MeshAsset& asset, AssetID id)
 			entry->OnLoaded.Reset();
 		}
 	}
+
+	if (asset.IsSkinned())
+		LoadSkinWeights(slotID, asset.Skin);
 
 	return slotID;
 }

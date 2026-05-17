@@ -2,8 +2,10 @@
 #include "AssetRegistry.h"
 #include "SkeletonAsset.h"
 #include "Logger.h"
+#include "TrinyxJobs.h"
 
 #include <cstring>
+
 
 // -----------------------------------------------------------------------
 // Initialize
@@ -25,6 +27,21 @@ bool SkeletonManager::Initialize(VulkanMemory* vkMem)
 
 	std::memset(BoneDataBuffer.MappedPtr, 0, MAX_TOTAL_BONES * sizeof(GpuBoneData));
 
+	BoneParentBuffer = vkMem->AllocateBuffer(
+		MAX_TOTAL_BONES * sizeof(uint32_t),
+		VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+		GpuMemoryDomain::PersistentMapped,
+		/*requestDeviceAddress=*/ true);
+
+	if (!BoneParentBuffer.IsValid())
+	{
+		LOG_ENG_ERROR("[SkeletonManager] Bone parent buffer allocation failed");
+		return false;
+	}
+
+	// 0xFFFFFFFF = root (no parent) — memset 0xFF initializes all entries to UINT32_MAX.
+	std::memset(BoneParentBuffer.MappedPtr, 0xFF, MAX_TOTAL_BONES * sizeof(uint32_t));
+
 	LOG_ENG_INFO_F("[SkeletonManager] Initialized (max bones: %u, buffer: %.1f MB)",
 				   MAX_TOTAL_BONES,
 				   static_cast<float>(MAX_TOTAL_BONES * sizeof(GpuBoneData)) / (1024.f * 1024.f));
@@ -38,6 +55,7 @@ bool SkeletonManager::Initialize(VulkanMemory* vkMem)
 void SkeletonManager::Shutdown()
 {
 	BoneDataBuffer.Free();
+	BoneParentBuffer.Free();
 }
 
 // -----------------------------------------------------------------------
@@ -67,28 +85,37 @@ uint32_t SkeletonManager::CommitToSlot(const SkeletonAsset& asset, AssetID id)
 	Slots[slotID].boneOffset = NextBoneOffset;
 	Slots[slotID].boneCount  = asset.boneCount;
 
-	// Copy inverse bind poses to CPU BoneData shadow and GPU buffer.
-	auto* gpuDst = static_cast<GpuBoneData*>(BoneDataBuffer.MappedPtr) + NextBoneOffset;
+	// Fill CPU shadow (needed synchronously for chain walks / socket queries).
 	for (uint32_t i = 0; i < asset.boneCount; ++i)
-	{
 		std::memcpy(BoneData[NextBoneOffset + i].inverseBindPose,
-					asset.bones[i].inverseBindPose, sizeof(float) * 16);
-		std::memcpy(gpuDst[i].inverseBindPose,
-					asset.bones[i].inverseBindPose, sizeof(float) * 16);
-	}
+		            asset.bones[i].inverseBindPose, sizeof(float) * 16);
 
 	CpuCopies[slotID] = asset; // full copy — bones + sockets retained for chain walks
 
-	if (id.IsValid())
+	// Push inverse bind poses and parent indices to GPU on the Render queue.
+	// CpuCopies[slotID] is persistent so the lambda capture is safe.
+	GpuBoneData* gpuBones    = static_cast<GpuBoneData*>(BoneDataBuffer.MappedPtr) + NextBoneOffset;
+	uint32_t*    gpuParents  = static_cast<uint32_t*>(BoneParentBuffer.MappedPtr) + NextBoneOffset;
+	const SkeletonAsset* cpu = &CpuCopies[slotID];
+	TrinyxJobs::DispatchNamed("GpuPush_Skeleton", [gpuBones, gpuParents, cpu, id, slotID](uint32_t)
 	{
-		if (AssetEntry* entry = AssetRegistry::Get().FindMutable(id))
+		for (uint32_t i = 0; i < cpu->boneCount; ++i)
 		{
-			entry->Data  = reinterpret_cast<void*>(static_cast<uintptr_t>(slotID));
-			entry->State = RuntimeFlags::Loaded;
-			entry->OnLoaded(slotID);
-			entry->OnLoaded.Reset();
+			std::memcpy(gpuBones[i].inverseBindPose, cpu->bones[i].inverseBindPose, sizeof(float) * 16);
+			gpuParents[i] = cpu->bones[i].parentIndex;
 		}
-	}
+
+		if (id.IsValid())
+		{
+			if (AssetEntry* entry = AssetRegistry::Get().FindMutable(id))
+			{
+				entry->Data  = reinterpret_cast<void*>(static_cast<uintptr_t>(slotID));
+				entry->State = RuntimeFlags::Loaded;
+				entry->OnLoaded(slotID);
+				entry->OnLoaded.Reset();
+			}
+		}
+	}, &GpuUploadCounter, TrinyxJobs::Queue::Render);
 
 	NextBoneOffset += asset.boneCount;
 
@@ -146,6 +173,15 @@ uint32_t SkeletonManager::LoadSkeleton(TnxName name)
 		return UINT32_MAX;
 	}
 	return LoadSkeleton(entry->ID);
+}
+
+// -----------------------------------------------------------------------
+// FlushPendingUploads
+// -----------------------------------------------------------------------
+
+void SkeletonManager::FlushPendingUploads()
+{
+	TrinyxJobs::WaitForCounter(&GpuUploadCounter, TrinyxJobs::Queue::Render);
 }
 
 // -----------------------------------------------------------------------

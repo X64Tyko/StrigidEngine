@@ -4,86 +4,51 @@
 #include "VulkanInclude.h"
 
 // -----------------------------------------------------------------------
-// GpuAnimEntry — per-entity animation state uploaded to GPU each frame.
-// One entry per entity in the skeletal partition.
+// SkinningPass — GPU vertex skinning compute pass.
 //
-// Base layer: explicit cross-fade or blendspace.
-//   baseAnimID  > 0 → explicit clip at baseTimestamp
-//   baseAnimID == 0 → blendspace (blendspaceID) evaluated at (blendCoordX, blendCoordY)
-//   fadeAnimID  > 0 → outgoing clip at fadeTimestamp, lerped by fadeAlpha
+// Owns four GPU buffers:
+//   SkinMatrixBuffer           — device-local float4x4 array, written by the
+//                                skinning compute shader, read by vertex shader.
+//                                Layout: [compactIdx × MAX_BONES_PER_ENTITY + boneIdx]
+//   SkeletalListBuffer          — device-local uint array, GPU-written by scatter.
+//                                SkeletalList[compactIdx] = cacheIdx of the Nth skeletal entity.
+//   SkeletalIdxByEntityBuffer   — device-local uint array, GPU-written by scatter.
+//                                SkeletalIdxByEntity[cacheIdx] = compact skeletal slot, or UINT32_MAX.
+//                                Cleared to UINT32_MAX each frame via vkCmdFillBuffer before scatter.
+//   SkeletalDispatchArgsBuffer  — persistent-mapped VkDispatchIndirectCommand {x,y=1,z=1}.
+//                                x is zeroed each frame; scatter atomically increments it.
+//                                y and z are initialized to 1 and never changed.
 //
-// Overlay layers: up to 2 masked replace/additive slots.
-//   layerConfig bits 0-7 = skeleton named layer ID (bone mask index in SkeletonAsset)
-//   layerConfig bit  8   = 1 → additive, 0 → replace
+// Skinning runs AFTER sort_instances via vkCmdDispatchIndirect.
 // -----------------------------------------------------------------------
-struct GpuAnimEntry
-{
-    // Base layer
-    uint32_t baseAnimID;
-    uint32_t blendspaceID;
-    float    baseTimestamp;
-    float    blendCoordX;
-    float    blendCoordY;
-    uint32_t fadeAnimID;
-    float    fadeTimestamp;
-    float    fadeAlpha;
 
-    // Overlay layer 0
-    uint32_t layer0AnimID;
-    float    layer0Timestamp;
-    float    layer0Alpha;
-    uint32_t layer0Config;
-
-    // Overlay layer 1
-    uint32_t layer1AnimID;
-    float    layer1Timestamp;
-    float    layer1Alpha;
-    uint32_t layer1Config;
-}; // 16 fields × 4 bytes = 64 bytes
-
-static_assert(sizeof(GpuAnimEntry) == 64, "GpuAnimEntry must be 64 bytes");
-
-// -----------------------------------------------------------------------
-// SkinningPass — GPU vertex skinning infrastructure.
-//
-// Owns the per-frame GpuAnimBuffer (CAnimBase + CAnimLayer SoA packed per entity).
-// Dispatched before the predicate pass; outputs skinned vertex positions consumed
-// by the scatter pass.
-//
-// M1: Dispatch is a no-op when SkeletalEntityCount == 0.
-// M2/M3: full per-vertex skinning with forward kinematics + blendspace eval.
-// -----------------------------------------------------------------------
+static constexpr uint32_t MaxSkeletalInstances = 512;
+static constexpr uint32_t MaxBonesPerEntity    = 128;
 
 class SkinningPass
 {
 public:
     bool Initialize(VkDevice device, VkPipelineLayout pipelineLayout,
-                    VulkanMemory* vkMem, uint32_t maxEntities);
+                    VulkanMemory* vkMem, uint32_t maxCachedEntities);
 
     void Destroy(VkDevice device);
 
-    // Upload CAnimBase + CAnimLayer state for all active skeletal entities.
-    // All float params are raw floats — caller converts SimFloat fields via .ToFloat().
-    void UploadAnimData(const uint32_t* skeletalEntities, uint32_t count,
-                        // Base layer
-                        const uint32_t* baseAnimID,   const uint32_t* blendspaceID,
-                        const float*    baseTimestamp, const float*    blendCoordX,
-                        const float*    blendCoordY,
-                        const uint32_t* fadeAnimID,   const float*    fadeTimestamp,
-                        const float*    fadeAlpha,
-                        // Overlay layers
-                        const uint32_t* layer0AnimID, const float*    layer0Timestamp,
-                        const float*    layer0Alpha,  const uint32_t* layer0Config,
-                        const uint32_t* layer1AnimID, const float*    layer1Timestamp,
-                        const float*    layer1Alpha,  const uint32_t* layer1Config);
+    // Indirect dispatch: scatter writes SkeletalDispatchArgsBuffer.x; skinning runs after sort.
+    void Dispatch(VkCommandBuffer cmd, uint64_t fdAddr);
 
-    void Dispatch(VkCommandBuffer cmd, uint64_t fdAddr, uint32_t skeletalEntityCount);
-
-    uint64_t GetAnimBlendAddr() const { return AnimBlendBuffer.DeviceAddr; }
-    bool     IsValid()          const { return Pipeline != VK_NULL_HANDLE; }
+    uint64_t GetSkinMatrixAddr()            const { return SkinMatrixBuffer.DeviceAddr; }
+    uint64_t GetSkeletalListAddr()          const { return SkeletalListBuffer.DeviceAddr; }
+    uint64_t GetSkeletalIdxByEntityAddr()   const { return SkeletalIdxByEntityBuffer.DeviceAddr; }
+    uint64_t GetSkeletalDispatchArgsAddr()  const { return SkeletalDispatchArgsBuffer.DeviceAddr; }
+    VkBuffer GetSkeletalIdxByEntityBuffer() const { return static_cast<VkBuffer>(SkeletalIdxByEntityBuffer.Buffer); }
+    VkBuffer GetSkeletalDispatchBuffer()    const { return static_cast<VkBuffer>(SkeletalDispatchArgsBuffer.Buffer); }
+    bool     IsValid()                      const { return Pipeline != VK_NULL_HANDLE; }
 
 private:
-    VulkanBuffer  AnimBlendBuffer;
+    VulkanBuffer  SkinMatrixBuffer;           // device-local, written by skinning compute
+    VulkanBuffer  SkeletalListBuffer;          // device-local, GPU-written by scatter
+    VulkanBuffer  SkeletalIdxByEntityBuffer;   // device-local + TRANSFER_DST, GPU-written by scatter
+    VulkanBuffer  SkeletalDispatchArgsBuffer;  // persistent-mapped + TRANSFER_DST, x zeroed per frame
     VkPipeline    Pipeline    = VK_NULL_HANDLE;
     VkPipelineLayout PipeLayout = VK_NULL_HANDLE;
 };

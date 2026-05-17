@@ -10724,7 +10724,7 @@ void VmaDeviceMemoryBlock::Destroy(VmaAllocator allocator)
 
 void VmaDeviceMemoryBlock::PostAlloc(VmaAllocator hAllocator)
 {
-    VmaMutexLock lock(m_MapAndBindMutex, hAllocator->m_UseMutex);
+    VmaMutexLock lock(m_MapAndBindMutex, hAllocator->m_UseMutex); 
     m_MappingHysteresis.PostAlloc();
 }
 

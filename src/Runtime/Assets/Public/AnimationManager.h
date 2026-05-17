@@ -5,6 +5,7 @@
 #include "AssetRegistry.h"
 #include "AssetTypes.h"
 #include "AnimationAsset.h"
+#include "TrinyxJobs.h"
 #include "VulkanMemory.h"
 
 // -----------------------------------------------------------------------
@@ -89,6 +90,12 @@ public:
 	const AnimSlot& GetSlot(uint32_t slot)  const { return Slots[slot]; }
 	uint32_t        GetAnimCount()          const { return AnimCount; }
 
+	/// Block until all pending GPU track/keyframe upload jobs have completed.
+	void FlushPendingUploads();
+
+	/// Non-blocking poll — true when all GPU upload jobs have completed.
+	bool IsUploadComplete() const { return GpuUploadCounter.Value.load(std::memory_order_acquire) == 0; }
+
 	uint32_t FindSlotByTName(TnxName name) const
 	{
 		const AssetEntry* e = AssetRegistry::Get().FindByTName(name);
@@ -119,10 +126,11 @@ private:
 	VulkanBuffer TrackBuffer;    // GpuAnimBoneTrack[MAX_TOTAL_BONE_TRACKS], PersistentMapped + BDA
 	VulkanBuffer KeyframeBuffer; // GpuAnimKeyframe[MAX_TOTAL_KEYFRAMES], PersistentMapped + BDA
 
-	AnimSlot       Slots[MAX_ANIM_SLOTS]{};
-	AssetID        SlotIDs[MAX_ANIM_SLOTS]{};
-	AnimationAsset CpuCopies[MAX_ANIM_SLOTS]; // retained for EvaluateBone() lookups
-	uint32_t       NextTrack    = 0;
-	uint32_t       NextKeyframe = 0;
-	uint32_t       AnimCount    = 1; // slot 0 reserved as invalid sentinel
+	AnimSlot               Slots[MAX_ANIM_SLOTS]{};
+	AssetID                SlotIDs[MAX_ANIM_SLOTS]{};
+	AnimationAsset         CpuCopies[MAX_ANIM_SLOTS];
+	TrinyxJobs::JobCounter GpuUploadCounter;
+	uint32_t               NextTrack    = 0;
+	uint32_t               NextKeyframe = 0;
+	uint32_t               AnimCount    = 1; // slot 0 reserved as invalid sentinel
 };

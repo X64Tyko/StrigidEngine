@@ -15,6 +15,13 @@
 //
 // SoA read for instance instIdx:
 //   field k = semantic - 1;  value = InstancesAddr[ k * OutFieldStride + instIdx ]
+//
+// Skeletal meshes:
+//   scatter always writes entity cache index at slot SemEntityCacheIdx-1 = 16.
+//   SkeletalIdxByEntityAddr[cacheIdx] gives compact skeletal index (UINT32_MAX = static).
+//   SkinMatrix[skelIdx * MAX_BONES_PER_ENTITY + boneIdx] is world-space (entity TRS baked in
+//   by skinning.slang), so skeletal entities skip buildModel and use LBS directly.
+//   SkinWeights are parallel to the global vertex buffer, indexed by globalVertIdx.
 
 #include "common/GpuFrameData.slang"
 
@@ -181,11 +188,9 @@ VSOut main(uint vertIdx : SV_VertexID, uint baseVert : SV_StartVertexLocation,
     // Slang's SV_VertexID = gl_VertexIndex - BaseVertex (DX12 convention).
     // Since we index the mega-buffer via BDA, we need the full gl_VertexIndex
     // which includes VertexOffset from the indirect draw command.
-    Vertex vtx = ((Vertex*)fd->VerticesAddr)[vertIdx + baseVert];
-
-    // Decode oct-encoded normal (unused in current color-only shader,
-    // but read here for future GBuffer / lighting passes).
-    float3 normal = octDecode(vtx.n_oct16x2);
+    uint   globalVtxIdx = vertIdx + baseVert;
+    Vertex vtx          = ((Vertex*)fd->VerticesAddr)[globalVtxIdx];
+    float3 localNormal  = octDecode(vtx.n_oct16x2);
 
     // --- Per-instance SoA data ---
     // Layout: slot k for instance i  =  InstancesAddr[ k * OutFieldStride + i ]
@@ -210,23 +215,74 @@ VSOut main(uint vertIdx : SV_VertexID, uint baseVert : SV_StartVertexLocation,
                           inst[(SemColorB - 1u) * stride + instIdx],
                           inst[(SemColorA - 1u) * stride + instIdx]);
 
-    // --- Transform ---
-    float4x4 model = buildModel(pos, rotQ, scale);
-    float4x4 vp    = buildViewProj(fd);
+    // Entity cache index is always-on at slot SemEntityCacheIdx-1 = 16.
+    uint cacheIdx = asuint(inst[(SemEntityCacheIdx - 1u) * stride + instIdx]);
 
-    float4 worldPos = mul(model, float4(vtx.pos, 1.0));
-    float4 clipPos  = mul(vp, worldPos);
+    // --- Skeletal index lookup ---
+    // UINT32_MAX means this entity has no skeleton; take the static TRS path.
+    uint skelIdx = 0xFFFFFFFFu;
+    if (fd->SkeletalIdxByEntityAddr != 0)
+        skelIdx = ((uint*)fd->SkeletalIdxByEntityAddr)[cacheIdx];
 
-    // Rotate normal by the instance quaternion (no scale — normals are unit vectors)
-    float3 worldNormal = normal + 2.0 * cross(rotQ.xyz, cross(rotQ.xyz, normal) + rotQ.w * normal);
+    float4x4 vp = buildViewProj(fd);
+    float4 worldPos;
+    float3 worldNormal;
+
+    if (skelIdx != 0xFFFFFFFFu && fd->SkinWeightAddr != 0)
+    {
+        // ---------------------------------------------------------------
+        // LBS path — skeletal entity.
+        // SkinWeights (8B each) are parallel to the global vertex buffer.
+        // Packed as: [boneIndices: uint8×4][boneWeights: UNORM8×4]
+        // SkinMatrices are world-space (entity TRS already baked in by
+        // skinning.slang), so we do NOT apply the TRS model matrix here.
+        // ---------------------------------------------------------------
+        uint* skinRaw  = (uint*)fd->SkinWeightAddr + globalVtxIdx * 2u;
+        uint  idxPack  = skinRaw[0]; // boneIndices[0..3] packed as 4× uint8
+        uint  wgtPack  = skinRaw[1]; // boneWeights[0..3] packed as 4× UNORM8
+
+        float4x4* skinMats = (float4x4*)fd->SkinMatrixAddr;
+        uint      matBase  = skelIdx * MAX_BONES_PER_ENTITY;
+
+        worldPos    = float4(0.0, 0.0, 0.0, 0.0);
+        worldNormal = float3(0.0, 0.0, 0.0);
+
+        for (uint i = 0u; i < 4u; ++i)
+        {
+            uint rawW = (wgtPack >> (i * 8u)) & 0xFFu;
+            if (rawW == 0u) continue;
+
+            float    w    = float(rawW) / 255.0;
+            uint     bone = (idxPack >> (i * 8u)) & 0xFFu;
+            float4x4 sm   = skinMats[matBase + bone];
+
+            worldPos += w * mul(sm, float4(vtx.pos, 1.0));
+
+            // Transform normal by the rotation part of the skin matrix (upper-left 3×3).
+            // Uses the same matrix as position — correct for rigid-bone skinning without shear.
+            float3x3 m3 = float3x3(sm[0].xyz, sm[1].xyz, sm[2].xyz);
+            worldNormal += w * mul(m3, localNormal);
+        }
+        worldNormal = normalize(worldNormal);
+    }
+    else
+    {
+        // ---------------------------------------------------------------
+        // Static TRS path — non-skeletal entity.
+        // ---------------------------------------------------------------
+        float4x4 model = buildModel(pos, rotQ, scale);
+        worldPos   = mul(model, float4(vtx.pos, 1.0));
+        worldNormal = localNormal + 2.0 * cross(rotQ.xyz, cross(rotQ.xyz, localNormal) + rotQ.w * localNormal);
+    }
+
+    float4 clipPos = mul(vp, worldPos);
 
     VSOut o;
     o.pos      = clipPos;
     o.color    = color;
     o.worldNrm = worldNormal;
 #ifdef TNX_GPU_PICKING
-    // Read cache index written by scatter as asfloat(uint) — reinterpret back.
-    o.entityCacheIdx = asuint(inst[(SemEntityCacheIdx - 1u) * stride + instIdx]);
+    o.entityCacheIdx = cacheIdx;
 #endif
     return o;
 }

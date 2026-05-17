@@ -2,8 +2,10 @@
 #include "AssetRegistry.h"
 #include "AnimationAsset.h"
 #include "Logger.h"
+#include "TrinyxJobs.h"
 
 #include <cstring>
+
 
 // -----------------------------------------------------------------------
 // Initialize
@@ -93,38 +95,38 @@ uint32_t AnimationManager::CommitToSlot(const AnimationAsset& asset, AssetID id)
 	Slots[slotID].keyframeOffset = NextKeyframe;
 	Slots[slotID].duration       = asset.duration;
 
-	// Copy tracks to GPU buffer. keyframeOffset is stored as an absolute global index
-	// so the skinning shader can index directly without a per-slot base.
-	auto* gpuTracks = static_cast<GpuAnimBoneTrack*>(TrackBuffer.MappedPtr) + NextTrack;
-	for (uint32_t i = 0; i < asset.boneCount; ++i)
-	{
-		gpuTracks[i].keyframeOffset = NextKeyframe + asset.boneTracks[i].keyframeOffset;
-		gpuTracks[i].keyframeCount  = asset.boneTracks[i].keyframeCount;
-	}
+	CpuCopies[slotID] = asset; // full copy — vectors included; must precede lambda capture
 
-	// Copy keyframes to GPU buffer.
-	auto* gpuKfs = static_cast<GpuAnimKeyframe*>(KeyframeBuffer.MappedPtr) + NextKeyframe;
-	for (uint32_t i = 0; i < keyframeCount; ++i)
-	{
-		const AnimKeyframe& k = asset.keyframes[i];
-		gpuKfs[i].time = k.time;
-		gpuKfs[i].tx   = k.tx; gpuKfs[i].ty = k.ty; gpuKfs[i].tz = k.tz;
-		gpuKfs[i].rx   = k.rx; gpuKfs[i].ry = k.ry;
-		gpuKfs[i].rz   = k.rz; gpuKfs[i].rw = k.rw;
-	}
+	// Push tracks and keyframes to GPU on the Render queue.
+	// CpuCopies[slotID] is persistent so the lambda capture is safe.
+	GpuAnimBoneTrack* gpuTracks = static_cast<GpuAnimBoneTrack*>(TrackBuffer.MappedPtr) + NextTrack;
+	GpuAnimKeyframe*  gpuKfs    = static_cast<GpuAnimKeyframe*>(KeyframeBuffer.MappedPtr) + NextKeyframe;
+	const AnimationAsset* cpu   = &CpuCopies[slotID];
+	const uint32_t kfBase       = NextKeyframe;
+	static_assert(sizeof(GpuAnimKeyframe) == sizeof(AnimKeyframe),
+	              "GpuAnimKeyframe and AnimKeyframe layout must match for bulk memcpy");
 
-	CpuCopies[slotID] = asset; // full copy — vectors included
-
-	if (id.IsValid())
+	TrinyxJobs::Dispatch([gpuTracks, gpuKfs, cpu, kfBase, id, slotID](uint32_t)
 	{
-		if (AssetEntry* entry = AssetRegistry::Get().FindMutable(id))
+		for (uint32_t i = 0; i < cpu->boneCount; ++i)
 		{
-			entry->Data  = reinterpret_cast<void*>(static_cast<uintptr_t>(slotID));
-			entry->State = RuntimeFlags::Loaded;
-			entry->OnLoaded(slotID);
-			entry->OnLoaded.Reset();
+			gpuTracks[i].keyframeOffset = kfBase + cpu->boneTracks[i].keyframeOffset;
+			gpuTracks[i].keyframeCount  = cpu->boneTracks[i].keyframeCount;
 		}
-	}
+		std::memcpy(gpuKfs, cpu->keyframes.data(),
+		            cpu->keyframes.size() * sizeof(GpuAnimKeyframe));
+
+		if (id.IsValid())
+		{
+			if (AssetEntry* entry = AssetRegistry::Get().FindMutable(id))
+			{
+				entry->Data  = reinterpret_cast<void*>(static_cast<uintptr_t>(slotID));
+				entry->State = RuntimeFlags::Loaded;
+				entry->OnLoaded(slotID);
+				entry->OnLoaded.Reset();
+			}
+		}
+	}, &GpuUploadCounter, TrinyxJobs::Queue::Render);
 
 	NextTrack    += asset.boneCount;
 	NextKeyframe += keyframeCount;
@@ -183,6 +185,15 @@ uint32_t AnimationManager::LoadAnimation(TnxName name)
 		return UINT32_MAX;
 	}
 	return LoadAnimation(entry->ID);
+}
+
+// -----------------------------------------------------------------------
+// FlushPendingUploads
+// -----------------------------------------------------------------------
+
+void AnimationManager::FlushPendingUploads()
+{
+	TrinyxJobs::WaitForCounter(&GpuUploadCounter, TrinyxJobs::Queue::Render);
 }
 
 // -----------------------------------------------------------------------

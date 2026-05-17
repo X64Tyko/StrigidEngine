@@ -1,0 +1,271 @@
+/* ===== Trinyx Editor — design tokens & base ===== */
+
+:root {
+  /* Neutral ink — purple-tinted */
+  --bg-deep: oklch(0.16 0.010 285);
+  --bg-app: oklch(0.19 0.012 285);
+  --bg-panel: oklch(0.22 0.013 285);
+  --bg-elev: oklch(0.26 0.014 285);
+  --bg-input: oklch(0.15 0.010 285);
+  --bg-viewport: oklch(0.13 0.008 285);
+
+  --border: oklch(0.30 0.018 290);
+  --border-strong: oklch(0.42 0.022 290);
+  --border-soft: oklch(0.24 0.014 285);
+
+  --fg: oklch(0.94 0.004 290);
+  --fg-muted: oklch(0.68 0.012 290);
+  --fg-dim: oklch(0.50 0.014 290);
+  --fg-ghost: oklch(0.38 0.012 290);
+
+  /* Royal purple — primary */
+  --purple: oklch(0.62 0.18 295);
+  --purple-hot: oklch(0.70 0.20 295);
+  --purple-soft: oklch(0.40 0.12 295);
+  --purple-faint: oklch(0.30 0.06 295);
+  --purple-wash: oklch(0.25 0.04 295 / 0.5);
+
+  /* Warm yellow — attention */
+  --yellow: oklch(0.86 0.16 92);
+  --yellow-hot: oklch(0.92 0.17 95);
+  --yellow-soft: oklch(0.62 0.13 92);
+  --yellow-wash: oklch(0.35 0.07 92 / 0.4);
+
+  /* Status */
+  --good: oklch(0.74 0.16 145);
+  --warn: oklch(0.80 0.16 75);
+  --bad: oklch(0.66 0.20 25);
+  --info: oklch(0.72 0.14 230);
+
+  /* Partition tier colors (Trinyx-specific) */
+  --tier-cold: oklch(0.68 0.10 220);
+  --tier-static: oklch(0.72 0.06 95);
+  --tier-volatile: oklch(0.74 0.15 30);
+  --tier-temporal: oklch(0.68 0.16 295);
+
+  /* Thread colors */
+  --th-sentinel: oklch(0.78 0.14 200);
+  --th-brain: oklch(0.78 0.16 320);
+  --th-encoder: oklch(0.86 0.16 92);
+
+  /* Type */
+  --f-display: "Space Grotesk", ui-sans-serif, sans-serif;
+  --f-ui: "Manrope", ui-sans-serif, sans-serif;
+  --f-mono: "JetBrains Mono", ui-monospace, monospace;
+
+  --r-sharp: 2px;
+  --r-soft: 4px;
+  --r-round: 6px;
+}
+
+* { box-sizing: border-box; }
+
+.tnx-root {
+  font-family: var(--f-ui);
+  font-size: 13px;
+  line-height: 1.4;
+  color: var(--fg);
+  background: var(--bg-app);
+  font-feature-settings: "ss01", "cv11";
+  letter-spacing: -0.005em;
+  width: 100%;
+  height: 100%;
+}
+
+.tnx-root .mono { font-family: var(--f-mono); letter-spacing: 0; }
+.tnx-root .display { font-family: var(--f-display); letter-spacing: -0.02em; }
+
+/* ===== Wireframe primitives (used in the wireframe artboards only) ===== */
+.wf {
+  background: #f4f3ef;
+  color: #2a2a2a;
+  font-family: var(--f-ui);
+  font-size: 12px;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+.wf-box { border: 1px solid #2a2a2a; background: #fff; }
+.wf-fill { background: #2a2a2a; color: #fff; }
+.wf-soft { background: #e6e4dd; }
+.wf-dash { background: repeating-linear-gradient(45deg, transparent, transparent 5px, rgba(0,0,0,0.06) 5px, rgba(0,0,0,0.06) 6px); }
+.wf-hatch { background: repeating-linear-gradient(135deg, rgba(0,0,0,0.05), rgba(0,0,0,0.05) 1px, transparent 1px, transparent 7px); }
+.wf-label { font-size: 10px; letter-spacing: 0.04em; text-transform: uppercase; color: #555; }
+.wf-tag { display: inline-block; padding: 1px 5px; border: 1px solid #2a2a2a; font-size: 10px; line-height: 1.4; }
+
+/* ===== Hi-fi primitives — used across the polished editor + ideas ===== */
+.panel {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--r-soft);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.panel-head {
+  height: 30px;
+  display: flex;
+  align-items: center;
+  padding: 0 8px 0 10px;
+  border-bottom: 1px solid var(--border-soft);
+  background: var(--bg-elev);
+  gap: 8px;
+  flex-shrink: 0;
+}
+.panel-head .title {
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--fg-muted);
+  font-weight: 600;
+}
+.panel-body { flex: 1 1 auto; overflow: hidden; display: flex; flex-direction: column; }
+
+.divider { height: 1px; background: var(--border-soft); }
+.divider-strong { height: 1px; background: var(--border); }
+.vdivider { width: 1px; background: var(--border-soft); }
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 18px;
+  padding: 0 6px;
+  background: var(--bg-elev);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--r-sharp);
+  font-family: var(--f-mono);
+  font-size: 10.5px;
+  color: var(--fg-muted);
+  white-space: nowrap;
+}
+.chip-purple { background: var(--purple-wash); border-color: var(--purple-soft); color: oklch(0.88 0.06 295); }
+.chip-yellow { background: var(--yellow-wash); border-color: var(--yellow-soft); color: var(--yellow); }
+.chip-good { background: oklch(0.30 0.06 145 / 0.4); border-color: var(--good); color: var(--good); }
+
+.kbd {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-bottom-width: 2px;
+  border-radius: var(--r-sharp);
+  font-family: var(--f-mono);
+  font-size: 10px;
+  color: var(--fg-muted);
+}
+
+/* Buttons */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 10px;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sharp);
+  color: var(--fg);
+  font-family: var(--f-ui);
+  font-size: 12px;
+  cursor: pointer;
+  user-select: none;
+}
+.btn:hover { background: var(--purple-faint); border-color: var(--purple-soft); }
+.btn-primary {
+  background: var(--purple);
+  border-color: var(--purple);
+  color: oklch(0.99 0 0);
+  font-weight: 600;
+}
+.btn-primary:hover { background: var(--purple-hot); border-color: var(--purple-hot); }
+.btn-yellow {
+  background: var(--yellow);
+  border-color: var(--yellow);
+  color: oklch(0.20 0.02 90);
+  font-weight: 700;
+}
+.btn-ghost { background: transparent; border-color: transparent; color: var(--fg-muted); }
+.btn-ghost:hover { background: var(--bg-elev); color: var(--fg); border-color: var(--border-soft); }
+.btn-sm { height: 22px; padding: 0 7px; font-size: 11px; }
+.btn-icon { width: 26px; padding: 0; justify-content: center; }
+
+/* Inspector field row */
+.field-row {
+  display: grid;
+  grid-template-columns: 90px 1fr;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  min-height: 24px;
+}
+.field-row .lbl {
+  font-size: 11px;
+  color: var(--fg-muted);
+  text-align: right;
+  font-feature-settings: "tnum";
+}
+.field-input {
+  background: var(--bg-input);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--r-sharp);
+  height: 22px;
+  padding: 0 7px;
+  font-family: var(--f-mono);
+  font-size: 11.5px;
+  color: var(--fg);
+  display: flex;
+  align-items: center;
+}
+.field-input:hover { border-color: var(--purple-soft); }
+.field-input .val { font-variant-numeric: tabular-nums; }
+.field-input .axis {
+  font-family: var(--f-ui);
+  font-weight: 700;
+  font-size: 10px;
+  margin-right: 6px;
+  letter-spacing: 0.04em;
+}
+.field-input .axis-x { color: oklch(0.70 0.18 25); }
+.field-input .axis-y { color: oklch(0.72 0.18 145); }
+.field-input .axis-z { color: oklch(0.70 0.18 250); }
+
+.vec3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 4px; }
+
+/* Tier badge — partition (Trinyx-specific) */
+.tier {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 16px;
+  padding: 0 5px;
+  border-radius: var(--r-sharp);
+  font-family: var(--f-mono);
+  font-size: 9.5px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  font-weight: 600;
+  background: oklch(from var(--tier) calc(l - 0.45) c h / 0.4);
+  color: var(--tier);
+  border: 1px solid oklch(from var(--tier) calc(l - 0.3) c h / 0.6);
+}
+.tier::before {
+  content: "";
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--tier);
+}
+.tier-cold { --tier: var(--tier-cold); }
+.tier-static { --tier: var(--tier-static); }
+.tier-volatile { --tier: var(--tier-volatile); }
+.tier-temporal { --tier: var(--tier-temporal); }
+
+/* Scrollbar nuke (the editor doesn't need them in mocks) */
+.tnx-root *::-webkit-scrollbar { display: none; }
+.tnx-root * { scrollbar-width: none; }
