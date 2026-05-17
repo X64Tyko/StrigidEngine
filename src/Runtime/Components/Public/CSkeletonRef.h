@@ -1,7 +1,8 @@
 #pragma once
+#include "AssetRegistry.h"
+#include "AssetTypes.h"
 #include "ComponentView.h"
 #include "SchemaReflector.h"
-#include "AssetTypes.h"
 
 // CSkeletonRef — skeletal mesh binding for an entity.
 // Volatile: set at spawn, rarely changes, no rollback needed.
@@ -15,9 +16,19 @@ struct CSkeletonRef : ComponentView<CSkeletonRef, WIDTH>
 	UIntProxy<WIDTH> SkinMeshID{}; // slot in MeshManager that has skin weights (0 = none)
 
 	static constexpr auto FieldRefTypes = std::array{
-		AssetType::SkeletalMesh, // SkeletonID
-		AssetType::SkeletalMesh, // SkinMeshID
+		AssetType::Skeleton, // SkeletonID
+		AssetType::Mesh,     // SkinMeshID
 	};
+
+	void SetSkeleton(TnxName name) requires (WIDTH == FieldWidth::Scalar)
+	{
+		AssetRegistry::RegisterPendingCheckout(&SkeletonID.WriteArray[SkeletonID.index], name);
+	}
+
+	void SetSkinMesh(TnxName name) requires (WIDTH == FieldWidth::Scalar)
+	{
+		AssetRegistry::RegisterPendingCheckout(&SkinMeshID.WriteArray[SkinMeshID.index], name);
+	}
 };
 
 TNX_REGISTER_COMPONENT(CSkeletonRef)

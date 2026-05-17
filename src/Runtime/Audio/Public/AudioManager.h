@@ -65,7 +65,7 @@ public:
 	// --- Asset loading ---
 
 	// Decode from disk, assign slot, record in AssetRegistry. Returns slot or UINT32_MAX.
-	uint32_t LoadSound(const char* path, const std::string& name = {}, AssetID id = {}, bool bPinned = false);
+	uint32_t LoadSound(const char* path, TnxName name = {}, AssetID id = {}, bool bPinned = false);
 	uint32_t LoadSound(AssetID id, bool bPinned = false);   // resolve path from registry
 	uint32_t LoadSound(TnxName name, bool bPinned = false); // resolve by name from registry
 

@@ -242,6 +242,10 @@ protected:
 	ModeFactory FindModeFactory(const char* name) const;
 	void EnforceRequirements(FlowState* currentState, FlowState* nextState);
 
+	/// Scan a level JSON file and demand-load all named asset references via TriggerLoad().
+	/// Called by FlowManager::LoadLevel before SpawnFromFile so assets are ready when entities spawn.
+	static void PreloadLevelAssets(const char* path);
+
 	/// Implemented by FlowManager<TNet,TRollback,TFrame> — creates the typed World.
 	virtual WorldBase* CreateWorldImpl() = 0;
 };

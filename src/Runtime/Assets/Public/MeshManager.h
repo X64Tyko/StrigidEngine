@@ -22,11 +22,11 @@ namespace BuiltinMesh
 {
 	inline AssetID CubeID()
 	{
-		return AssetID::Create(0x0000010000000000LL, AssetType::StaticMesh);
+		return AssetID::Create(0x0000010000000000LL, AssetType::Mesh);
 	}
 	inline AssetID CapsuleID()
 	{
-		return AssetID::Create(0x0000020000000000LL, AssetType::StaticMesh);
+		return AssetID::Create(0x0000020000000000LL, AssetType::Mesh);
 	}
 }
 
@@ -85,7 +85,7 @@ public:
 	/// Load a MeshAsset — copies vertex/index data into the mega-buffers,
 	/// then records name/ID in AssetRegistry (Data = slot index).
 	/// Returns the slot ID, or UINT32_MAX on failure.
-	uint32_t LoadMesh(const MeshAsset& asset, const std::string& name = {}, AssetID id = {});
+	uint32_t LoadMesh(const MeshAsset& asset, TnxName name = {}, AssetID id = {});
 
 	/// Resolve by AssetID from AssetRegistry, decode from disk, and load.
 	uint32_t LoadMesh(AssetID id);
@@ -116,7 +116,7 @@ public:
 	uint32_t FindSlotByTName(TnxName name) const
 	{
 		const AssetEntry* e = AssetRegistry::Get().FindByTName(name);
-		if (!e || e->Type != AssetType::StaticMesh) return UINT32_MAX;
+		if (!e || e->Type != AssetType::Mesh) return UINT32_MAX;
 		return static_cast<uint32_t>(reinterpret_cast<uintptr_t>(e->Data));
 	}
 
@@ -130,7 +130,7 @@ public:
 	uint32_t FindSlotByID(AssetID id) const
 	{
 		const AssetEntry* e = AssetRegistry::Get().Find(id);
-		if (!e || e->Type != AssetType::StaticMesh) return UINT32_MAX;
+		if (!e || e->Type != AssetType::Mesh) return UINT32_MAX;
 		return static_cast<uint32_t>(reinterpret_cast<uintptr_t>(e->Data));
 	}
 

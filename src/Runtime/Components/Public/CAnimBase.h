@@ -1,4 +1,5 @@
 #pragma once
+#include "AssetRegistry.h"
 #include "ComponentView.h"
 #include "SchemaReflector.h"
 #include "NetDelta.h"
@@ -67,6 +68,21 @@ struct CAnimBase : ComponentView<CAnimBase, WIDTH>
     // -----------------------------------------------------------------------
     // Scalar write helpers — called by AnimConstruct PostPhysics.
     // -----------------------------------------------------------------------
+
+    // Checkout-based setter — queues an OnLoaded callback that writes BaseAnimID when
+    // the asset arrives. Call from an entity init lambda; DrainPendingCheckouts fires
+    // the callback after the lambda returns. Resets BlendspaceID and sets loop flag.
+    void SetAnim(TnxName name, SimFloat startTime = {}, bool loops = true, bool rootMotion = false)
+        requires (WIDTH == FieldWidth::Scalar)
+    {
+        AssetRegistry::RegisterPendingCheckout(&BaseAnimID.WriteArray[BaseAnimID.index], name);
+        BlendspaceID  = 0u;
+        BaseTimestamp = startTime;
+        uint32_t f    = Flags.Value();
+        f = loops      ? (f | (1u << 0)) : (f & ~(1u << 0));
+        f = rootMotion ? (f | (1u << 1)) : (f & ~(1u << 1));
+        Flags = f;
+    }
 
     void SetExplicitAnim(uint32_t animID, SimFloat startTime, bool loops, bool rootMotion = false)
         requires (WIDTH == FieldWidth::Scalar)

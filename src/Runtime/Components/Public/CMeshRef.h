@@ -20,7 +20,7 @@ struct CMeshRef : ComponentView<CMeshRef, WIDTH>
 
 	// Per-field asset type annotation — editor displays name instead of raw index
 	static constexpr auto FieldRefTypes = std::array{
-		AssetType::StaticMesh, // MeshID
+		AssetType::Mesh, // MeshID
 		AssetType::Material,   // MaterialID
 		AssetType::Invalid,    // LODCount
 		AssetType::Invalid,    // CastShadow
@@ -61,7 +61,7 @@ struct CMeshRef : ComponentView<CMeshRef, WIDTH>
 			return *this;
 		}
 
-		if (entry->Type == AssetType::StaticMesh || entry->Type == AssetType::SkeletalMesh) SetMesh(name);
+		if (entry->Type == AssetType::Mesh || entry->Type == AssetType::Skeleton) SetMesh(name);
 		else if (entry->Type == AssetType::Material) SetMaterial(name);
 		else LOG_ENG_WARN_F("CMeshRef::operator= - asset '%s' is not a mesh or material (type: %s)", name.GetStr(), AssetTypeName(entry->Type));
 

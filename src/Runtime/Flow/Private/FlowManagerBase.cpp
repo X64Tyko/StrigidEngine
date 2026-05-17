@@ -3,6 +3,7 @@
 #include "AssetRegistry.h"
 #include "GameMode.h"
 #include "FlowState.h"
+#include "Json.h"
 #include "TrinyxJobs.h"
 #include "Logger.h"
 #include "NetChannel.h"
@@ -13,6 +14,7 @@
 #include "WorldBase.h"
 
 #include <cstring>
+#include <fstream>
 
 #include "LogicThreadBase.h"
 
@@ -584,3 +586,46 @@ void FlowManagerBase::SendPlayerBeginRequest(NetChannel channel, uint32_t frameN
 	LOG_NET_WARN_F(Souls[ownerID].get(), "[FlowMgr] PlayerBeginRequest send failed (GNS rejected) — ownerID=%u", ownerID);
 }
 #endif // TNX_ENABLE_NETWORK
+
+// ---------------------------------------------------------------------------
+// PreloadLevelAssets — scan scene JSON and demand-load all named asset refs
+// ---------------------------------------------------------------------------
+
+void FlowManagerBase::PreloadLevelAssets(const char* path)
+{
+	if (!path || path[0] == '\0') return;
+
+	std::ifstream file(path);
+	if (!file.is_open()) return;
+
+	std::string contents((std::istreambuf_iterator<char>(file)),
+	                      std::istreambuf_iterator<char>());
+	JsonValue root = JsonParse(contents);
+	if (!root.IsObject()) return;
+
+	const JsonValue* entities = root.Find("entities");
+	if (!entities || !entities->IsArray()) return;
+
+	AssetRegistry& reg = AssetRegistry::Get();
+
+	for (const JsonValue& entity : entities->AsArray())
+	{
+		if (!entity.IsObject()) continue;
+		const JsonValue* components = entity.Find("components");
+		if (!components || !components->IsObject()) continue;
+
+		for (const auto& [compName, compData] : components->AsObject())
+		{
+			if (!compData.IsObject()) continue;
+			for (const auto& [fieldName, fieldValue] : compData.AsObject())
+			{
+				if (!fieldValue.IsString()) continue;
+				const std::string& ref = fieldValue.AsString();
+				if (ref.empty()) continue;
+
+				const AssetEntry* entry = reg.FindByName(ref);
+				if (entry) reg.TriggerLoad(entry->ID);
+			}
+		}
+	}
+}

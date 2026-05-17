@@ -397,8 +397,8 @@ EntityHandle Registry::Create()
 		// Material refs are excluded: MaterialID=0 means "no material", which is valid.
 		for (const auto& [fkey, fdesc] : record.Arch->ArchetypeFieldLayout)
 		{
-			if (fdesc.refAssetType != AssetType::StaticMesh &&
-				fdesc.refAssetType != AssetType::SkeletalMesh)
+			if (fdesc.refAssetType != AssetType::Mesh &&
+				fdesc.refAssetType != AssetType::Skeleton)
 				continue;
 			auto* arr    = static_cast<uint32_t*>(fieldArrayTable[fdesc.fieldSlotIndex]);
 			uint32_t val = arr[record.LocalIndex];
@@ -448,8 +448,8 @@ EntityHandle Registry::Create(Fn&& fn)
 		// Material refs are excluded: MaterialID=0 means "no material", which is valid.
 		for (const auto& [fkey, fdesc] : record.Arch->ArchetypeFieldLayout)
 		{
-			if (fdesc.refAssetType != AssetType::StaticMesh &&
-				fdesc.refAssetType != AssetType::SkeletalMesh)
+			if (fdesc.refAssetType != AssetType::Mesh &&
+				fdesc.refAssetType != AssetType::Skeleton)
 				continue;
 			auto* arr    = static_cast<uint32_t*>(fieldArrayTable[fdesc.fieldSlotIndex]);
 			uint32_t val = arr[record.LocalIndex];

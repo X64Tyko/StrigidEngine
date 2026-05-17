@@ -196,20 +196,20 @@ void ReflectionRegistry::PublishToAssetRegistry() const
 	for (const auto& entry : RegisteredStates)
 	{
 		AssetID id = AssetID::Create(entry.UUID, AssetType::FlowState);
-		registry.Register(id, entry.Name, "", AssetType::FlowState);
+		registry.Register(id, TnxName(entry.Name), "", AssetType::FlowState);
 	}
 
 	for (const auto& entry : RegisteredModes)
 	{
 		AssetID id = AssetID::Create(entry.UUID, AssetType::GameMode);
-		registry.Register(id, entry.Name, "", AssetType::GameMode);
+		registry.Register(id, TnxName(entry.Name), "", AssetType::GameMode);
 	}
 
 	for (const auto& [name, classID] : NameToClassID)
 	{
 		int64_t uuid = UUIDFromName(name.c_str());
 		AssetID id   = AssetID::Create(uuid, AssetType::EntityType);
-		registry.Register(id, name, "", AssetType::EntityType);
+		registry.Register(id, TnxName(name.c_str()), "", AssetType::EntityType);
 	}
 }
 

@@ -77,14 +77,14 @@ public:
 	uint32_t FindSlotByTName(TnxName name) const
 	{
 		const AssetEntry* e = AssetRegistry::Get().FindByTName(name);
-		if (!e || e->Type != AssetType::SkeletalMesh) return UINT32_MAX;
+		if (!e || e->Type != AssetType::Skeleton) return UINT32_MAX;
 		return static_cast<uint32_t>(reinterpret_cast<uintptr_t>(e->Data));
 	}
 
 	uint32_t FindSlotByID(AssetID id) const
 	{
 		const AssetEntry* e = AssetRegistry::Get().Find(id);
-		if (!e || e->Type != AssetType::SkeletalMesh) return UINT32_MAX;
+		if (!e || e->Type != AssetType::Skeleton) return UINT32_MAX;
 		return static_cast<uint32_t>(reinterpret_cast<uintptr_t>(e->Data));
 	}
 

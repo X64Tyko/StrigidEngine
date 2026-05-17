@@ -97,6 +97,14 @@ uint32_t AnimationManager::CommitToSlot(const AnimationAsset& asset, AssetID id)
 
 	CpuCopies[slotID] = asset; // full copy — vectors included; must precede lambda capture
 
+	// Expose CPU copy immediately via CPUData so GetAssetData<AnimationAsset> works
+	// before the Render-queue GPU job completes (which sets Data + fires OnLoaded).
+	if (id.IsValid())
+	{
+		if (AssetEntry* entry = AssetRegistry::Get().FindMutable(id))
+			entry->CPUData = &CpuCopies[slotID];
+	}
+
 	// Push tracks and keyframes to GPU on the Render queue.
 	// CpuCopies[slotID] is persistent so the lambda capture is safe.
 	GpuAnimBoneTrack* gpuTracks = static_cast<GpuAnimBoneTrack*>(TrackBuffer.MappedPtr) + NextTrack;
@@ -142,7 +150,7 @@ uint32_t AnimationManager::CommitToSlot(const AnimationAsset& asset, AssetID id)
 
 uint32_t AnimationManager::LoadAnimation(const AnimationAsset& asset, TnxName name, AssetID id)
 {
-	if (id.IsValid()) AssetRegistry::Get().Register(id, name.GetStr(), {}, AssetType::Animation);
+	if (id.IsValid()) AssetRegistry::Get().Register(id, name, {}, AssetType::Animation);
 	return CommitToSlot(asset, id);
 }
 

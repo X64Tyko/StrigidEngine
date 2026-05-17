@@ -33,7 +33,7 @@ void ContentBrowserPanel::Draw(EditorState& state)
 
 	// Type filter combo
 	const char* typeNames[] = {
-		"All", "Data", "Static Mesh", "Skeletal Mesh", "Material",
+		"All", "Data", "Mesh", "Skeleton", "Material",
 		"Texture", "Audio", "Animation", "Level", "Prefab"
 	};
 	ImGui::SetNextItemWidth(120.0f);
@@ -81,13 +81,13 @@ void ContentBrowserPanel::Draw(EditorState& state)
 		}
 
 		// Drag source for meshes — payload is the slot index
-		if (entry.Type == AssetType::StaticMesh && state.MeshMgrPtr)
+		if (entry.Type == AssetType::Mesh && state.MeshMgrPtr)
 		{
 			if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID))
 			{
 				uint32_t meshSlot = state.MeshMgrPtr->FindSlotByID(entry.ID);
 				ImGui::SetDragDropPayload("MESH_SLOT", &meshSlot, sizeof(meshSlot));
-				ImGui::Text("Mesh: %s", entry.Name.c_str());
+				ImGui::Text("Mesh: %s", entry.Name.GetStr());
 				ImGui::EndDragDropSource();
 			}
 		}
@@ -110,7 +110,7 @@ void ContentBrowserPanel::Draw(EditorState& state)
 		ImGui::NextColumn();
 
 		// MeshID column — show slot index for mesh assets
-		if (entry.Type == AssetType::StaticMesh && state.MeshMgrPtr)
+		if (entry.Type == AssetType::Mesh && state.MeshMgrPtr)
 		{
 			uint32_t meshSlot = state.MeshMgrPtr->FindSlotByID(entry.ID);
 			if (meshSlot != UINT32_MAX) ImGui::Text("%u", meshSlot);

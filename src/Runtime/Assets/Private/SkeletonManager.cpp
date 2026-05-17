@@ -80,7 +80,7 @@ uint32_t SkeletonManager::CommitToSlot(const SkeletonAsset& asset, AssetID id)
 	uint32_t slotID    = SkeletonCount++;
 	SlotIDs[slotID]    = id;
 
-	if (id.IsValid()) AssetRegistry::Get().RegisterSlot(AssetType::SkeletalMesh, slotID, id);
+	if (id.IsValid()) AssetRegistry::Get().RegisterSlot(AssetType::Skeleton, slotID, id);
 
 	Slots[slotID].boneOffset = NextBoneOffset;
 	Slots[slotID].boneCount  = asset.boneCount;
@@ -91,6 +91,14 @@ uint32_t SkeletonManager::CommitToSlot(const SkeletonAsset& asset, AssetID id)
 		            asset.bones[i].inverseBindPose, sizeof(float) * 16);
 
 	CpuCopies[slotID] = asset; // full copy — bones + sockets retained for chain walks
+
+	// Expose CPU copy immediately via CPUData so GetAssetData<SkeletonAsset> works
+	// before the Render-queue GPU job completes (which sets Data + fires OnLoaded).
+	if (id.IsValid())
+	{
+		if (AssetEntry* entry = AssetRegistry::Get().FindMutable(id))
+			entry->CPUData = &CpuCopies[slotID];
+	}
 
 	// Push inverse bind poses and parent indices to GPU on the Render queue.
 	// CpuCopies[slotID] is persistent so the lambda capture is safe.
@@ -130,7 +138,7 @@ uint32_t SkeletonManager::CommitToSlot(const SkeletonAsset& asset, AssetID id)
 
 uint32_t SkeletonManager::LoadSkeleton(const SkeletonAsset& asset, TnxName name, AssetID id)
 {
-	if (id.IsValid()) AssetRegistry::Get().Register(id, name.GetStr(), {}, AssetType::SkeletalMesh);
+	if (id.IsValid()) AssetRegistry::Get().Register(id, name, {}, AssetType::Skeleton);
 	return CommitToSlot(asset, id);
 }
 
@@ -140,7 +148,7 @@ uint32_t SkeletonManager::LoadSkeleton(AssetID id)
 	if (slot != UINT32_MAX) return slot;
 
 	const AssetEntry* entry = AssetRegistry::Get().Find(id);
-	if (!entry || entry->Type != AssetType::SkeletalMesh)
+	if (!entry || entry->Type != AssetType::Skeleton)
 	{
 		LOG_ENG_ERROR("[SkeletonManager] LoadSkeleton: AssetID not in registry");
 		return UINT32_MAX;
@@ -166,7 +174,7 @@ uint32_t SkeletonManager::LoadSkeleton(AssetID id)
 uint32_t SkeletonManager::LoadSkeleton(TnxName name)
 {
 	const AssetEntry* entry = AssetRegistry::Get().FindByTName(name);
-	if (!entry || entry->Type != AssetType::SkeletalMesh)
+	if (!entry || entry->Type != AssetType::Skeleton)
 	{
 		LOG_ENG_ERROR_F("[SkeletonManager] LoadSkeleton: TnxName '%s' not in registry",
 						name.GetStr());

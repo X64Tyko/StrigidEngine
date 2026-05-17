@@ -28,14 +28,14 @@ struct AssetEntry
 	std::string Path; // relative to content root (runtime: pak-relative)
 	AssetType Type         = AssetType::Invalid;
 
-	// For StaticMesh/SkeletalMesh entries: the name of the default material that ships with
-	// this mesh.
+	// For Mesh/Skeleton entries: the name of the default material that ships with this mesh.
 	TnxName DefaultMaterial{};
 
 	AssetFlags Flags       = AssetFlags::None;
 	RuntimeFlags State     = RuntimeFlags::None;
 	uint32_t SchemaVersion = 0;
-	void* Data             = nullptr;
+	void* Data    = nullptr; // manager slot as uintptr_t (slot-based managers: Mesh, Audio)
+	void* CPUData = nullptr; // typed CPU asset ptr (Skeleton, Animation); stable while loaded
 	uint32_t PinCount      = 0; // refcounted — eviction only when 0
 
 	// Fired with the resolved slotID when the asset finishes loading.
@@ -64,6 +64,36 @@ struct PendingCheckout
 	uint32_t* FieldPtr; // stable slab pointer — written by onLoaded, cleared by onEvicted
 	AssetID ID;
 	bool Conditional; // if true, skip when *FieldPtr != 0 (field already set by user)
+};
+
+// -----------------------------------------------------------------------
+// AssetDataRef<T> — non-owning typed view into a registry asset's CPU data.
+//
+// Holds a stable pointer to the AssetEntry (entries live until Unregister,
+// not just until eviction). Get() re-checks CPUData on every call: returns
+// nullptr once the asset is evicted, valid pointer while it is loaded.
+//
+// Store as a member for per-tick access without repeated name lookups.
+// Does NOT hold a pin — use Checkout if you need eviction prevention.
+// -----------------------------------------------------------------------
+template<typename T>
+class AssetDataRef
+{
+public:
+	AssetDataRef() = default;
+
+	const T* Get() const
+	{
+		return (EntryPtr && EntryPtr->CPUData) ? static_cast<const T*>(EntryPtr->CPUData) : nullptr;
+	}
+
+	explicit operator bool()  const { return Get() != nullptr; }
+	const T* operator->()     const { return Get(); }
+	const T& operator*()      const { return *Get(); }
+
+private:
+	friend class AssetRegistry;
+	const AssetEntry* EntryPtr = nullptr;
 };
 
 class AssetRegistry
@@ -112,7 +142,7 @@ public:
 
 	// --- Registration (editor/import pipeline) ---
 	/// Registers the entry and validates it immediately if ContentRoot is set.
-	void Register(const AssetID& id, const std::string& name, const std::string& path,
+	void Register(const AssetID& id, TnxName name, const std::string& path,
 				  AssetType type, uint32_t schemaVersion = 0, AssetFlags flags = AssetFlags::None);
 
 	/// Checks file existence on disk; sets/clears @c RuntimeFlags::Missing. Returns true if valid.
@@ -168,6 +198,40 @@ public:
 		return e && e->PinCount > 0;
 	}
 
+	// --- Typed CPU-asset access ---
+	//
+	// Returns an AssetDataRef<T> backed by the entry's CPUData field.
+	// CPUData is set synchronously by managers that retain a CPU copy
+	// (Skeleton, Animation). Mesh and Audio use slot-only Data.
+	// Get() returns nullptr if the asset is not loaded or has no CPU copy.
+
+	template<typename T>
+	AssetDataRef<T> GetAssetData(AssetID id) const
+	{
+		AssetDataRef<T> ref;
+		ref.EntryPtr = Find(id);
+		return ref;
+	}
+
+	template<typename T>
+	AssetDataRef<T> GetAssetData(TnxName name) const
+	{
+		AssetDataRef<T> ref;
+		ref.EntryPtr = FindByTName(name);
+		return ref;
+	}
+
+	// Slot-based lookup — used when only a slot index is available (e.g., from slab fields).
+	template<typename T>
+	AssetDataRef<T> GetAssetData(AssetType type, uint32_t slot) const
+	{
+		AssetDataRef<T> ref;
+		uint64_t key = (static_cast<uint64_t>(type) << 32) | slot;
+		auto it = SlotIndex.find(key);
+		if (it != SlotIndex.end()) ref.EntryPtr = FindInternal(it->second);
+		return ref;
+	}
+
 	// --- Memory management (refcounted) ---
 	// Multiple worlds/systems can Pin the same asset. Eviction is only
 	// valid when PinCount reaches zero.
@@ -181,6 +245,28 @@ public:
 	{
 		AssetEntry* e = FindMutable(id);
 		if (e && e->PinCount > 0) --e->PinCount;
+	}
+
+	/// Load registry metadata from a cooked AssetDatabase.tnxdb in @p contentRoot.
+	/// Does not load asset data — only registers name/path/type/UUID so assets can be
+	/// found by name and demand-loaded via Checkout(). Safe to call in non-editor builds.
+	void LoadManifest(const char* contentRoot);
+
+	/// Trigger demand load without pinning. Use for pre-warming assets before entity spawn.
+	/// Has no effect if the asset is already loaded or no loader is registered for its type.
+	void TriggerLoad(const AssetID& id)
+	{
+		AssetEntry* e = FindMutable(id);
+		if (!e || HasFlag(e->State, RuntimeFlags::Loaded)) return;
+		uint8_t typeIdx = static_cast<uint8_t>(e->Type);
+		if (Loaders[typeIdx].Fn)
+			Loaders[typeIdx].Fn(Loaders[typeIdx].Ctx, id);
+	}
+
+	void TriggerLoad(TnxName name)
+	{
+		const AssetEntry* e = FindByTName(name);
+		if (e) TriggerLoad(e->ID);
 	}
 
 	// --- Loader registry — demand-load on first Checkout ---
@@ -339,8 +425,8 @@ public:
 			UnregisterSlot(e->Type, slot);
 			e->OnEvicted();
 			e->OnLoaded.Reset();
-			// TODO: type-specific deallocation
-			e->Data  = nullptr;
+			e->Data    = nullptr;
+			e->CPUData = nullptr;
 			e->State = static_cast<RuntimeFlags>(
 				static_cast<uint8_t>(e->State) & ~static_cast<uint8_t>(RuntimeFlags::Loaded));
 		}
@@ -356,7 +442,8 @@ public:
 				UnregisterSlot(entry.Type, slot);
 				entry.OnEvicted();
 				entry.OnLoaded.Reset();
-				entry.Data  = nullptr;
+				entry.Data    = nullptr;
+				entry.CPUData = nullptr;
 				entry.State = static_cast<RuntimeFlags>(
 					static_cast<uint8_t>(entry.State) & ~static_cast<uint8_t>(RuntimeFlags::Loaded));
 			}

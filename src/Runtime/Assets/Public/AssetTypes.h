@@ -24,8 +24,8 @@ enum class AssetType : uint8_t
 {
 	Invalid      = 0x00,
 	DataAsset    = 0x01, // generic data (config, JSON, etc.)
-	StaticMesh   = 0x02,
-	SkeletalMesh = 0x03,
+	Mesh         = 0x02,
+	Skeleton     = 0x03,
 	Material     = 0x04,
 	Texture      = 0x05,
 	Audio        = 0x06,
@@ -171,7 +171,7 @@ inline AssetType AssetTypeFromExtension(const char* ext)
 		if (ext[3] == 's')
 		{
 			if (ext[4] == 'c') return AssetType::Level;        // .tnxscene
-			if (ext[4] == 'k') return AssetType::SkeletalMesh; // .tnxskel, .tnxskin
+			if (ext[4] == 'k') return AssetType::Skeleton; // .tnxskel, .tnxskin
 		}
 		if (ext[3] == 'p') return AssetType::Prefab; // .tnxprefab
 		if (ext[3] == 'a')
@@ -192,12 +192,12 @@ inline AssetType AssetTypeFromExtension(const char* ext)
 		(ext[0] == 'g' && ext[1] == 'l' && ext[2] == 't' && ext[3] == 'f') ||
 		(ext[0] == 'g' && ext[1] == 'l' && ext[2] == 'b' && ext[3] == '\0') ||
 		(ext[0] == 'f' && ext[1] == 'b' && ext[2] == 'x' && ext[3] == '\0'))
-		return AssetType::StaticMesh;
+		return AssetType::Mesh;
 
 	// Engine binary mesh format
 	if (ext[0] == 't' && ext[1] == 'n' && ext[2] == 'x' && ext[3] == 'm'
 		&& ext[4] == 'e' && ext[5] == 's' && ext[6] == 'h' && ext[7] == '\0')
-		return AssetType::StaticMesh;
+		return AssetType::Mesh;
 
 	if ((ext[0] == 'w' && ext[1] == 'a' && ext[2] == 'v' && ext[3] == '\0') ||
 		(ext[0] == 'o' && ext[1] == 'g' && ext[2] == 'g' && ext[3] == '\0') ||
@@ -218,8 +218,8 @@ inline const char* AssetTypeName(AssetType type)
 	switch (type)
 	{
 		case AssetType::DataAsset: return "Data";
-		case AssetType::StaticMesh: return "Static Mesh";
-		case AssetType::SkeletalMesh: return "Skeletal Mesh";
+		case AssetType::Mesh: return "Mesh";
+		case AssetType::Skeleton: return "Skeleton";
 		case AssetType::Material: return "Material";
 		case AssetType::Texture: return "Texture";
 		case AssetType::Audio: return "Audio";

@@ -122,6 +122,9 @@ void FlowManager<TNet, TRollback, TFrame>::LoadLevel(const char* levelPath, bool
 
 		sm->AddJob(id, [world, reg, pathPtr, bBackground, spawnFrame, soul](uint32_t)
 		{
+			// Pre-warm all named asset refs so entities spawn with assets already loaded.
+			FlowManagerBase::PreloadLevelAssets(pathPtr);
+
 			// Blocks this worker until the Logic thread processes the spawn.
 			// Safe: Logic thread drains its WorldQueue independently of General workers.
 			world->SpawnAndWait([reg, pathPtr, bBackground, spawnFrame, soul](uint32_t)
@@ -140,6 +143,9 @@ void FlowManager<TNet, TRollback, TFrame>::LoadLevel(const char* levelPath, bool
 	{
 		sm->AddJob(id, [world, reg, pathPtr, bBackground, soul](uint32_t)
 		{
+			// Pre-warm all named asset refs so entities spawn with assets already loaded.
+			FlowManagerBase::PreloadLevelAssets(pathPtr);
+
 			world->SpawnAndWait([reg, pathPtr, bBackground, soul](uint32_t)
 			{
 				const size_t count = EntityBuilder::SpawnFromFile(reg, pathPtr, bBackground);

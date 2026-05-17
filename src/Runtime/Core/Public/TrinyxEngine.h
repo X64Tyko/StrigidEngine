@@ -253,6 +253,14 @@ void TrinyxEngine::Run(GameClass& game)
 	// Editor builds skip the auto-load — EditorContext drives flow/level startup
 	// and would double-load into the editor DefaultWorld.
 #if !TNX_ENABLE_EDITOR
+	// Populate the asset registry from the cooked manifest so LoadLevelByName can
+	// resolve asset names without a full editor asset database scan.
+	if (Config.ProjectDir[0] != '\0')
+	{
+		std::string contentRoot = std::string(Config.ProjectDir) + "/content";
+		AssetRegistry::Get().SetContentRoot(contentRoot);
+		AssetRegistry::Get().LoadManifest(contentRoot.c_str());
+	}
 	if (Config.DefaultState[0] != '\0')
 	{
 		Flow->LoadDefaultState(Config.DefaultState);

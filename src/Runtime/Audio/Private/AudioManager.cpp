@@ -130,7 +130,7 @@ uint32_t AudioManager::CommitToSlot(SoundAsset* asset, AssetID id, bool bPinned)
 // Asset loading
 // ---------------------------------------------------------------------------
 
-uint32_t AudioManager::LoadSound(const char* path, const std::string& name, AssetID id, bool bPinned)
+uint32_t AudioManager::LoadSound(const char* path, TnxName name, AssetID id, bool bPinned)
 {
 	SoundAsset* asset = ::LoadSound(path);
 	if (!asset)
@@ -149,7 +149,7 @@ uint32_t AudioManager::LoadSound(const char* path, const std::string& name, Asse
 	}
 
 	LOG_ENG_INFO_F("[Audio] Loaded sound slot %u '%s' (%d frames, %dHz %dch)",
-				   slotID, name.empty() ? path : name.c_str(),
+				   slotID, name.IsValid() ? name.GetStr() : path,
 				   asset->Frames, asset->SampleRate, asset->Channels);
 	return slotID;
 }

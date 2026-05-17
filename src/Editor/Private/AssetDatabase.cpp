@@ -81,7 +81,7 @@ bool AssetDatabase::Rename(AssetID id, const std::string& newName)
 	{
 		if (entry.ID != id) continue;
 
-		entry.Name = newName;
+		entry.Name = TnxName(newName.c_str());
 
 		AssetEntry* rtEntry = AssetRegistry::Get().FindMutable(id);
 		if (rtEntry) rtEntry->Name = TnxName(newName.c_str());
@@ -216,6 +216,7 @@ void AssetDatabase::Reconcile()
 				// Sidecar exists but not in database — re-register
 				AssetDatabaseEntry entry;
 				entry.ID          = AssetID::Create(sc.UUID, type);
+				entry.Name        = TnxName(NameFromPath(relPath).c_str());
 				entry.Path        = relPath;
 				entry.Type        = type;
 				entry.ContentHash = sc.ContentHash;
@@ -253,7 +254,7 @@ void AssetDatabase::Reconcile()
 			// Add to database
 			AssetDatabaseEntry entry;
 			entry.ID          = AssetID::Create(uuid, type);
-			entry.Name        = NameFromPath(relPath);
+			entry.Name        = TnxName(NameFromPath(relPath).c_str());
 			entry.Path        = relPath;
 			entry.Type        = type;
 			entry.ContentHash = hash;
@@ -287,7 +288,7 @@ bool AssetDatabase::Save() const
 	{
 		JsonValue asset      = JsonValue::Object();
 		asset["uuid"]        = JsonValue::Number(static_cast<double>(entry.ID.GetUUID()));
-		asset["name"]        = JsonValue::String(entry.Name);
+		asset["name"]        = JsonValue::String(entry.Name.GetStr());
 		asset["path"]        = JsonValue::String(entry.Path);
 		asset["type"]        = JsonValue::Number(static_cast<double>(static_cast<uint8_t>(entry.Type)));
 		asset["contentHash"] = JsonValue::Number(static_cast<double>(entry.ContentHash));
@@ -356,7 +357,9 @@ bool AssetDatabase::Load()
 
 		entry.ID = AssetID::Create(static_cast<int64_t>(uuid->AsNumber()),
 								   type ? static_cast<AssetType>(type->AsInt()) : AssetType::Invalid);
-		entry.Name        = (name && name->IsString()) ? name->AsString() : NameFromPath(path->AsString());
+		std::string nameStr = (name && name->IsString()) ? name->AsString() : std::string{};
+		if (nameStr.empty()) nameStr = NameFromPath(path->AsString());
+		entry.Name        = TnxName(nameStr.c_str());
 		entry.Path        = path->AsString();
 		entry.Type        = entry.ID.GetType();
 		entry.ContentHash = hash ? static_cast<uint64_t>(hash->AsNumber()) : 0;

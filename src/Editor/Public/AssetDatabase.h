@@ -4,6 +4,7 @@
 #endif
 
 #include "AssetTypes.h"
+#include "TnxName.h"
 
 #include <string>
 #include <unordered_map>
@@ -51,8 +52,8 @@ struct AssetSidecar
 struct AssetDatabaseEntry
 {
 	AssetID ID;
-	std::string Name; // human-readable display name (default = filename stem)
-	std::string Path; // relative to content root
+	TnxName Name;         // hashed display name — default = filename stem on first discovery
+	std::string Path;     // relative to content root
 	AssetType Type       = AssetType::Invalid;
 	uint64_t ContentHash = 0;
 };

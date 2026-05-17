@@ -228,7 +228,7 @@ uint32_t MeshManager::CommitToSlot(const MeshAsset& asset, AssetID id)
 
 	// Register slot → UUID mapping immediately so CheckinBySlot can resolve a
 	// despawn that arrives before the upload job fires OnLoaded.
-	if (id.IsValid()) AssetRegistry::Get().RegisterSlot(AssetType::StaticMesh, slotID, id);
+	if (id.IsValid()) AssetRegistry::Get().RegisterSlot(AssetType::Mesh, slotID, id);
 
 	MeshSlot& slot    = Slots[slotID];
 	slot.FirstIndex   = NextIndexOffset;
@@ -275,17 +275,17 @@ uint32_t MeshManager::CommitToSlot(const MeshAsset& asset, AssetID id)
 // LoadMesh
 // -----------------------------------------------------------------------
 
-uint32_t MeshManager::LoadMesh(const MeshAsset& asset, const std::string& name, AssetID id)
+uint32_t MeshManager::LoadMesh(const MeshAsset& asset, TnxName name, AssetID id)
 {
 	// Register into AssetRegistry as the name/ID authority before committing the slot.
 	// CommitToSlot only updates Data/State — it does not touch the name.
-	if (id.IsValid()) AssetRegistry::Get().Register(id, name, {}, AssetType::StaticMesh);
+	if (id.IsValid()) AssetRegistry::Get().Register(id, name, {}, AssetType::Mesh);
 
 	uint32_t slotID = CommitToSlot(asset, id);
 
 	if (slotID != UINT32_MAX)
 		LOG_ENG_INFO_F("[MeshManager] Loaded mesh slot %u '%s' (%zu verts, %zu indices)",
-					   slotID, name.empty() ? "(unnamed)" : name.c_str(),
+					   slotID, name.IsValid() ? name.GetStr() : "(unnamed)",
 					   asset.Vertices.size(), asset.Indices.size());
 	return slotID;
 }
@@ -297,7 +297,7 @@ uint32_t MeshManager::LoadMesh(AssetID id)
 	if (slot != UINT32_MAX) return slot;
 
 	const AssetEntry* entry = AssetRegistry::Get().Find(id);
-	if (!entry || entry->Type != AssetType::StaticMesh)
+	if (!entry || entry->Type != AssetType::Mesh)
 	{
 		LOG_ENG_ERROR("[MeshManager] LoadMesh: AssetID not in registry");
 		return UINT32_MAX;
@@ -323,7 +323,7 @@ uint32_t MeshManager::LoadMesh(AssetID id)
 uint32_t MeshManager::LoadMesh(TnxName name)
 {
 	const AssetEntry* entry = AssetRegistry::Get().FindByTName(name);
-	if (!entry || entry->Type != AssetType::StaticMesh)
+	if (!entry || entry->Type != AssetType::Mesh)
 	{
 		LOG_ENG_ERROR_F("[MeshManager] LoadMesh: TnxName '%s' not in registry", name.GetStr());
 		return UINT32_MAX;
@@ -349,7 +349,7 @@ uint32_t MeshManager::LoadBuiltinCube()
 	cube.AABBMax[1] = 0.5f;
 	cube.AABBMax[2] = 0.5f;
 
-	return LoadMesh(cube, "Cube", BuiltinMesh::CubeID());
+	return LoadMesh(cube, TNX_NAME("Cube"), BuiltinMesh::CubeID());
 }
 
 // -----------------------------------------------------------------------
@@ -484,5 +484,5 @@ uint32_t MeshManager::LoadBuiltinCapsule(float radius, float halfHeight, uint32_
 	capsule.AABBMax[1] = halfHeight + radius;
 	capsule.AABBMax[2] = radius;
 
-	return LoadMesh(capsule, "Capsule", BuiltinMesh::CapsuleID());
+	return LoadMesh(capsule, TNX_NAME("Capsule"), BuiltinMesh::CapsuleID());
 }

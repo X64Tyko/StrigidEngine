@@ -1,12 +1,12 @@
 // predicate.slang — Pass 1 of 3.
 //
-// Reads the active bit (bit 31) from each entity's flags and writes a raw
-// 0/1 predicate value into the scan buffer.  The scan buffer doubles as
-// temporary predicate storage; prefix_sum.slang overwrites it in-place with
-// the final exclusive-scan output indices.
+// Reads the active bit (bit 31) from each entity's flags and the MeshID.
+// An entity is GPU-visible only when active AND meshID != 0. MeshID == 0
+// means the mesh has not yet loaded; the entity stays alive in logic and
+// physics but is invisible to the GPU until the slot arrives via Checkout.
 //
-// Flags are read from CurrFieldAddrs[0] (the field slab slot with SemFlags
-// semantic, always at field index 0 by convention).
+// Flags are read from CurrFieldAddrs[0] (SemFlags, always field index 0).
+// MeshID is read from CurrFieldAddrs[SemMeshID - 1] (field index 15).
 
 #include "common/GpuFrameData.slang"
 
@@ -24,9 +24,13 @@ void main(uint3 tid : SV_DispatchThreadID)
         return;
 
     // Flags live in the field slab at CurrFieldAddrs[0] (SemFlags, always index 0).
-    uint flags = ((uint*)fd->CurrFieldAddrs[0])[i];
-    uint pred  = (flags >> 31u) & 1u;   // 1 if active, 0 otherwise
+    uint flags  = ((uint*)fd->CurrFieldAddrs[0])[i];
+    uint active = (flags >> 31u) & 1u;
+
+    // MeshID == 0 means the mesh slot is not yet populated; skip this entity.
+    uint64_t meshFieldAddr = fd->CurrFieldAddrs[SemMeshID - 1u];
+    uint meshID = meshFieldAddr != 0 ? ((uint*)meshFieldAddr)[i] : 0u;
 
     // Write raw predicate into scan[i].  prefix_sum will overwrite in-place.
-    ((uint*)fd->ScanAddr)[i] = pred;
+    ((uint*)fd->ScanAddr)[i] = active & (meshID != 0u ? 1u : 0u);
 }
