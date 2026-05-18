@@ -35,8 +35,7 @@ void main(uint3 tid : SV_DispatchThreadID)
     if (meshID == 0)
     {
         uint64_t skinMeshFieldAddr = fd->CurrFieldAddrs[SlabIdx_SkinMeshID];
-        if (skinMeshFieldAddr != 0)
-            meshID = ((uint*)skinMeshFieldAddr)[i];
+        meshID = skinMeshFieldAddr != 0 ? ((uint*)skinMeshFieldAddr)[i] : meshID;
     }
 
     // Write raw predicate into scan[i].  prefix_sum will overwrite in-place.

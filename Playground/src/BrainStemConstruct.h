@@ -1,4 +1,5 @@
 #pragma once
+#include "AnimationManager.h"
 #include "AnimConstruct.h"  // AnimConstruct, AnimationAsset, SkeletonAsset, AssetRegistry, AssetTypes
 #include "Construct.h"
 #include "ConstructView.h"
@@ -53,23 +54,53 @@ public:
 
     void PostPhysics(SimFloat /*dt*/)
     {
-        const uint32_t animID = Body.AnimBase.BaseAnimID.Value();
-        if (animID == 0) return;
+        // Wide ESkeletalEntity::PostPhysics advances all timestamps each frame.
+        // This scalar pass handles only state machine logic and loop wrapping.
+
+        const uint32_t baseAnimID = Body.AnimBase.BaseAnimID.Value();
+        if (baseAnimID == 0) return;
 
         BeginAnimTick();
 
-        auto animRef = AssetRegistry::Get().GetAssetData<AnimationAsset>(AssetType::Animation, animID);
-        if (!animRef) return;
-
-        const float dur = animRef->duration;
-        SimFloat t = Body.AnimBase.GetBaseTimestamp();
-        if (WrapTimestamp(t, dur, true))
+        // Base layer — wrap on loop
+        const float baseDur = AnimationManager::Get().GetDuration(baseAnimID);
+        SimFloat    baseT   = Body.AnimBase.GetBaseTimestamp();
+        if (WrapTimestamp(baseT, baseDur, /*loops=*/true))
         {
-            NotifyState.ClearLoopedRecords(0, SimFloat(dur));
-            Body.AnimBase.SetBaseTimestamp(t);
+            NotifyState.ClearLoopedRecords(0, SimFloat(baseDur));
+            Body.AnimBase.SetBaseTimestamp(baseT);
         }
 
-        DebugAnimState(animID, animRef, t, dur);
+        // Fade layer — wrap source clip; clear when fully blended
+        if (Body.AnimBase.HasFade())
+        {
+            const uint32_t fadeID  = Body.AnimBase.FadeAnimID.Value();
+            const float    fadeDur = AnimationManager::Get().GetDuration(fadeID);
+            SimFloat       fadeT   = Body.AnimBase.GetFadeTimestamp();
+            if (WrapTimestamp(fadeT, fadeDur, Body.AnimBase.GetFadeLoop()))
+            {
+                NotifyState.ClearLoopedRecords(1, SimFloat(fadeDur));
+                Body.AnimBase.FadeTimestamp = fadeT;
+            }
+            if (Body.AnimBase.GetFadeAlpha() >= SimFloat(1.f))
+                Body.AnimBase.ClearFade();
+        }
+
+        // Overlay layers — wrap each active slot
+        for (uint32_t s = 0; s < CAnimLayer<>::Slots; ++s)
+        {
+            const uint32_t layerID = Body.AnimLayer.GetAnimID(s);
+            if (layerID == 0) continue;
+            const float layerDur = AnimationManager::Get().GetDuration(layerID);
+            SimFloat    layerT   = Body.AnimLayer.GetTimestamp(s);
+            if (WrapTimestamp(layerT, layerDur, CAnimLayer<>::GetLoop(Body.AnimLayer.GetConfig(s))))
+            {
+                NotifyState.ClearLoopedRecords(2 + s, SimFloat(layerDur));
+                Body.AnimLayer.SetTimestamp(s, layerT);
+            }
+        }
+
+        DebugAnimState(baseAnimID, baseT, baseDur);
     }
 
     void InitializeForReplication(WorldBase* world,
@@ -85,7 +116,7 @@ private:
     uint32_t DebugTickCount = 0;
     bool     SkeletonDumped = false;
 
-    void DebugAnimState(uint32_t animID, const AssetDataRef<AnimationAsset>& animRef, SimFloat t, float dur)
+    void DebugAnimState(uint32_t animID, SimFloat t, float dur)
     {
         ++DebugTickCount;
 
@@ -108,6 +139,9 @@ private:
                    animID, tF, dur, dur > 0.f ? 100.f * tF / dur : 0.f);
 
         static constexpr uint32_t kTrackedBone = 1;
+        auto animRef = AssetRegistry::Get().GetAssetData<AnimationAsset>(AssetType::Animation, animID);
+        if (!animRef) return;
+
         if (kTrackedBone < animRef->boneCount)
         {
             BoneTransform b = animRef->EvaluateBone(kTrackedBone, tF);

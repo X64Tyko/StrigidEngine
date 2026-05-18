@@ -34,6 +34,7 @@ public:
 	bool EditorOwnsKeyboard() const { return bEditorOwnsKeyboard.load(std::memory_order_relaxed); }
 	void SetEditorOwnsKeyboard(bool owns) { bEditorOwnsKeyboard.store(owns, std::memory_order_relaxed); }
 
+
 	// ── Editor viewport ──────────────────────────────────────────────────
 	/// Called by EditorContext when the "Viewport" panel resizes.
 	void ResizeEditorViewport(uint32_t width, uint32_t height);

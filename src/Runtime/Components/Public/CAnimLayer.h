@@ -93,14 +93,14 @@ struct CAnimLayer : ComponentView<CAnimLayer, WIDTH>
 
     void SetTimestamp(uint32_t slot, SimFloat t) requires (WIDTH == FieldWidth::Scalar)
     {
-        if (slot == 0) LayerTimestamp0 = t.ToFloat();
-        else           LayerTimestamp1 = t.ToFloat();
+        if (slot == 0) LayerTimestamp0 = t;
+        else           LayerTimestamp1 = t;
     }
 
     void SetAlpha(uint32_t slot, SimFloat alpha) requires (WIDTH == FieldWidth::Scalar)
     {
-        if (slot == 0) LayerAlpha0 = alpha.ToFloat();
-        else           LayerAlpha1 = alpha.ToFloat();
+        if (slot == 0) LayerAlpha0 = alpha;
+        else           LayerAlpha1 = alpha;
     }
 
     void ClearSlot(uint32_t slot) requires (WIDTH == FieldWidth::Scalar)

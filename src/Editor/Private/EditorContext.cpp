@@ -57,6 +57,7 @@ EditorContext::EditorContext() = default;
 
 EditorContext::~EditorContext()
 {
+	SaveEditorSettings();
 	if (bPIEActive) StopPIE();
 }
 
@@ -100,6 +101,7 @@ void EditorContext::Initialize(TrinyxEngine* engine, LogicThreadBase* logic, Mes
 			nullptr);
 
 		CheckForAssetIssues();
+		LoadEditorSettings();
 	}
 
 	// Load default scene if configured
@@ -1300,10 +1302,14 @@ void EditorContext::BuildMenuBar()
 				 State.CurrentSceneName.c_str());
 
 		float textWidth = ImGui::CalcTextSize(sceneLabel).x;
-		float available = ImGui::GetContentRegionAvail().x - totalBtnW - ImGui::GetStyle().ItemSpacing.x;
-		if (available > textWidth) ImGui::SetCursorPosX(ImGui::GetCursorPosX() + available - textWidth);
-		ImGui::TextDisabled("%s", sceneLabel);
-		ImGui::SameLine(0.0f, ImGui::GetStyle().ItemSpacing.x);
+		float btnX      = ImGui::GetWindowWidth() - totalBtnW;
+		float labelX    = btnX - ImGui::GetStyle().ItemSpacing.x - textWidth;
+		if (labelX > ImGui::GetCursorPosX())
+		{
+			ImGui::SetCursorPosX(labelX);
+			ImGui::TextDisabled("%s", sceneLabel);
+		}
+		ImGui::SetCursorPosX(btnX);
 
 		// SDL window ops must run on the main thread; queue them for PumpEvents.
 		SDL_Window* win = EnginePtr->GetWindow();
@@ -1522,6 +1528,73 @@ void EditorContext::CheckForAssetIssues()
 
 	if (!AssetIssues.empty())
 		bShowAssetIssuesDialog = true;
+}
+
+void EditorContext::LoadEditorSettings()
+{
+	if (!State.ConfigPtr || State.ConfigPtr->ProjectDir[0] == '\0') return;
+
+	std::string path = std::string(State.ConfigPtr->ProjectDir) + "/editor_settings.json";
+	std::ifstream file(path);
+	if (!file.is_open()) return;
+
+	std::ostringstream ss;
+	ss << file.rdbuf();
+	JsonValue root = JsonParse(ss.str());
+	if (!root.IsObject()) return;
+
+	if (const JsonValue* v = root.Find("pieMode"))
+	{
+		const std::string& s = v->AsString();
+		if      (s == "ListenServer")   CurrentPIEMode = PIEMode::ListenServer;
+		else if (s == "HeadlessServer") CurrentPIEMode = PIEMode::HeadlessServer;
+		else                            CurrentPIEMode = PIEMode::Local;
+	}
+	if (const JsonValue* v = root.Find("pieClientCount"))
+		PIEClientCount = std::max(1, std::min(4, v->AsInt(1)));
+
+	if (const JsonValue* v = root.Find("workspace"))
+	{
+		const std::string& s = v->AsString();
+		if      (s == "Logic")    CurrentWorkspace = Workspace::Logic;
+		else if (s == "Simulate") CurrentWorkspace = Workspace::Simulate;
+		else if (s == "Network")  CurrentWorkspace = Workspace::Network;
+		else if (s == "Profile")  CurrentWorkspace = Workspace::Profile;
+		else                      CurrentWorkspace = Workspace::Layout;
+	}
+}
+
+void EditorContext::SaveEditorSettings()
+{
+	if (!State.ConfigPtr || State.ConfigPtr->ProjectDir[0] == '\0') return;
+
+	const char* pieMode = "Local";
+	switch (CurrentPIEMode)
+	{
+		case PIEMode::ListenServer:   pieMode = "ListenServer";   break;
+		case PIEMode::HeadlessServer: pieMode = "HeadlessServer"; break;
+		default: break;
+	}
+
+	const char* workspace = "Layout";
+	switch (CurrentWorkspace)
+	{
+		case Workspace::Logic:    workspace = "Logic";    break;
+		case Workspace::Simulate: workspace = "Simulate"; break;
+		case Workspace::Network:  workspace = "Network";  break;
+		case Workspace::Profile:  workspace = "Profile";  break;
+		default: break;
+	}
+
+	JsonValue root = JsonValue::Object();
+	root["pieMode"]        = JsonValue::String(pieMode);
+	root["pieClientCount"] = JsonValue::Number(PIEClientCount);
+	root["workspace"]      = JsonValue::String(workspace);
+
+	std::string path = std::string(State.ConfigPtr->ProjectDir) + "/editor_settings.json";
+	std::ofstream file(path);
+	if (file.is_open())
+		file << JsonWrite(root, true);
 }
 
 void EditorContext::DrawAssetIssuesDialog()

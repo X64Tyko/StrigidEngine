@@ -550,7 +550,6 @@ void TrinyxEngine::PumpEvents()
 	// Sentinel just reacts to the atomic flag each pump cycle.
 	bool engineOwnsInput = Render && !Render->EditorOwnsKeyboard();
 
-	// Sync SDL relative mouse mode with the render thread's decision.
 	if (SDL_GetWindowRelativeMouseMode(EngineWindow) != engineOwnsInput) SDL_SetWindowRelativeMouseMode(EngineWindow, engineOwnsInput);
 
 	// Consume any window op queued by the render thread (SDL calls must be on the main thread).

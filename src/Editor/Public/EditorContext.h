@@ -114,6 +114,8 @@ private:
 	void ConsumePick();
 
 	void CheckForAssetIssues();
+	void LoadEditorSettings();
+	void SaveEditorSettings();
 
 	struct AssetIssue
 	{
