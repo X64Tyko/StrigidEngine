@@ -6,6 +6,8 @@
 #include "EditorState.h"
 #include "EngineConfig.h"
 #include "Logger.h"
+#include "TnxStyle.h"
+#include "TnxWidgets.h"
 #include "imgui.h"
 #include "imgui_internal.h"
 
@@ -870,7 +872,9 @@ bool NodeScriptPanel::ExportToFile()
 
 void NodeScriptPanel::Draw(EditorState& state)
 {
-	ImGui::Begin(Title, &bVisible, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+	if (!ImGui::Begin(Title, &bVisible, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse))
+	{ ImGui::End(); return; }
+	TnxWidgets::PanelHeader(nullptr, "Node Script");
 
 	// Auto-suggest output path from the project directory on the first frame it becomes available.
 	if (OutputPath[0] == '\0' && state.ConfigPtr && state.ConfigPtr->ProjectDir[0] != '\0')

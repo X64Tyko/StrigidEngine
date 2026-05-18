@@ -124,8 +124,33 @@ bool TrinyxEngine::Initialize(const char* title, int width, int height, const ch
 		}
 
 #ifndef TNX_HEADLESS
+#if TNX_ENABLE_EDITOR
+		// Editor draws its own title bar — remove the OS chrome.
+		static auto EditorHitTest = [](SDL_Window* win, const SDL_Point* pt, void*) -> SDL_HitTestResult
+		{
+			int w = 0, h = 0;
+			SDL_GetWindowSize(win, &w, &h);
+			constexpr int kEdge = 8;
+			bool L = pt->x < kEdge, R = pt->x >= w - kEdge;
+			bool T = pt->y < kEdge, B = pt->y >= h - kEdge;
+			if (T && L) return SDL_HITTEST_RESIZE_TOPLEFT;
+			if (T && R) return SDL_HITTEST_RESIZE_TOPRIGHT;
+			if (B && L) return SDL_HITTEST_RESIZE_BOTTOMLEFT;
+			if (B && R) return SDL_HITTEST_RESIZE_BOTTOMRIGHT;
+			if (T) return SDL_HITTEST_RESIZE_TOP;
+			if (B) return SDL_HITTEST_RESIZE_BOTTOM;
+			if (L) return SDL_HITTEST_RESIZE_LEFT;
+			if (R) return SDL_HITTEST_RESIZE_RIGHT;
+			return SDL_HITTEST_NORMAL;
+		};
+		constexpr SDL_WindowFlags kEditorWindowFlags =
+			SDL_WINDOW_RESIZABLE | SDL_WINDOW_VULKAN | SDL_WINDOW_HIGH_PIXEL_DENSITY | SDL_WINDOW_BORDERLESS;
+		EngineWindow = SDL_CreateWindow(title, width, height, kEditorWindowFlags);
+		SDL_SetWindowHitTest(EngineWindow, EditorHitTest, nullptr);
+#else
 		EngineWindow = SDL_CreateWindow(title, width, height,
 										SDL_WINDOW_RESIZABLE | SDL_WINDOW_VULKAN | SDL_WINDOW_HIGH_PIXEL_DENSITY);
+#endif // TNX_ENABLE_EDITOR
 		if (!EngineWindow)
 		{
 			std::cerr << "SDL_CreateWindow failed: " << SDL_GetError() << std::endl;
@@ -527,6 +552,25 @@ void TrinyxEngine::PumpEvents()
 
 	// Sync SDL relative mouse mode with the render thread's decision.
 	if (SDL_GetWindowRelativeMouseMode(EngineWindow) != engineOwnsInput) SDL_SetWindowRelativeMouseMode(EngineWindow, engineOwnsInput);
+
+	// Consume any window op queued by the render thread (SDL calls must be on the main thread).
+	uint8_t wop = PendingWindowOp.exchange(0, std::memory_order_relaxed);
+	if      (wop == 1) SDL_MinimizeWindow(EngineWindow);
+	else if (wop == 2)
+	{
+		if (SDL_GetWindowFlags(EngineWindow) & SDL_WINDOW_MAXIMIZED)
+			SDL_RestoreWindow(EngineWindow);
+		else
+			SDL_MaximizeWindow(EngineWindow);
+	}
+	int wdx = PendingWinDx.exchange(0, std::memory_order_relaxed);
+	int wdy = PendingWinDy.exchange(0, std::memory_order_relaxed);
+	if (wdx != 0 || wdy != 0)
+	{
+		int wx = 0, wy = 0;
+		SDL_GetWindowPosition(EngineWindow, &wx, &wy);
+		SDL_SetWindowPosition(EngineWindow, wx + wdx, wy + wdy);
+	}
 #endif
 
 	SDL_Event e;

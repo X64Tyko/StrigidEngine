@@ -1,124 +1,248 @@
 #include "Panels/WorldOutlinerPanel.h"
+#include "ConstructRegistry.h"
 #include "EditorContext.h"
 #include "EditorState.h"
+#include "LogicThreadBase.h"
 #include "Registry.h"
+#include "TnxStyle.h"
+#include "TnxWidgets.h"
 #include "imgui.h"
 #include "imgui_internal.h"
 
+#include <cstring>
+
+// Strip MSVC "class "/"struct " prefixes from typeid names.
+static const char* StripTypePrefix(const char* name)
+{
+	if (!name) return "(unknown)";
+	if (std::strncmp(name, "class ", 6)  == 0) return name + 6;
+	if (std::strncmp(name, "struct ", 7) == 0) return name + 7;
+	return name;
+}
+
 void WorldOutlinerPanel::Draw(EditorState& state)
 {
-	ImGui::Begin(Title, &bVisible);
+	if (!ImGui::Begin(Title, &bVisible)) { ImGui::End(); return; }
 
-	if (!state.RegistryPtr)
+	ConstructRegistry* cr = state.LogicPtr ? state.LogicPtr->GetConstructRegistry() : nullptr;
+
+	uint32_t constructCount = cr ? cr->GetCount() : 0;
+	uint32_t archetypeCount = state.RegistryPtr
+		? static_cast<uint32_t>(state.RegistryPtr->GetArchetypes().size()) : 0;
+	uint32_t entityCount = state.RegistryPtr
+		? state.RegistryPtr->GetTotalEntityCount() : 0;
+
+	TnxWidgets::PanelHeader(nullptr, "World Outliner", [&]()
 	{
-		ImGui::TextDisabled("No registry");
-		ImGui::End();
-		return;
+		char buf[32];
+		snprintf(buf, sizeof(buf), "%u cnst", constructCount);
+		TnxWidgets::Chip(buf);
+		ImGui::SameLine(0.0f, 4.0f);
+		snprintf(buf, sizeof(buf), "%u arch", archetypeCount);
+		TnxWidgets::Chip(buf);
+		ImGui::SameLine(0.0f, 4.0f);
+		if (entityCount >= 1000)
+			snprintf(buf, sizeof(buf), "%uk ent", entityCount / 1000);
+		else
+			snprintf(buf, sizeof(buf), "%u ent", entityCount);
+		TnxWidgets::Chip(buf);
+	});
+
+	ImGui::BeginChild("##OutlinerBody", ImVec2(0, 0), ImGuiChildFlags_None,
+					  ImGuiWindowFlags_HorizontalScrollbar);
+
+	// -----------------------------------------------------------------------
+	// Root: CONSTRUCTS
+	// -----------------------------------------------------------------------
+	{
+		ImGui::PushStyleColor(ImGuiCol_Header,        TnxStyle::Color::BgElev);
+		ImGui::PushStyleColor(ImGuiCol_HeaderHovered, TnxStyle::Color::PurpleFaint);
+		ImGui::PushStyleColor(ImGuiCol_HeaderActive,  TnxStyle::Color::PurpleSoft);
+		ImGui::PushStyleColor(ImGuiCol_Text,          TnxStyle::Color::FgMuted);
+		bool constructsOpen = ImGui::CollapsingHeader("CONSTRUCTS##root",
+													  ImGuiTreeNodeFlags_DefaultOpen);
+		ImGui::PopStyleColor(4);
+
+		if (constructsOpen)
+		{
+			if (cr && constructCount > 0)
+			{
+				cr->ForEachWithMeta([&](void* ptr, uint32_t id, const char* rawTypeName)
+				{
+					const char* displayName = StripTypePrefix(rawTypeName);
+
+					bool selected = (state.Selection == EditorState::SelectionType::Construct
+								  && state.SelectedConstructID == id);
+
+					ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_Leaf
+						| ImGuiTreeNodeFlags_NoTreePushOnOpen
+						| ImGuiTreeNodeFlags_SpanFullWidth;
+					if (selected) flags |= ImGuiTreeNodeFlags_Selected;
+
+					char label[128];
+					snprintf(label, sizeof(label), "%s###cnst_%u", displayName, id);
+
+					ImGui::PushStyleColor(ImGuiCol_Text,
+						selected ? TnxStyle::Color::PurpleHot : TnxStyle::Color::Fg);
+					ImGui::TreeNodeEx(label, flags);
+					ImGui::PopStyleColor();
+
+					bool clicked = ImGui::IsItemClicked();
+
+					// Right-align the construct ID, dimmed
+					char idStr[24];
+					snprintf(idStr, sizeof(idStr), "#%u", id);
+					float idW  = ImGui::CalcTextSize(idStr).x;
+					float posX = ImGui::GetWindowWidth() - idW - ImGui::GetScrollX() - 12.0f;
+					float labelEndX = ImGui::GetCursorPosX() + ImGui::CalcTextSize(displayName).x + 24.0f;
+					if (posX > labelEndX)
+					{
+						ImGui::SameLine(posX);
+						ImGui::PushStyleColor(ImGuiCol_Text, TnxStyle::Color::FgDim);
+						ImGui::TextUnformatted(idStr);
+						ImGui::PopStyleColor();
+					}
+
+					if (clicked)
+					{
+						state.ClearSelection();
+						state.Selection                 = EditorState::SelectionType::Construct;
+						state.SelectedConstructID       = id;
+						state.SelectedConstructPtr      = ptr;
+						state.SelectedConstructTypeName = rawTypeName;
+					}
+				});
+			}
+			else
+			{
+				ImGui::PushStyleColor(ImGuiCol_Text, TnxStyle::Color::FgDim);
+				ImGui::TextUnformatted("  No constructs (simulation not running)");
+				ImGui::PopStyleColor();
+			}
+		}
 	}
 
-	ImGui::Text("Entities: %u  |  Chunks: %u",
-				state.RegistryPtr->GetTotalEntityCount(),
-				state.RegistryPtr->GetTotalChunkCount());
-	ImGui::Separator();
-
-	for (auto& [key, arch] : state.RegistryPtr->GetArchetypes())
+	// -----------------------------------------------------------------------
+	// Root: ARCHETYPES
+	// -----------------------------------------------------------------------
+	if (state.RegistryPtr)
 	{
-		if (!arch) continue;
+		ImGui::PushStyleColor(ImGuiCol_Header,        TnxStyle::Color::BgElev);
+		ImGui::PushStyleColor(ImGuiCol_HeaderHovered, TnxStyle::Color::PurpleFaint);
+		ImGui::PushStyleColor(ImGuiCol_HeaderActive,  TnxStyle::Color::PurpleSoft);
+		ImGui::PushStyleColor(ImGuiCol_Text,          TnxStyle::Color::FgMuted);
+		bool archetypesOpen = ImGui::CollapsingHeader("ARCHETYPES##root",
+													  ImGuiTreeNodeFlags_DefaultOpen);
+		ImGui::PopStyleColor(4);
 
-		// Archetype tree node: "DebugName (N entities)"
-		char label[256];
-		snprintf(label, sizeof(label), "%s  (%u entities)###arch_%u",
-				 arch->DebugName, arch->TotalEntityCount, key.ID);
-
-		bool archetypeSelected = (state.Selection == EditorState::SelectionType::Archetype
-			&& state.SelectedClassID == key.ID);
-
-		ImGuiTreeNodeFlags archFlags = ImGuiTreeNodeFlags_OpenOnArrow;
-		if (archetypeSelected) archFlags |= ImGuiTreeNodeFlags_Selected;
-
-		bool archOpen = ImGui::TreeNodeEx(label, archFlags);
-
-		// Click on archetype label selects it
-		if (ImGui::IsItemClicked() && !ImGui::IsItemToggledOpen())
+		if (archetypesOpen)
 		{
-			state.ClearSelection();
-			state.Selection         = EditorState::SelectionType::Archetype;
-			state.SelectedClassID   = key.ID;
-			state.SelectedArchetype = arch;
-		}
-
-		if (archOpen)
-		{
-			for (size_t ci = 0; ci < arch->Chunks.size(); ++ci)
+			for (auto& [key, arch] : state.RegistryPtr->GetArchetypes())
 			{
-				Chunk* chunk         = arch->Chunks[ci];
-				uint32_t entityCount = arch->GetLiveChunkCount(ci);
+				if (!arch) continue;
 
-				char chunkLabel[128];
-				snprintf(chunkLabel, sizeof(chunkLabel), "Chunk %zu  (%u entities)###chunk_%u_%zu",
-						 ci, entityCount, key.ID, ci);
+				bool archetypeSelected = (state.Selection == EditorState::SelectionType::Archetype
+					&& state.SelectedClassID == key.ID);
 
-				ImGuiTreeNodeFlags chunkFlags = ImGuiTreeNodeFlags_OpenOnArrow;
+				char label[256];
+				snprintf(label, sizeof(label), "%s###arch_%u", arch->DebugName, key.ID);
 
-				bool chunkOpen = ImGui::TreeNodeEx(chunkLabel, chunkFlags);
+				ImGuiTreeNodeFlags archFlags = ImGuiTreeNodeFlags_OpenOnArrow;
+				if (archetypeSelected) archFlags |= ImGuiTreeNodeFlags_Selected;
 
-				if (chunkOpen)
+				bool archOpen = ImGui::TreeNodeEx(label, archFlags);
+
+				bool archClicked = ImGui::IsItemClicked() && !ImGui::IsItemToggledOpen();
+
+				// Right-align entity count
+				char countStr[32];
+				snprintf(countStr, sizeof(countStr), "%u ent", arch->TotalEntityCount);
+				float cntW  = ImGui::CalcTextSize(countStr).x;
+				float posX  = ImGui::GetWindowWidth() - cntW - ImGui::GetScrollX() - 12.0f;
+				ImGui::SameLine(posX);
+				ImGui::PushStyleColor(ImGuiCol_Text, TnxStyle::Color::FgDim);
+				ImGui::TextUnformatted(countStr);
+				ImGui::PopStyleColor();
+
+				if (archClicked)
 				{
-					// Entity leaves
-					for (uint32_t ei = 0; ei < entityCount; ++ei)
+					state.ClearSelection();
+					state.Selection         = EditorState::SelectionType::Archetype;
+					state.SelectedClassID   = key.ID;
+					state.SelectedArchetype = arch;
+				}
+
+				if (archOpen)
+				{
+					for (size_t ci = 0; ci < arch->Chunks.size(); ++ci)
 					{
-						uint32_t cacheIdx = static_cast<uint32_t>(chunk->Header.CacheIndexStart) + ei;
+						Chunk* chunk         = arch->Chunks[ci];
+						uint32_t liveCount   = arch->GetLiveChunkCount(ci);
 
-						char entityLabel[64];
-						snprintf(entityLabel, sizeof(entityLabel), "Entity %u###ent_%u", cacheIdx, cacheIdx);
+						char chunkLabel[128];
+						snprintf(chunkLabel, sizeof(chunkLabel), "chunk %zu  (%u)###chunk_%u_%zu",
+								 ci, liveCount, key.ID, ci);
 
-						bool entitySelected = (state.Selection == EditorState::SelectionType::Entity
-							&& state.SelectedCacheIndex == cacheIdx);
+						ImGuiTreeNodeFlags chunkFlags = ImGuiTreeNodeFlags_OpenOnArrow;
+						bool chunkOpen = ImGui::TreeNodeEx(chunkLabel, chunkFlags);
 
-						ImGuiTreeNodeFlags entityFlags = ImGuiTreeNodeFlags_Leaf
-							| ImGuiTreeNodeFlags_NoTreePushOnOpen;
-						if (entitySelected) entityFlags |= ImGuiTreeNodeFlags_Selected;
-
-						ImGui::TreeNodeEx(entityLabel, entityFlags);
-
-						if (ImGui::IsItemClicked())
+						if (chunkOpen)
 						{
-							state.ClearSelection();
-							state.Selection          = EditorState::SelectionType::Entity;
-							state.SelectedClassID    = key.ID;
-							state.SelectedArchetype  = arch;
-							state.SelectedChunk      = chunk;
-							state.SelectedLocalIndex = static_cast<uint16_t>(ei);
-							state.SelectedCacheIndex = cacheIdx;
-						}
-
-						// Right-click context menu on entity
-						if (ImGui::BeginPopupContextItem())
-						{
-							if (ImGui::MenuItem("Delete"))
+							for (uint32_t ei = 0; ei < liveCount; ++ei)
 							{
-								// Select this entity first (in case it wasn't selected)
-								state.ClearSelection();
-								state.Selection          = EditorState::SelectionType::Entity;
-								state.SelectedClassID    = key.ID;
-								state.SelectedArchetype  = arch;
-								state.SelectedChunk      = chunk;
-								state.SelectedLocalIndex = static_cast<uint16_t>(ei);
-								state.SelectedCacheIndex = cacheIdx;
+								uint32_t cacheIdx = static_cast<uint32_t>(chunk->Header.CacheIndexStart) + ei;
 
-								if (state.EditorCtx) state.EditorCtx->DeleteSelectedEntity();
+								bool entitySelected = (state.Selection == EditorState::SelectionType::Entity
+									&& state.SelectedCacheIndex == cacheIdx);
+
+								char entLabel[64];
+								snprintf(entLabel, sizeof(entLabel), "e 0x%06X###ent_%u", cacheIdx, cacheIdx);
+
+								ImGuiTreeNodeFlags entFlags = ImGuiTreeNodeFlags_Leaf
+									| ImGuiTreeNodeFlags_NoTreePushOnOpen;
+								if (entitySelected) entFlags |= ImGuiTreeNodeFlags_Selected;
+
+								ImGui::PushStyleColor(ImGuiCol_Text, TnxStyle::Color::FgDim);
+								ImGui::TreeNodeEx(entLabel, entFlags);
+								ImGui::PopStyleColor();
+
+								if (ImGui::IsItemClicked())
+								{
+									state.ClearSelection();
+									state.Selection          = EditorState::SelectionType::Entity;
+									state.SelectedClassID    = key.ID;
+									state.SelectedArchetype  = arch;
+									state.SelectedChunk      = chunk;
+									state.SelectedLocalIndex = static_cast<uint16_t>(ei);
+									state.SelectedCacheIndex = cacheIdx;
+								}
+
+								if (ImGui::BeginPopupContextItem())
+								{
+									if (ImGui::MenuItem("Delete"))
+									{
+										state.ClearSelection();
+										state.Selection          = EditorState::SelectionType::Entity;
+										state.SelectedClassID    = key.ID;
+										state.SelectedArchetype  = arch;
+										state.SelectedChunk      = chunk;
+										state.SelectedLocalIndex = static_cast<uint16_t>(ei);
+										state.SelectedCacheIndex = cacheIdx;
+										if (state.EditorCtx) state.EditorCtx->DeleteSelectedEntity();
+									}
+									ImGui::EndPopup();
+								}
 							}
-							ImGui::EndPopup();
+							ImGui::TreePop();
 						}
 					}
 					ImGui::TreePop();
 				}
 			}
-			ImGui::TreePop();
 		}
 	}
 
-	// Delete key: delete selected entity when outliner is focused
+	// --- Delete key when focused ---
 	if (state.Selection == EditorState::SelectionType::Entity
 		&& ImGui::IsWindowFocused()
 		&& ImGui::IsKeyPressed(ImGuiKey_Delete)
@@ -128,9 +252,7 @@ void WorldOutlinerPanel::Draw(EditorState& state)
 		state.EditorCtx->DeleteSelectedEntity();
 	}
 
-	// Drop target: accept prefab drags from content browser.
-	// Use BeginDragDropTargetCustom on the full window rect so drops
-	// land even on empty space (no last-item required).
+	// --- Drop target: accept prefab drags on empty space ---
 	ImGuiWindow* win = ImGui::GetCurrentWindow();
 	ImRect winRect(win->InnerRect);
 	if (ImGui::BeginDragDropTargetCustom(winRect, win->ID))
@@ -146,5 +268,6 @@ void WorldOutlinerPanel::Draw(EditorState& state)
 		ImGui::EndDragDropTarget();
 	}
 
+	ImGui::EndChild();
 	ImGui::End();
 }

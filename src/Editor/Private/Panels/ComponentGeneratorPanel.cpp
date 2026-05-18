@@ -6,6 +6,8 @@
 #include "EditorState.h"
 #include "EngineConfig.h"
 #include "Logger.h"
+#include "TnxStyle.h"
+#include "TnxWidgets.h"
 #include "imgui.h"
 
 #include <cstdio>
@@ -76,7 +78,13 @@ void ComponentGeneratorPanel::RegenerateCode()
 		out += ", ";
 		out += f.Name;
 	}
-	out += ");\n\n";
+	out += ");\n";
+
+	// Replication annotation — component-level, Temporal tier only.
+	if (bReplicated && TierIndex == 0)
+		out += "TNX_NET_REPLICATED(" + std::string(CompName) + ");\n";
+
+	out += "\n";
 
 	// Struct body
 	out += "struct ";
@@ -162,7 +170,10 @@ bool ComponentGeneratorPanel::ExportToFile()
 
 void ComponentGeneratorPanel::Draw(EditorState& state)
 {
-	ImGui::Begin(Title, &bVisible);
+	if (!ImGui::Begin(Title, &bVisible)) { ImGui::End(); return; }
+	TnxWidgets::PanelHeader(nullptr, "Component Generator");
+	ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 6);
+	ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 8);
 
 	bool changed = false;
 
@@ -195,6 +206,24 @@ void ComponentGeneratorPanel::Draw(EditorState& state)
 		ImGui::SameLine();
 		ImGui::SetNextItemWidth(120.0f);
 		if (ImGui::Combo("##Group", &GroupIndex, kGroupNames, kNumGroups)) changed = true;
+	}
+
+	// Replicated checkbox — only meaningful for Temporal tier
+	{
+		ImGui::PushStyleColor(ImGuiCol_Text, TierIndex == 0 ? TnxStyle::Color::Fg : TnxStyle::Color::FgDim);
+		if (ImGui::Checkbox("Replicated (net)##rep", &bReplicated))
+		{
+			if (TierIndex != 0) bReplicated = false; // Cold/Volatile can't replicate
+			changed = true;
+		}
+		ImGui::PopStyleColor();
+		if (TierIndex != 0)
+		{
+			ImGui::SameLine(0, 6);
+			ImGui::PushStyleColor(ImGuiCol_Text, TnxStyle::Color::FgDim);
+			ImGui::TextUnformatted("(Temporal only)");
+			ImGui::PopStyleColor();
+		}
 	}
 
 	// --- Field list ---

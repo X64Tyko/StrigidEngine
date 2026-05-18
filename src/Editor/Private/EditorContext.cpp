@@ -1,5 +1,8 @@
 #include "EditorContext.h"
 #include "EditorPanel.h"
+#include "TnxPalette.h"
+#include "TnxStyle.h"
+#include "TnxWidgets.h"
 #include "UndoCommand.h"
 #include "EntityBuilder.h"
 #include "FlowManager.h"
@@ -123,6 +126,79 @@ void EditorContext::Initialize(TrinyxEngine* engine, LogicThreadBase* logic, Mes
 	AddPanel<DebuggerPanel>();
 
 	LOG_ENG_INFO_F("[Editor] Initialized with %zu panels", Panels.size());
+
+	// --- Register command palette commands ---
+	TnxPalette::Clear();
+
+	// Workspace switch × 5
+	TnxPalette::Register({"Switch to Layout workspace",   nullptr, nullptr, nullptr, [this]{ CurrentWorkspace = Workspace::Layout;   }});
+	TnxPalette::Register({"Switch to Logic workspace",    nullptr, nullptr, nullptr, [this]{ CurrentWorkspace = Workspace::Logic;    }});
+	TnxPalette::Register({"Switch to Simulate workspace", nullptr, nullptr, nullptr, [this]{ CurrentWorkspace = Workspace::Simulate; }});
+	TnxPalette::Register({"Switch to Network workspace",  nullptr, nullptr, nullptr, [this]{ CurrentWorkspace = Workspace::Network;  }});
+	TnxPalette::Register({"Switch to Profile workspace",  nullptr, nullptr, nullptr, [this]{ CurrentWorkspace = Workspace::Profile;  }});
+
+	// Scene operations
+	TnxPalette::Register({"Open Scene…",   nullptr, nullptr, "Ctrl+O", [this]{
+		bShowFileDialog    = true;
+		bFileDialogForSave = false;
+		FileDialogPath     = State.CurrentScenePath;
+	}});
+	TnxPalette::Register({"Save Scene",    nullptr, nullptr, "Ctrl+S", [this]{
+		if (!State.CurrentScenePath.empty())
+		{
+			EntityBuilder::SaveToFile(State.RegistryPtr, State.CurrentSceneName.c_str(),
+									  State.CurrentScenePath.c_str(),
+									  State.SceneDefaultState.empty() ? nullptr : State.SceneDefaultState.c_str(),
+									  State.SceneDefaultMode.empty() ? nullptr : State.SceneDefaultMode.c_str());
+			State.bSceneDirty = false;
+		}
+	}});
+	TnxPalette::Register({"Save Scene As…", nullptr, nullptr, "Ctrl+Shift+S", [this]{
+		bShowFileDialog    = true;
+		bFileDialogForSave = true;
+		FileDialogPath     = State.CurrentScenePath;
+	}});
+
+	// PIE controls
+	TnxPalette::Register({"Start PIE (Local)",   "Play in editor — solo world",  nullptr, nullptr, [this]{ if (!bPIEActive) StartPIELocal(); }});
+	TnxPalette::Register({"Stop PIE",            "End play-in-editor session",   nullptr, nullptr, [this]{ if (bPIEActive) bPIEStopRequested = true; }});
+
+	// PIE networked modes
+	TnxPalette::Register({"PIE — 2 Owners", "Authority + 2 Owners", nullptr, nullptr, [this]{
+		if (!bPIEActive) { PIEClientCount = 2; bServerVisible = true; StartPIE(); }
+	}});
+	TnxPalette::Register({"PIE — 3 Owners", "Authority + 3 Owners", nullptr, nullptr, [this]{
+		if (!bPIEActive) { PIEClientCount = 3; bServerVisible = true; StartPIE(); }
+	}});
+	TnxPalette::Register({"PIE — 4 Owners", "Authority + 4 Owners", nullptr, nullptr, [this]{
+		if (!bPIEActive) { PIEClientCount = 4; bServerVisible = true; StartPIE(); }
+	}});
+
+	// Layout reset
+	TnxPalette::Register({"Reset Layout", "Restore default panel arrangement", nullptr, nullptr, [this]{
+		for (auto& b : bWorkspaceLayoutBuilt) b = false;
+	}});
+
+	// Import mesh
+	TnxPalette::Register({"Import Mesh…", "Load glTF/GLB into content", nullptr, nullptr, [this]{
+		bShowImportDialog = true;
+		ImportDialogPath.clear();
+	}});
+
+	// Undo / Redo
+	TnxPalette::Register({"Undo", nullptr, nullptr, "Ctrl+Z", [this]{ Undo(); }});
+	TnxPalette::Register({"Redo", nullptr, nullptr, "Ctrl+Y", [this]{ Redo(); }});
+
+	// Gizmo mode
+	TnxPalette::Register({"Gizmo — Translate", nullptr, nullptr, "W", [this]{ State.CurrentGizmoOp = EditorState::GizmoOp::Translate; }});
+	TnxPalette::Register({"Gizmo — Rotate",    nullptr, nullptr, "E", [this]{ State.CurrentGizmoOp = EditorState::GizmoOp::Rotate;    }});
+	TnxPalette::Register({"Gizmo — Scale",     nullptr, nullptr, "R", [this]{ State.CurrentGizmoOp = EditorState::GizmoOp::Scale;     }});
+	TnxPalette::Register({"Toggle World / Local gizmo space", nullptr, nullptr, nullptr, [this]{ State.bGizmoWorldMode = !State.bGizmoWorldMode; }});
+	TnxPalette::Register({"Toggle Gizmo snap",               nullptr, nullptr, nullptr, [this]{ State.bGizmoSnap      = !State.bGizmoSnap;      }});
+
+	// Demo / debug
+	TnxPalette::Register({"Show ImGui Demo Window", nullptr, nullptr, nullptr, [this]{ bShowDemoWindow = !bShowDemoWindow; }});
+	TnxPalette::Register({"Show ImGui Metrics",     nullptr, nullptr, nullptr, [this]{ bShowMetrics    = !bShowMetrics;    }});
 }
 
 void EditorContext::LoadScene(const std::string& path, bool bReset)
@@ -444,16 +520,10 @@ void EditorContext::ConsumePick()
 	{
 		ImVec2 mousePos = ImGui::GetMousePos();
 
-		// Scale to physical pixels for DPI
-		int logicalW = 0, physicalW = 0;
-		SDL_GetWindowSize(EnginePtr->GetWindow(), &logicalW, nullptr);
-		SDL_GetWindowSizeInPixels(EnginePtr->GetWindow(), &physicalW, nullptr);
-		const float dpiScale = (logicalW > 0) ? static_cast<float>(physicalW) / static_cast<float>(logicalW) : 1.0f;
-
-		// Convert from global window coords to viewport-panel-relative coords,
-		// then DPI-scale to match the offscreen pick target resolution.
-		int32_t pickX = static_cast<int32_t>((mousePos.x - ViewportPanelPos.x) * dpiScale);
-		int32_t pickY = static_cast<int32_t>((mousePos.y - ViewportPanelPos.y) * dpiScale);
+		// Pick target is at logical pixel resolution (matches ImGui panelSize) so
+		// coordinates must be logical too — no DPI scaling.
+		int32_t pickX = static_cast<int32_t>(mousePos.x - ViewportPanelPos.x);
+		int32_t pickY = static_cast<int32_t>(mousePos.y - ViewportPanelPos.y);
 
 		EnginePtr->Render->RequestPick(pickX, pickY);
 	}
@@ -507,11 +577,12 @@ void EditorContext::BuildFrame()
 		State.ReplicatorPtr = serverWorld ? serverWorld->GetReplicationSystem() : nullptr;
 	}
 
-	// Consume GPU pick results and update selection
-	ConsumePick();
-
 	// Main editor scene viewport — always visible, dockable
 	DrawEditorViewportPanel();
+
+	// Consume GPU pick results — must run after DrawEditorViewportPanel so
+	// ViewportPanelHovered and ImGuizmo::IsOver() reflect the current frame.
+	ConsumePick();
 
 	// Draw all panels
 	for (auto& panel : Panels)
@@ -553,6 +624,12 @@ void EditorContext::BuildFrame()
 	if (bShowDemoWindow) ImGui::ShowDemoWindow(&bShowDemoWindow);
 	if (bShowMetrics) ImGui::ShowMetricsWindow(&bShowMetrics);
 
+	// Always-visible frame budget strip anchored to bottom-right corner
+	DrawFrameBudgetOverlay();
+
+	// Command palette overlay (Ctrl+K)
+	TnxPalette::Draw();
+
 	// Tell Sentinel whether the engine should own input.
 	// Engine gets input when: right-click held in viewport, or Play is running.
 	bool rightClickInViewport = ImGui::IsMouseDown(ImGuiMouseButton_Right) && ViewportPanelHovered;
@@ -567,6 +644,53 @@ void EditorContext::BuildFrame()
 	if (!playing) bMouseReleasedDuringPlay = false;
 	bool engineGetsInput = (rightClickInViewport || playing) && !bMouseReleasedDuringPlay;
 	EnginePtr->Render->SetEditorOwnsKeyboard(!engineGetsInput);
+}
+
+void EditorContext::DrawFrameBudgetOverlay()
+{
+	if (!State.LogicPtr) return;
+
+	const float logicFps = State.LogicPtr->GetLogicFPS();
+	const float fixedFps = State.LogicPtr->GetFixedFPS();
+	const float fixedMs  = State.LogicPtr->GetFixedFrameMs();
+	if (logicFps < 0.5f) return; // not running yet
+
+	const ImGuiViewport* vp = ImGui::GetMainViewport();
+	ImVec2 overlayPos(vp->WorkPos.x + vp->WorkSize.x - 220.0f,
+					  vp->WorkPos.y + vp->WorkSize.y - 38.0f);
+
+	ImGui::SetNextWindowPos(overlayPos, ImGuiCond_Always);
+	ImGui::SetNextWindowSize(ImVec2(210.0f, 28.0f), ImGuiCond_Always);
+	ImGui::SetNextWindowBgAlpha(0.72f);
+
+	ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration
+		| ImGuiWindowFlags_NoDocking
+		| ImGuiWindowFlags_NoInputs
+		| ImGuiWindowFlags_NoMove
+		| ImGuiWindowFlags_NoNav
+		| ImGuiWindowFlags_NoSavedSettings;
+
+	ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 6.0f);
+	ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,  ImVec2(8.0f, 4.0f));
+	ImGui::PushStyleColor(ImGuiCol_WindowBg, TnxStyle::Color::BgApp);
+
+	if (ImGui::Begin("##FrameBudgetOverlay", nullptr, flags))
+	{
+		ImGui::PushFont(TnxStyle::Font::MonoBold);
+		ImGui::PushStyleColor(ImGuiCol_Text, TnxStyle::Color::FgMuted);
+
+		char buf[80];
+		snprintf(buf, sizeof(buf), "Brain %.2fms  Fixed %.0fHz  UI %.0fHz",
+				 fixedMs, fixedFps, logicFps);
+		ImGui::TextUnformatted(buf);
+
+		ImGui::PopStyleColor();
+		ImGui::PopFont();
+	}
+	ImGui::End();
+
+	ImGui::PopStyleColor();
+	ImGui::PopStyleVar(2);
 }
 
 void EditorContext::PushCommand(std::unique_ptr<UndoCommand> cmd)
@@ -636,10 +760,13 @@ void EditorContext::BuildDockspace()
 	ImGuiID dockspaceID = ImGui::GetID("EditorDockspaceID");
 	ImGui::DockSpace(dockspaceID, ImVec2(0.0f, 0.0f), ImGuiDockNodeFlags_None);
 
-	// Apply default layout on first frame
-	if (bFirstFrame)
+	// Apply layout on first frame, workspace switch, or after a Reset Layout
+	int wsIdx = static_cast<int>(CurrentWorkspace);
+	if (bFirstFrame || CurrentWorkspace != LastAppliedWorkspace || !bWorkspaceLayoutBuilt[wsIdx])
 	{
-		ApplyDefaultLayout(dockspaceID);
+		ApplyWorkspaceLayout(dockspaceID, CurrentWorkspace);
+		bWorkspaceLayoutBuilt[wsIdx] = true;
+		LastAppliedWorkspace = CurrentWorkspace;
 		bFirstFrame = false;
 	}
 
@@ -678,6 +805,108 @@ void EditorContext::ApplyDefaultLayout(unsigned int dockspaceID)
 	ImGui::DockBuilderDockWindow("Node Script", bottom);
 	ImGui::DockBuilderDockWindow("Component Generator", bottom);
 	ImGui::DockBuilderDockWindow("Debugger", bottom);
+
+	ImGui::DockBuilderFinish(dockspaceID);
+}
+
+void EditorContext::ApplyWorkspaceLayout(unsigned int dockspaceID, Workspace ws)
+{
+	ImGui::DockBuilderRemoveNode(dockspaceID);
+	ImGui::DockBuilderAddNode(dockspaceID, ImGuiDockNodeFlags_DockSpace);
+	ImGui::DockBuilderSetNodeSize(dockspaceID, ImGui::GetMainViewport()->WorkSize);
+
+	ImGuiID top, bottom, left, right, center, centerRight;
+
+	switch (ws)
+	{
+		case Workspace::Layout:
+		default:
+		{
+			ImGui::DockBuilderSplitNode(dockspaceID,  ImGuiDir_Down,  0.25f, &bottom, &top);
+			ImGui::DockBuilderSplitNode(top,          ImGuiDir_Left,  0.15f, &left,   &centerRight);
+			ImGui::DockBuilderSplitNode(centerRight,  ImGuiDir_Right, 0.25f, &right,  &center);
+
+			ImGui::DockBuilderDockWindow("World Outliner",       left);
+			ImGui::DockBuilderDockWindow("Viewport",             center);
+			ImGui::DockBuilderDockWindow("Details",              right);
+			ImGui::DockBuilderDockWindow("Content Browser",      bottom);
+			ImGui::DockBuilderDockWindow("Log",                  bottom);
+			ImGui::DockBuilderDockWindow("Engine Stats",         bottom);
+			ImGui::DockBuilderDockWindow("Node Script",          bottom);
+			ImGui::DockBuilderDockWindow("Component Generator",  bottom);
+			ImGui::DockBuilderDockWindow("Debugger",             bottom);
+			break;
+		}
+		case Workspace::Logic:
+		{
+			ImGuiID leftNarrow, mainArea, mainRight, mainBottom;
+			ImGui::DockBuilderSplitNode(dockspaceID, ImGuiDir_Left,  0.12f, &leftNarrow, &mainArea);
+			ImGui::DockBuilderSplitNode(mainArea,    ImGuiDir_Right, 0.25f, &mainRight,  &mainArea);
+			ImGui::DockBuilderSplitNode(mainArea,    ImGuiDir_Down,  0.22f, &mainBottom, &mainArea);
+
+			ImGui::DockBuilderDockWindow("World Outliner",       leftNarrow);
+			ImGui::DockBuilderDockWindow("Node Script",          mainArea);
+			ImGui::DockBuilderDockWindow("Component Generator",  mainRight);
+			ImGui::DockBuilderDockWindow("Details",              mainRight);
+			ImGui::DockBuilderDockWindow("Log",                  mainBottom);
+			ImGui::DockBuilderDockWindow("Viewport",             mainBottom);
+			ImGui::DockBuilderDockWindow("Content Browser",      mainBottom);
+			ImGui::DockBuilderDockWindow("Engine Stats",         mainBottom);
+			ImGui::DockBuilderDockWindow("Debugger",             mainBottom);
+			break;
+		}
+		case Workspace::Simulate:
+		{
+			ImGuiID bottomStrip, mainArea2, inspRight;
+			ImGui::DockBuilderSplitNode(dockspaceID, ImGuiDir_Down,  0.22f, &bottomStrip, &mainArea2);
+			ImGui::DockBuilderSplitNode(mainArea2,   ImGuiDir_Right, 0.24f, &inspRight,   &mainArea2);
+
+			ImGui::DockBuilderDockWindow("Viewport",             mainArea2);
+			ImGui::DockBuilderDockWindow("Details",              inspRight);
+			ImGui::DockBuilderDockWindow("World Outliner",       inspRight);
+			ImGui::DockBuilderDockWindow("Log",                  bottomStrip);
+			ImGui::DockBuilderDockWindow("Engine Stats",         bottomStrip);
+			ImGui::DockBuilderDockWindow("Debugger",             bottomStrip);
+			ImGui::DockBuilderDockWindow("Content Browser",      bottomStrip);
+			ImGui::DockBuilderDockWindow("Node Script",          bottomStrip);
+			ImGui::DockBuilderDockWindow("Component Generator",  bottomStrip);
+			break;
+		}
+		case Workspace::Network:
+		{
+			ImGuiID netBottom, netRight, netCenter;
+			ImGui::DockBuilderSplitNode(dockspaceID, ImGuiDir_Down,  0.25f, &netBottom, &netCenter);
+			ImGui::DockBuilderSplitNode(netCenter,   ImGuiDir_Right, 0.28f, &netRight,  &netCenter);
+
+			ImGui::DockBuilderDockWindow("Viewport",             netCenter);
+			ImGui::DockBuilderDockWindow("Debugger",             netRight);
+			ImGui::DockBuilderDockWindow("Details",              netRight);
+			ImGui::DockBuilderDockWindow("Log",                  netBottom);
+			ImGui::DockBuilderDockWindow("Engine Stats",         netBottom);
+			ImGui::DockBuilderDockWindow("World Outliner",       netBottom);
+			ImGui::DockBuilderDockWindow("Content Browser",      netBottom);
+			ImGui::DockBuilderDockWindow("Node Script",          netBottom);
+			ImGui::DockBuilderDockWindow("Component Generator",  netBottom);
+			break;
+		}
+		case Workspace::Profile:
+		{
+			ImGuiID profLeft, profRight, profBottom, profCenter2;
+			ImGui::DockBuilderSplitNode(dockspaceID, ImGuiDir_Down,  0.28f, &profBottom, &profRight);
+			ImGui::DockBuilderSplitNode(profRight,   ImGuiDir_Left,  0.28f, &profLeft,   &profCenter2);
+
+			ImGui::DockBuilderDockWindow("Engine Stats",         profLeft);
+			ImGui::DockBuilderDockWindow("World Outliner",       profLeft);
+			ImGui::DockBuilderDockWindow("Viewport",             profCenter2);
+			ImGui::DockBuilderDockWindow("Debugger",             profCenter2);
+			ImGui::DockBuilderDockWindow("Log",                  profBottom);
+			ImGui::DockBuilderDockWindow("Details",              profBottom);
+			ImGui::DockBuilderDockWindow("Content Browser",      profBottom);
+			ImGui::DockBuilderDockWindow("Node Script",          profBottom);
+			ImGui::DockBuilderDockWindow("Component Generator",  profBottom);
+			break;
+		}
+	}
 
 	ImGui::DockBuilderFinish(dockspaceID);
 }
@@ -748,7 +977,7 @@ void EditorContext::BuildMenuBar()
 			ImportDialogPath.clear();
 		}
 		ImGui::Separator();
-		ImGui::MenuItem("Exit", nullptr, false, false);
+		if (ImGui::MenuItem("Exit")) EnginePtr->RequestExit();
 		ImGui::EndMenu();
 	}
 
@@ -897,18 +1126,203 @@ void EditorContext::BuildMenuBar()
 		ImGui::EndMenu();
 	}
 
-	// Scene name indicator (right-aligned in menu bar)
+
+	ImGui::Separator();
+
+	// --- Workspace pills ---
 	{
+		static constexpr const char* kWorkspaceNames[] = {
+			"Layout", "Logic", "Simulate", "Network", "Profile"
+		};
+		ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 10.0f);
+		ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,  ImVec2(10.0f, 2.0f));
+		for (int i = 0; i < static_cast<int>(Workspace::COUNT); ++i)
+		{
+			bool active = CurrentWorkspace == static_cast<Workspace>(i);
+			if (active)
+			{
+				ImGui::PushStyleColor(ImGuiCol_Button,        TnxStyle::Color::Purple);
+				ImGui::PushStyleColor(ImGuiCol_ButtonHovered, TnxStyle::Color::PurpleHot);
+				ImGui::PushStyleColor(ImGuiCol_ButtonActive,  TnxStyle::Color::PurpleSoft);
+				ImGui::PushStyleColor(ImGuiCol_Text,          ImVec4(1.0f, 1.0f, 1.0f, 1.0f));
+			}
+			else
+			{
+				ImGui::PushStyleColor(ImGuiCol_Button,        ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
+				ImGui::PushStyleColor(ImGuiCol_ButtonHovered, TnxStyle::Color::BgElev);
+				ImGui::PushStyleColor(ImGuiCol_ButtonActive,  TnxStyle::Color::BgElev);
+				ImGui::PushStyleColor(ImGuiCol_Text,          TnxStyle::Color::FgMuted);
+			}
+			if (ImGui::Button(kWorkspaceNames[i]))
+			{
+				CurrentWorkspace = static_cast<Workspace>(i);
+				// Layout will be applied on next frame if not already built
+				// (bWorkspaceLayoutBuilt[i] stays true if user has already visited)
+			}
+			ImGui::PopStyleColor(4);
+			ImGui::SameLine(0.0f, 2.0f);
+		}
+		ImGui::PopStyleVar(2);
+
+		ImGui::Dummy(ImVec2(8.0f, 0.0f));
+		ImGui::SameLine();
+	}
+
+	// Window drag handle
+	{
+		float rightX = ImGui::GetWindowWidth() - 430.0f;
+		float dragW  = rightX - ImGui::GetCursorPosX() - 4.0f;
+		if (dragW > 1.0f)
+		{
+			ImGui::InvisibleButton("##windrag", ImVec2(dragW, ImGui::GetFrameHeight()));
+			if (ImGui::IsItemHovered()) ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeAll);
+			if (ImGui::IsItemActive())
+			{
+				ImVec2 d = ImGui::GetIO().MouseDelta;
+				if (d.x != 0.0f || d.y != 0.0f) EnginePtr->DeferWindowMove(d.x, d.y);
+			}
+			ImGui::SameLine(0.0f, 0.0f);
+		}
+	}
+
+	// --- PIE controls — mode selector + client count + play/pause/stop ---
+	{
+		// Right-anchor the group; leave room for mode combo (~160) + clients (~55) + buttons (~200)
+		float rightX = ImGui::GetWindowWidth() - 430.0f;
+		if (ImGui::GetCursorPosX() < rightX)
+			ImGui::SetCursorPosX(rightX);
+
+		ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 4.0f);
+
+		if (!bPIEActive)
+		{
+			// Mode selector combo
+			static constexpr const char* kPIEModeLabels[] = {
+				"STANDALONE", "LISTEN + CLIENTS", "DEDICATED + CLIENTS"
+			};
+			int modeIdx = static_cast<int>(CurrentPIEMode);
+			ImGui::PushStyleColor(ImGuiCol_Button,        ImVec4(0, 0, 0, 0));
+			ImGui::PushStyleColor(ImGuiCol_ButtonHovered, TnxStyle::Color::BgElev);
+			ImGui::PushStyleColor(ImGuiCol_ButtonActive,  TnxStyle::Color::BgElev);
+			ImGui::PushStyleColor(ImGuiCol_FrameBg,       TnxStyle::Color::BgDeep);
+			ImGui::PushFont(TnxStyle::Font::MonoRegular ? TnxStyle::Font::MonoRegular : ImGui::GetFont());
+			ImGui::SetNextItemWidth(160.0f);
+			if (ImGui::BeginCombo("##piemode", kPIEModeLabels[modeIdx], ImGuiComboFlags_NoArrowButton))
+			{
+				for (int i = 0; i < 3; ++i)
+				{
+					bool sel = (modeIdx == i);
+					if (ImGui::Selectable(kPIEModeLabels[i], sel))
+						CurrentPIEMode = static_cast<PIEMode>(i);
+					if (sel) ImGui::SetItemDefaultFocus();
+				}
+				ImGui::EndCombo();
+			}
+			ImGui::PopFont();
+			ImGui::PopStyleColor(4);
+			ImGui::SameLine(0.0f, 4.0f);
+
+			// Client count — only shown for networked modes
+			if (CurrentPIEMode != PIEMode::Local)
+			{
+				ImGui::PushFont(TnxStyle::Font::MonoRegular ? TnxStyle::Font::MonoRegular : ImGui::GetFont());
+				ImGui::SetNextItemWidth(45.0f);
+				ImGui::InputInt("##pieclientcount", &PIEClientCount, 0, 0);
+				if (PIEClientCount < 1) PIEClientCount = 1;
+				if (PIEClientCount > 4) PIEClientCount = 4;
+				ImGui::PopFont();
+				ImGui::SameLine(0.0f, 4.0f);
+			}
+
+			// Play — yellow, dark text
+			ImGui::PushStyleColor(ImGuiCol_Button,        TnxStyle::Color::Yellow);
+			ImGui::PushStyleColor(ImGuiCol_ButtonHovered, TnxStyle::Color::YellowHot);
+			ImGui::PushStyleColor(ImGuiCol_ButtonActive,  TnxStyle::Color::YellowSoft);
+			ImGui::PushStyleColor(ImGuiCol_Text,          TnxStyle::Color::YellowOnYellow);
+			if (ImGui::Button("  Play  "))
+			{
+				switch (CurrentPIEMode)
+				{
+					case PIEMode::Local:          StartPIELocal(); break;
+					case PIEMode::ListenServer:   bServerVisible = true;  StartPIE(); break;
+					case PIEMode::HeadlessServer: bServerVisible = false; StartPIE(); break;
+				}
+			}
+			ImGui::PopStyleColor(4);
+		}
+		else
+		{
+			// Pause / Resume
+			if (!bPIEPaused)
+			{
+				if (ImGui::Button("  Pause ") && State.LogicPtr)
+				{
+					bPIEPaused = true;
+					State.LogicPtr->SetSimPaused(true);
+				}
+			}
+			else
+			{
+				// Resume — yellow tint, dark text so it reads on both YellowSoft and Yellow
+				ImGui::PushStyleColor(ImGuiCol_Button,        TnxStyle::Color::YellowSoft);
+				ImGui::PushStyleColor(ImGuiCol_ButtonHovered, TnxStyle::Color::Yellow);
+				ImGui::PushStyleColor(ImGuiCol_ButtonActive,  TnxStyle::Color::YellowHot);
+				ImGui::PushStyleColor(ImGuiCol_Text,          TnxStyle::Color::YellowOnYellow);
+				if (ImGui::Button(" Resume ") && State.LogicPtr)
+				{
+					bPIEPaused = false;
+					State.LogicPtr->SetSimPaused(false);
+				}
+				ImGui::PopStyleColor(4);
+			}
+
+			ImGui::SameLine(0.0f, 4.0f);
+
+			// Stop
+			ImGui::PushStyleColor(ImGuiCol_Button,        ImVec4(0.60f, 0.18f, 0.18f, 1.0f));
+			ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.70f, 0.22f, 0.22f, 1.0f));
+			ImGui::PushStyleColor(ImGuiCol_ButtonActive,  ImVec4(0.50f, 0.15f, 0.15f, 1.0f));
+			if (ImGui::Button("  Stop  ")) bPIEStopRequested = true;
+			ImGui::PopStyleColor(3);
+		}
+
+		ImGui::PopStyleVar();
+	}
+
+	// Scene name + window controls (right side of menu bar)
+	{
+		constexpr float kBtnW = 36.0f;
+		const float totalBtnW = kBtnW * 3.0f;
+
 		char sceneLabel[256];
 		snprintf(sceneLabel, sizeof(sceneLabel), "%s%s",
 				 State.bSceneDirty ? "* " : "",
 				 State.CurrentSceneName.c_str());
 
 		float textWidth = ImGui::CalcTextSize(sceneLabel).x;
-		float available = ImGui::GetContentRegionAvail().x;
+		float available = ImGui::GetContentRegionAvail().x - totalBtnW - ImGui::GetStyle().ItemSpacing.x;
 		if (available > textWidth) ImGui::SetCursorPosX(ImGui::GetCursorPosX() + available - textWidth);
-
 		ImGui::TextDisabled("%s", sceneLabel);
+		ImGui::SameLine(0.0f, ImGui::GetStyle().ItemSpacing.x);
+
+		// SDL window ops must run on the main thread; queue them for PumpEvents.
+		SDL_Window* win = EnginePtr->GetWindow();
+		ImGui::PushStyleColor(ImGuiCol_Button,        ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
+		ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(1.0f, 1.0f, 1.0f, 0.08f));
+		ImGui::PushStyleColor(ImGuiCol_ButtonActive,  ImVec4(1.0f, 1.0f, 1.0f, 0.15f));
+
+		if (ImGui::Button("_##wmin", ImVec2(kBtnW, 0.0f))) EnginePtr->DeferWindowOp(1);
+		ImGui::SameLine(0.0f, 0.0f);
+
+		bool bMaximized = (SDL_GetWindowFlags(win) & SDL_WINDOW_MAXIMIZED) != 0;
+		if (ImGui::Button(bMaximized ? "-##wmax" : "+##wmax", ImVec2(kBtnW, 0.0f)))
+			EnginePtr->DeferWindowOp(2);
+		ImGui::SameLine(0.0f, 0.0f);
+
+		ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.80f, 0.10f, 0.10f, 1.0f));
+		ImGui::PushStyleColor(ImGuiCol_ButtonActive,  ImVec4(1.00f, 0.20f, 0.20f, 1.0f));
+		if (ImGui::Button("X##wclose", ImVec2(kBtnW, 0.0f))) EnginePtr->RequestExit();
+		ImGui::PopStyleColor(5);
 	}
 
 	ImGui::EndMenuBar();
@@ -2241,11 +2655,140 @@ void EditorContext::DrawEditorViewportPanel()
 					ImGui::EndDragDropTarget();
 				}
 			}
+			DrawEditorGrid();
 			DrawGizmo();
 		}
 	}
 	ImGui::End();
 	ImGui::PopStyleVar();
+}
+
+void EditorContext::DrawEditorGrid()
+{
+	if (!State.RegistryPtr) return;
+	ComponentCacheBase* tc   = State.RegistryPtr->GetTemporalCache();
+	TemporalFrameHeader* hdr = tc->GetFrameHeader();
+	if (!hdr) return;
+	if (ViewportPanelSize.x <= 0.0f || ViewportPanelSize.y <= 0.0f) return;
+
+	// Camera basis (same math as DrawGizmo)
+	const Quatf camRot = hdr->CameraRotation.ToFloat();
+	const float crx = camRot.x, cry = camRot.y, crz = camRot.z, crw = camRot.w;
+	auto qr = [&](float vx, float vy, float vz, float& ox, float& oy, float& oz)
+	{
+		float tx = 2.0f * (cry * vz - crz * vy);
+		float ty = 2.0f * (crz * vx - crx * vz);
+		float tz = 2.0f * (crx * vy - cry * vx);
+		ox = vx + crw * tx + (cry * tz - crz * ty);
+		oy = vy + crw * ty + (crz * tx - crx * tz);
+		oz = vz + crw * tz + (crx * ty - cry * tx);
+	};
+	float rx, ry, rz, ux, uy, uz, fx, fy, fz;
+	qr( 1,  0,  0, rx, ry, rz);
+	qr( 0,  1,  0, ux, uy, uz);
+	qr( 0,  0, -1, fx, fy, fz);
+	const float cpx = hdr->CameraPosition.x.ToFloat();
+	const float cpy = hdr->CameraPosition.y.ToFloat();
+	const float cpz = hdr->CameraPosition.z.ToFloat();
+
+	// View & projection (column-major, OpenGL convention — same as gizmo)
+	// Column-major: element [col*4 + row]
+	const float V[16] = {
+		rx,  ux,  -fx, 0.0f,
+		ry,  uy,  -fy, 0.0f,
+		rz,  uz,  -fz, 0.0f,
+		-(rx*cpx + ry*cpy + rz*cpz),
+		-(ux*cpx + uy*cpy + uz*cpz),
+		 (fx*cpx + fy*cpy + fz*cpz),
+		1.0f
+	};
+	const float aspect  = ViewportPanelSize.x / ViewportPanelSize.y;
+	const float fovRad  = hdr->CameraFoV.ToFloat() * 3.14159265f / 180.0f;
+	const float F       = 1.0f / std::tan(fovRad * 0.5f);
+	const float zNear   = 0.1f, zFar = 5000.0f, dz = zNear - zFar;
+	const float P[16]   = {
+		F / aspect, 0.0f,          0.0f,          0.0f,
+		0.0f,       F,             0.0f,          0.0f,
+		0.0f,       0.0f,          zFar / dz,    -1.0f,
+		0.0f,       0.0f,          (zFar * zNear) / dz, 0.0f
+	};
+
+	// Transform a world-space Y=0 point (wx, wz) → view space → clip space.
+	// Returns clip-space (cx, cy, cw). cw = -vz; positive means in front.
+	auto toClip = [&](float wx, float wz, float& cx, float& cy, float& cw)
+	{
+		float vx = V[0]*wx + V[8]*wz + V[12];  // V[4]*0 dropped (wy=0)
+		float vy = V[1]*wx + V[9]*wz + V[13];
+		float vz = V[2]*wx + V[10]*wz + V[14];
+		cx = P[0] * vx;
+		cy = P[5] * vy;
+		cw = -vz; // projection[11] = -1
+	};
+
+	// Convert clip-space (cx, cy, cw) → ImGui screen position.
+	auto toScreen = [&](float cx, float cy, float cw) -> ImVec2
+	{
+		float ndcX = cx / cw;
+		float ndcY = cy / cw;
+		return {
+			(ndcX + 1.0f) * 0.5f * ViewportPanelSize.x + ViewportPanelPos.x,
+			(1.0f - (ndcY + 1.0f) * 0.5f) * ViewportPanelSize.y + ViewportPanelPos.y
+		};
+	};
+
+	// Draw a Y=0 line from (wx0,wz0) to (wx1,wz1) with near-plane clipping.
+	const float kNear = 0.05f;
+	ImDrawList* dl    = ImGui::GetWindowDrawList();
+
+	auto drawLine = [&](float wx0, float wz0, float wx1, float wz1, ImU32 col, float thickness)
+	{
+		float cx0, cy0, cw0, cx1, cy1, cw1;
+		toClip(wx0, wz0, cx0, cy0, cw0);
+		toClip(wx1, wz1, cx1, cy1, cw1);
+		if (cw0 <= kNear && cw1 <= kNear) return; // both behind
+
+		// Clip near-plane on either endpoint
+		if (cw0 <= kNear)
+		{
+			float t = (kNear - cw0) / (cw1 - cw0);
+			cx0 = cx0 + t * (cx1 - cx0);
+			cy0 = cy0 + t * (cy1 - cy0);
+			cw0 = kNear;
+		}
+		else if (cw1 <= kNear)
+		{
+			float t = (kNear - cw1) / (cw0 - cw1);
+			cx1 = cx1 + t * (cx0 - cx1);
+			cy1 = cy1 + t * (cy0 - cy1);
+			cw1 = kNear;
+		}
+		dl->AddLine(toScreen(cx0, cy0, cw0), toScreen(cx1, cy1, cw1), col, thickness);
+	};
+
+	constexpr int   kHalf = 50;      // grid extends ±50 units from world origin
+	constexpr float kStep = 1.0f;
+	const float     ext   = kHalf * kStep;
+
+	const ImU32 kLine   = IM_COL32( 70,  70,  90, 130);
+	const ImU32 kAxisX  = IM_COL32(180,  60,  60, 200); // X-axis red
+	const ImU32 kAxisZ  = IM_COL32( 60,  60, 180, 200); // Z-axis blue
+
+	// Lines parallel to X (varying Z)
+	for (int i = -kHalf; i <= kHalf; ++i)
+	{
+		float z = i * kStep;
+		ImU32 col = (i == 0) ? kAxisX : kLine;
+		float th  = (i == 0) ? 1.5f : 1.0f;
+		drawLine(-ext, z, ext, z, col, th);
+	}
+	// Lines parallel to Z (varying X)
+	for (int i = -kHalf; i <= kHalf; ++i)
+	{
+		float x = i * kStep;
+		ImU32 col = (i == 0) ? kAxisZ : kLine;
+		float th  = (i == 0) ? 1.5f : 1.0f;
+		drawLine(x, -ext, x, ext, col, th);
+	}
 }
 
 void EditorContext::DrawViewportPanel(const char* title, WorldViewport& vp)

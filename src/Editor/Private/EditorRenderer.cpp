@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <filesystem>
 #include <mutex>
 #include <string>
 #include <SDL3/SDL.h>
@@ -10,6 +11,7 @@
 #include "imgui.h"
 #include "imgui_impl_sdl3.h"
 #include "imgui_impl_vulkan.h"
+#include "TnxStyle.h"
 
 #include "AnimationManager.h"
 #include "CacheSlotMeta.h"
@@ -136,28 +138,29 @@ bool EditorRenderer::InitImGui()
 	io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
 	io.ConfigFlags |= ImGuiConfigFlags_ViewportsEnable;
 
-	ImGui::StyleColorsDark();
-
-	// When viewports are enabled, OS-decorated windows must have no rounding
-	// and a fully-opaque background so they blend correctly on the desktop.
-	ImGuiStyle& style                 = ImGui::GetStyle();
-	style.WindowRounding              = 0.0f;
-	style.Colors[ImGuiCol_WindowBg].w = 1.0f;
-
 	int logicalW = 0, physicalW = 0;
 	SDL_GetWindowSize(WindowPtr, &logicalW, nullptr);
 	SDL_GetWindowSizeInPixels(WindowPtr, &physicalW, nullptr);
-	float dpiScale = (logicalW > 0) ? static_cast<float>(physicalW) / static_cast<float>(logicalW) : 1.0f;
+	const float dpiScale = (logicalW > 0) ? static_cast<float>(physicalW) / static_cast<float>(logicalW) : 1.0f;
 
-	if (dpiScale > 1.01f)
+	// Locate engine root by walking up from the project dir (same anchor as config loading).
+	const char* projectDir = (EnginePtr && EnginePtr->GetConfig()->ProjectDir[0] != '\0')
+	                             ? EnginePtr->GetConfig()->ProjectDir : nullptr;
+	std::string engineRoot;
 	{
-		ImGui::GetStyle().ScaleAllSizes(dpiScale);
-		ImFontConfig fontCfg;
-		fontCfg.SizePixels  = 13.0f * dpiScale;
-		fontCfg.OversampleH = 2;
-		fontCfg.OversampleV = 2;
-		io.Fonts->AddFontDefault(&fontCfg);
+		namespace fs = std::filesystem;
+		fs::path search = projectDir ? fs::path(projectDir) : fs::current_path();
+		for (int d = 0; d < 10; ++d)
+		{
+			if (fs::exists(search / "TrinyxDefaults.ini")) { engineRoot = search.string(); break; }
+			fs::path parent = search.parent_path();
+			if (parent == search) break;
+			search = parent;
+		}
 	}
+
+	// Font search: {projectDir}/assets/fonts → {engineRoot}/Trinyx/assets/fonts → assets/fonts
+	TnxStyle::LoadFonts(projectDir, engineRoot.c_str(), dpiScale);
 
 	ImGui_ImplSDL3_InitForVulkan(WindowPtr);
 
@@ -187,6 +190,18 @@ bool EditorRenderer::InitImGui()
 		LOG_ENG_ERROR("[EditorRenderer] ImGui_ImplVulkan_Init failed");
 		return false;
 	}
+
+	// Apply theme after both backends are up — this wins over any backend-side resets.
+	TnxStyle::Apply();
+
+	// Viewport fixup: multi-viewport platform windows need zero rounding and an
+	// opaque background so they blend correctly outside the main SDL window.
+	ImGuiStyle& style                 = ImGui::GetStyle();
+	style.WindowRounding              = 0.0f;
+	style.Colors[ImGuiCol_WindowBg].w = 1.0f;
+
+	if (dpiScale > 1.01f)
+		style.ScaleAllSizes(dpiScale);
 
 	EventQueue = new ImGuiEventQueue();
 
@@ -863,21 +878,16 @@ void EditorRenderer::RecordViewportScenePass(VkCommandBuffer cmd, FrameSync& fra
 
 #if defined(TNX_GPU_PICKING_FAST)
 	// FAST: pick every frame at the mouse position, but only for the editor viewport.
-	// SDL_GetMouseState returns logical window coords; subtract the viewport panel origin
-	// (set by EditorContext::DrawEditorViewportPanel during OnPreRecord) and DPI-scale
-	// to match the offscreen pick target's physical pixel resolution.
+	// ImGuiConfigFlags_ViewportsEnable is active, so all ImGui coords (including
+	// GetCursorScreenPos / ViewportPanelPos) are in global desktop space.
+	// SDL_GetGlobalMouseState also returns global coords — the subtraction is consistent.
+	// The pick target is at logical pixel dimensions, so no DPI scaling is applied.
 	if (bIsEditorVP && Editor)
 	{
 		float mx, my;
-		SDL_GetMouseState(&mx, &my);
-		int logicalW = 0, physicalW = 0;
-		SDL_GetWindowSize(WindowPtr, &logicalW, nullptr);
-		SDL_GetWindowSizeInPixels(WindowPtr, &physicalW, nullptr);
-		const float dpiScale = (logicalW > 0) ? static_cast<float>(physicalW) / static_cast<float>(logicalW) : 1.0f;
-
-		// Convert window-relative mouse to viewport-panel-relative, then to physical pixels.
-		pickX  = static_cast<int32_t>((mx - Editor->GetViewportPanelPos().x) * dpiScale);
-		pickY  = static_cast<int32_t>((my - Editor->GetViewportPanelPos().y) * dpiScale);
+		SDL_GetGlobalMouseState(&mx, &my);
+		pickX   = static_cast<int32_t>(mx - Editor->GetViewportPanelPos().x);
+		pickY   = static_cast<int32_t>(my - Editor->GetViewportPanelPos().y);
 		bDoPick = true;
 	}
 #else
@@ -1059,10 +1069,10 @@ void EditorRenderer::RecordViewportScenePass(VkCommandBuffer cmd, FrameSync& fra
 	// Scene render pass to offscreen targets
 	{
 		VkClearValue colorClear{};
-		colorClear.color.float32[0] = 0.4f;
-		colorClear.color.float32[1] = 0.0f;
-		colorClear.color.float32[2] = 0.6f;
-		colorClear.color.float32[3] = 1.0f;
+		colorClear.color.float32[0] = TnxStyle::Color::BgViewport.x;
+		colorClear.color.float32[1] = TnxStyle::Color::BgViewport.y;
+		colorClear.color.float32[2] = TnxStyle::Color::BgViewport.z;
+		colorClear.color.float32[3] = TnxStyle::Color::BgViewport.w;
 
 		VkClearValue depthClear{};
 		depthClear.depthStencil = {1.0f, 0};
@@ -1267,29 +1277,61 @@ void EditorRenderer::RecordPIEFrame(FrameSync& frame, uint32_t imageIndex)
 		needScratchBarrier = true;
 	}
 
-	// Transition skipped viewport color targets from UNDEFINED → SHADER_READ_ONLY
+	// Clear and transition skipped viewport color targets UNDEFINED → SHADER_READ_ONLY
 	// so ImGui can safely sample them in the composite pass.
+	// Viewports with no slab data never reach RecordViewportScenePass (which owns the clear),
+	// so we must clear them here to avoid displaying garbage/gray from undefined image memory.
 	for (WorldViewport* vp : ActiveViewports)
 	{
 		if (!vp->bActive || !vp->TargetWorld) continue;
-		if (vp->bHasSlabData) continue; // Already transitioned by RecordViewportScenePass
+		if (vp->bHasSlabData) continue; // Already handled by RecordViewportScenePass
 
-		VkImageMemoryBarrier2 barrier{};
-		barrier.sType            = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
-		barrier.srcStageMask     = VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT;
-		barrier.srcAccessMask    = 0;
-		barrier.dstStageMask     = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
-		barrier.dstAccessMask    = VK_ACCESS_2_SHADER_READ_BIT;
-		barrier.oldLayout        = VK_IMAGE_LAYOUT_UNDEFINED;
-		barrier.newLayout        = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-		barrier.image            = static_cast<VkImage>(vp->ColorTarget.Image);
-		barrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+		// UNDEFINED → TRANSFER_DST so vkCmdClearColorImage can write.
+		{
+			VkImageMemoryBarrier2 barrier{};
+			barrier.sType            = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+			barrier.srcStageMask     = VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT;
+			barrier.srcAccessMask    = 0;
+			barrier.dstStageMask     = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+			barrier.dstAccessMask    = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+			barrier.oldLayout        = VK_IMAGE_LAYOUT_UNDEFINED;
+			barrier.newLayout        = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+			barrier.image            = static_cast<VkImage>(vp->ColorTarget.Image);
+			barrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+			VkDependencyInfo dep{};
+			dep.sType                   = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+			dep.imageMemoryBarrierCount = 1;
+			dep.pImageMemoryBarriers    = &barrier;
+			vkCmdPipelineBarrier2(cmd, &dep);
+		}
 
-		VkDependencyInfo dep{};
-		dep.sType                   = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-		dep.imageMemoryBarrierCount = 1;
-		dep.pImageMemoryBarriers    = &barrier;
-		vkCmdPipelineBarrier2(cmd, &dep);
+		VkClearColorValue clearVal{};
+		clearVal.float32[0] = TnxStyle::Color::BgViewport.x;
+		clearVal.float32[1] = TnxStyle::Color::BgViewport.y;
+		clearVal.float32[2] = TnxStyle::Color::BgViewport.z;
+		clearVal.float32[3] = TnxStyle::Color::BgViewport.w;
+		VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+		vkCmdClearColorImage(cmd, static_cast<VkImage>(vp->ColorTarget.Image),
+		                     VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &clearVal, 1, &range);
+
+		// TRANSFER_DST → SHADER_READ_ONLY for ImGui sampling.
+		{
+			VkImageMemoryBarrier2 barrier{};
+			barrier.sType            = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+			barrier.srcStageMask     = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+			barrier.srcAccessMask    = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+			barrier.dstStageMask     = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+			barrier.dstAccessMask    = VK_ACCESS_2_SHADER_READ_BIT;
+			barrier.oldLayout        = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+			barrier.newLayout        = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+			barrier.image            = static_cast<VkImage>(vp->ColorTarget.Image);
+			barrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+			VkDependencyInfo dep{};
+			dep.sType                   = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+			dep.imageMemoryBarrierCount = 1;
+			dep.pImageMemoryBarriers    = &barrier;
+			vkCmdPipelineBarrier2(cmd, &dep);
+		}
 	}
 
 	// Barrier: swapchain → color attachment for ImGui composite
@@ -1315,10 +1357,10 @@ void EditorRenderer::RecordPIEFrame(FrameSync& frame, uint32_t imageIndex)
 	// ImGui composite pass onto swapchain (clears, then draws all panels)
 	{
 		VkClearValue clearColor{};
-		clearColor.color.float32[0] = 0.1f;
-		clearColor.color.float32[1] = 0.1f;
-		clearColor.color.float32[2] = 0.1f;
-		clearColor.color.float32[3] = 1.0f;
+		clearColor.color.float32[0] = TnxStyle::Color::BgViewport.x;
+		clearColor.color.float32[1] = TnxStyle::Color::BgViewport.y;
+		clearColor.color.float32[2] = TnxStyle::Color::BgViewport.z;
+		clearColor.color.float32[3] = TnxStyle::Color::BgViewport.w;
 
 		VkRenderingAttachmentInfo colorAttach{};
 		colorAttach.sType       = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;

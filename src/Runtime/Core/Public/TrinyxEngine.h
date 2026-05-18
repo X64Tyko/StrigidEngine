@@ -132,6 +132,21 @@ public:
 	/// @brief Returns @c true once the job system is initialized and workers are draining queues.
 	bool GetJobsInitialized() const { return bJobsInitialized.load(std::memory_order_relaxed); }
 
+	/// @brief Signal the main loop to exit cleanly at end of the current frame.
+	void RequestExit() { bIsRunning.store(false, std::memory_order_release); }
+
+#if TNX_ENABLE_EDITOR
+	/// @brief Queue a window operation for the Sentinel to execute on the main thread.
+	/// 1 = minimize, 2 = maximize/restore. Safe to call from the render thread.
+	void DeferWindowOp(uint8_t op) { PendingWindowOp.store(op, std::memory_order_relaxed); }
+	/// @brief Accumulate a window position delta from the render thread; Sentinel applies via SDL_SetWindowPosition.
+	void DeferWindowMove(float dx, float dy)
+	{
+		PendingWinDx.fetch_add(static_cast<int>(dx), std::memory_order_relaxed);
+		PendingWinDy.fetch_add(static_cast<int>(dy), std::memory_order_relaxed);
+	}
+#endif
+
 	/// @brief Test-only: wipe all entities, handles, and caches in the default world's registry.
 	void ResetRegistry() const;
 	/// @brief Advance the default world's local handle free-pool after the safety window.
@@ -235,6 +250,11 @@ private:
 	// --- Lifecycle ---
 	std::atomic<bool>            bIsRunning{false};       ///< True while the main loop is executing.
 	std::atomic<bool>            bJobsInitialized{false}; ///< Set to true once the job worker pool is ready; Logic thread polls this gate.
+#if TNX_ENABLE_EDITOR
+	std::atomic<uint8_t>         PendingWindowOp{0};      ///< Deferred window op from render thread: 1=minimize, 2=maximize/restore.
+	std::atomic<int>             PendingWinDx{0};         ///< Accumulated render-thread window x-move delta (pixels).
+	std::atomic<int>             PendingWinDy{0};         ///< Accumulated render-thread window y-move delta (pixels).
+#endif
 	std::unique_ptr<FlowManagerBase> Flow;                ///< FlowManager — owns all worlds, game states, and level lifetimes.
 
 	// --- Frame timing ---

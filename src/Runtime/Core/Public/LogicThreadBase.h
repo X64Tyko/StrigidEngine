@@ -110,6 +110,9 @@ public:
 	/// @brief Inject the ConstructRegistry so Constructs can self-register at spawn time.
 	void SetConstructRegistry(ConstructRegistry* cr) { ConstructsPtr = cr; }
 
+	/// @brief Expose the ConstructRegistry for editor inspection (read-only).
+	ConstructRegistry* GetConstructRegistry() const { return ConstructsPtr; }
+
 	/// @brief Set the free-fly camera position and orientation for editor/debug use.
 	void SetFreeFlyCamera(SimFloat x, SimFloat y, SimFloat z, SimFloat yaw, SimFloat pitch)
 	{

@@ -53,6 +53,7 @@ if (TNX_ENABLE_EDITOR)
             "${IMGUI_PATH}/imgui_widgets.cpp"
             "${IMGUI_PATH}/backends/imgui_impl_vulkan.cpp"
             "${IMGUI_PATH}/backends/imgui_impl_sdl3.cpp"
+            "${IMGUI_PATH}/misc/freetype/imgui_freetype.cpp"
             "${GUIZMO_PATH}/ImGuizmo.cpp"
     )
 else ()
@@ -197,8 +198,20 @@ if (TNX_ENABLE_EDITOR)
     target_include_directories(${PROJECT_NAME} SYSTEM PUBLIC
             "${IMGUI_PATH}"
             "${IMGUI_PATH}/backends"
+            "${IMGUI_PATH}/misc/freetype"
             "${GUIZMO_PATH}"
     )
+    target_compile_definitions(${PROJECT_NAME} PUBLIC IMGUI_ENABLE_FREETYPE)
+
+    # FreeType — vendored submodule, built with no optional system deps.
+    set(FT_DISABLE_ZLIB    ON CACHE BOOL "" FORCE)
+    set(FT_DISABLE_BZIP2   ON CACHE BOOL "" FORCE)
+    set(FT_DISABLE_PNG     ON CACHE BOOL "" FORCE)
+    set(FT_DISABLE_HARFBUZZ ON CACHE BOOL "" FORCE)
+    set(FT_DISABLE_BROTLI  ON CACHE BOOL "" FORCE)
+    set(SKIP_INSTALL_ALL   ON CACHE BOOL "" FORCE)
+    add_subdirectory("${CMAKE_SOURCE_DIR}/libs/freetype" freetype EXCLUDE_FROM_ALL)
+    target_link_libraries(${PROJECT_NAME} PUBLIC freetype)
 endif ()
 if (NOT TNX_HEADLESS)
     target_link_libraries(${PROJECT_NAME} PUBLIC Vulkan::Vulkan)

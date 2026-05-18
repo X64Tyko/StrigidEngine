@@ -3,13 +3,16 @@
 #include "EngineConfig.h"
 #include "LogicThreadBase.h"
 #include "ReplicationSystem.h"
+#include "TnxStyle.h"
+#include "TnxWidgets.h"
 #include "imgui.h"
 #include <algorithm>
 #include <cstdio>
 
 void DebuggerPanel::Draw(EditorState& state)
 {
-	ImGui::Begin(Title, &bVisible);
+	if (!ImGui::Begin(Title, &bVisible)) { ImGui::End(); return; }
+	TnxWidgets::PanelHeader(nullptr, "Debugger");
 
 	// --- Sample net stats (only on new frames to avoid duplicate ring entries) ---
 	float corrBytes    = 0.f;
@@ -103,14 +106,14 @@ void DebuggerPanel::Draw(EditorState& state)
 			snprintf(corrLabel,  sizeof(corrLabel),  "Corr %.0f B",  corrBytes);
 			snprintf(deltaLabel, sizeof(deltaLabel), "Delta %.0f B", deltaBytes);
 
-			ImGui::Text("StateCorrection history");
-			ImGui::PushStyleColor(ImGuiCol_PlotHistogram, ImVec4(0.80f, 0.40f, 0.10f, 1.f));
+			ImGui::TextUnformatted("StateCorrection history");
+			ImGui::PushStyleColor(ImGuiCol_PlotHistogram, TnxStyle::Color::Warn);
 			ImGui::PlotHistogram("##corr", StatCorrectionHistory.data(), HistorySize, HistoryOffset,
 			                     corrLabel, 0.f, maxBytes * 1.5f, ImVec2(-1.f, 55.f));
 			ImGui::PopStyleColor();
 
-			ImGui::Text("EntityDelta history");
-			ImGui::PushStyleColor(ImGuiCol_PlotHistogram, ImVec4(0.15f, 0.70f, 0.30f, 1.f));
+			ImGui::TextUnformatted("EntityDelta history");
+			ImGui::PushStyleColor(ImGuiCol_PlotHistogram, TnxStyle::Color::Good);
 			ImGui::PlotHistogram("##delta", EntityDeltaHistory.data(), HistorySize, HistoryOffset,
 			                     deltaLabel, 0.f, maxBytes * 1.5f, ImVec2(-1.f, 55.f));
 			ImGui::PopStyleColor();
@@ -133,20 +136,12 @@ void DebuggerPanel::Draw(EditorState& state)
 			                       : 512.f;
 			const float budgetMs = 1000.f / fixedHz;
 
-			ImGui::Text("Fixed budget: %.3f ms  (%.0f Hz)", budgetMs, fixedHz);
-			ImGui::Separator();
-
-			if (fixedMs > budgetMs)
-				ImGui::TextColored(ImVec4(1.f, 0.2f, 0.2f, 1.f),
-				                   "OVER BUDGET  %.3f ms > %.3f ms", fixedMs, budgetMs);
-			else if (fixedMs > budgetMs * 0.8f)
-				ImGui::TextColored(ImVec4(1.f, 0.80f, 0.10f, 1.f),
-				                   "Near budget  %.3f ms", fixedMs);
-			else
-				ImGui::TextColored(ImVec4(0.3f, 1.f, 0.3f, 1.f),
-				                   "OK  %.3f ms", fixedMs);
-
-			ImGui::Separator();
+			char hzLabel[32];
+			snprintf(hzLabel, sizeof(hzLabel), "%.0f Hz", fixedHz);
+			TnxWidgets::FrameBudgetBar("Brain", hzLabel, fixedMs, budgetMs,
+			                           TnxStyle::Color::ThBrain,
+			                           "Fixed-step logic thread");
+			ImGui::Spacing();
 
 			char logicLabel[40], fixedLabel[40];
 			snprintf(logicLabel, sizeof(logicLabel), "Logic %.2f ms", logicMs);
@@ -154,13 +149,21 @@ void DebuggerPanel::Draw(EditorState& state)
 
 			const float plotMax = budgetMs * 2.f;
 
-			ImGui::Text("Logic thread frame time");
+			ImGui::PushStyleColor(ImGuiCol_Text, TnxStyle::Color::FgMuted);
+			ImGui::TextUnformatted("Logic thread frame time");
+			ImGui::PopStyleColor();
+			ImGui::PushStyleColor(ImGuiCol_PlotLines, TnxStyle::Color::ThBrain);
 			ImGui::PlotLines("##logicms", LogicMsHistory.data(), HistorySize, HistoryOffset,
 			                 logicLabel, 0.f, plotMax, ImVec2(-1.f, 60.f));
+			ImGui::PopStyleColor();
 
-			ImGui::Text("Fixed step frame time");
+			ImGui::PushStyleColor(ImGuiCol_Text, TnxStyle::Color::FgMuted);
+			ImGui::TextUnformatted("Fixed step frame time");
+			ImGui::PopStyleColor();
+			ImGui::PushStyleColor(ImGuiCol_PlotLines, TnxStyle::Color::ThEncoder);
 			ImGui::PlotLines("##fixedms", FixedMsHistory.data(), HistorySize, HistoryOffset,
 			                 fixedLabel, 0.f, plotMax, ImVec2(-1.f, 60.f));
+			ImGui::PopStyleColor();
 
 			ImGui::EndTabItem();
 		}

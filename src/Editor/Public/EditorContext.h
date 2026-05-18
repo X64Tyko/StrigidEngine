@@ -184,13 +184,26 @@ private:
 	bool bPIEActive          = false;
 	bool bPIEPaused          = false;
 	bool bPrePIESimWasPaused = true; // Editor sim paused state before PIE — restored on StopPIE
-	bool bServerVisible = true; // false = headless server (no viewport)
+	enum class PIEMode : uint8_t { Local, ListenServer, HeadlessServer };
+	PIEMode CurrentPIEMode = PIEMode::Local;
+	bool bServerVisible = true; // derived from CurrentPIEMode before StartPIE()
 	int PIEClientCount  = 1;    // Number of client worlds to spawn in PIE
 
 	void DrawEditorViewportPanel();
+	void DrawEditorGrid();
 	void DrawViewportPanel(const char* title, WorldViewport& vp);
 
 	enum class PendingActionType : uint8_t { None, OpenScene };
+
+	// --- Workspace switcher ---
+	enum class Workspace : uint8_t { Layout, Logic, Simulate, Network, Profile, COUNT };
+	Workspace CurrentWorkspace     = Workspace::Layout;
+	Workspace LastAppliedWorkspace = Workspace::COUNT; // sentinel: COUNT means "nothing applied yet"
+	bool bWorkspaceLayoutBuilt[static_cast<int>(Workspace::COUNT)] = {};
+	void ApplyWorkspaceLayout(unsigned int dockspaceID, Workspace ws);
+
+	// --- Frame budget overlay (bottom-right corner, always visible) ---
+	void DrawFrameBudgetOverlay();
 
 	bool bMouseReleasedDuringPlay = false;
 	bool bShowDemoWindow          = false;

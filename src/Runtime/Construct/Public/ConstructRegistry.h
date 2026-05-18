@@ -1,6 +1,8 @@
 #pragma once
 
+#include <cstring>
 #include <type_traits>
+#include <typeinfo>
 #include <vector>
 #include <memory>
 #include <cstdint>
@@ -70,9 +72,10 @@ public:
 		raw->Initialize(InWorld);
 
 		Entry entry;
-		entry.ID      = id;
-		entry.Ptr     = raw;
-		entry.Storage = std::move(typed);
+		entry.ID       = id;
+		entry.Ptr      = raw;
+		entry.TypeName = typeid(T).name();
+		entry.Storage  = std::move(typed);
 
 		// Store Shutdown/Initialize for surviving Constructs across World reset
 		entry.ShutdownPtr = [](void* p) { static_cast<T*>(p)->Shutdown(); };
@@ -168,9 +171,10 @@ public:
 		raw->InitializeForReplication(InWorld, viewHandles, viewCount);
 
 		Entry entry;
-		entry.ID      = id;
-		entry.Ptr     = raw;
-		entry.Storage = std::move(typed);
+		entry.ID       = id;
+		entry.Ptr      = raw;
+		entry.TypeName = typeid(T).name();
+		entry.Storage  = std::move(typed);
 
 		entry.ShutdownPtr = [](void* p) { static_cast<T*>(p)->Shutdown(); };
 		entry.ReinitPtr   = [](void* p, WorldBase* w) { static_cast<T*>(p)->Initialize(w); };
@@ -333,6 +337,13 @@ public:
 		for (auto& bucket : Buckets) for (auto& entry : bucket) fn(entry.Ptr, entry.ID);
 	}
 
+	/// Variant that also passes the raw typeid name for editor display.
+	template <typename Func>
+	void ForEachWithMeta(Func&& fn)
+	{
+		for (auto& bucket : Buckets) for (auto& entry : bucket) fn(entry.Ptr, entry.ID, entry.TypeName);
+	}
+
 	// --- Net lookup (public read-only) ---
 
 	ConstructRecord GetRecord(ConstructNetHandle handle) const
@@ -404,8 +415,9 @@ private:
 
 	struct Entry
 	{
-		uint32_t ID = 0;
-		void* Ptr   = nullptr;
+		uint32_t ID          = 0;
+		void*    Ptr         = nullptr;
+		const char* TypeName = nullptr; // typeid(T).name() — static lifetime, safe to store
 		std::unique_ptr<StorageBase> Storage;
 
 		// World transition hooks (nullptr if not implemented by the Construct)

@@ -31,6 +31,7 @@ private:
 	char CompName[64]    = "CMyComponent";
 	int TierIndex        = 0; // 0=Temporal, 1=Volatile, 2=Cold
 	int GroupIndex       = 0; // 0=Render, 1=Physics, 2=Logic, 3=Dual
+	bool bReplicated     = false;
 	std::vector<FieldDef> Fields;
 
 	std::string GeneratedCode;

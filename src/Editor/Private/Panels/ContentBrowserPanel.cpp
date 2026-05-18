@@ -5,13 +5,16 @@
 #include "EditorState.h"
 #include "EngineConfig.h"
 #include "MeshManager.h"
+#include "TnxStyle.h"
+#include "TnxWidgets.h"
 #include "imgui.h"
 
 #include <filesystem>
 
 void ContentBrowserPanel::Draw(EditorState& state)
 {
-	ImGui::Begin(Title, &bVisible);
+	if (!ImGui::Begin(Title, &bVisible)) { ImGui::End(); return; }
+	TnxWidgets::PanelHeader(nullptr, "Content Browser");
 
 	if (!state.AssetDB)
 	{
@@ -23,7 +26,7 @@ void ContentBrowserPanel::Draw(EditorState& state)
 	const auto& entries = state.AssetDB->GetEntries();
 
 	// --- Toolbar ---
-	if (ImGui::Button("Import Mesh...") && state.EditorCtx)
+	if (TnxWidgets::ButtonPrimary("Import Mesh...") && state.EditorCtx)
 	{
 		state.EditorCtx->ShowImportDialog();
 	}

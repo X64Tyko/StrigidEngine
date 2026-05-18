@@ -27,9 +27,14 @@ struct EditorState
 	LogicThreadBase* LogicPtr     = nullptr;
 
 	// --- Selection ---
-	enum class SelectionType : uint8_t { None, Archetype, Entity };
+	enum class SelectionType : uint8_t { None, Construct, Archetype, Entity };
 
 	SelectionType Selection = SelectionType::None;
+
+	// Construct selection (valid when SelectionType::Construct)
+	uint32_t SelectedConstructID = 0;
+	void*    SelectedConstructPtr = nullptr;
+	const char* SelectedConstructTypeName = nullptr;
 
 	// Archetype selection (valid for both Archetype and Entity modes)
 	ClassID SelectedClassID      = 0;
@@ -42,12 +47,15 @@ struct EditorState
 
 	void ClearSelection()
 	{
-		Selection          = SelectionType::None;
-		SelectedClassID    = 0;
-		SelectedArchetype  = nullptr;
-		SelectedChunk      = nullptr;
-		SelectedLocalIndex = 0;
-		SelectedCacheIndex = 0;
+		Selection                 = SelectionType::None;
+		SelectedConstructID       = 0;
+		SelectedConstructPtr      = nullptr;
+		SelectedConstructTypeName = nullptr;
+		SelectedClassID           = 0;
+		SelectedArchetype         = nullptr;
+		SelectedChunk             = nullptr;
+		SelectedLocalIndex        = 0;
+		SelectedCacheIndex        = 0;
 	}
 
 	// --- Gizmo ---

@@ -26,3 +26,6 @@
 [submodule "vendor/mcss"]
 	path = vendor/mcss
 	url = https://github.com/X64Tyko/m.css
+[submodule "libs/freetype"]
+	path = libs/freetype
+	url = https://github.com/freetype/freetype.git
