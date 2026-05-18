@@ -133,29 +133,18 @@ void main(uint3 tid : SV_DispatchThreadID)
 
     if (skelID == 0 || animID == 0) return;
 
-    // Skeleton metadata is a flat global array; skelID is a slot index.
-    // AnimID is also a slot index into the global track/keyframe arrays.
-    // We find per-skeleton boneOffset by reading the slab-adjacent SkeletonID
-    // value as a slot index — SkeletonManager::GetSlot(skelID).boneOffset.
-    // For M2, the boneOffset must be communicated via an additional slab field
-    // or a dedicated GPU buffer. Since we don't have a per-skeleton metadata
-    // GPU buffer yet, we read it from the SkeletonID assuming slot==boneOffset
-    // is not true. Instead, we treat the bone tracks as absolute (they already
-    // store absolute keyframeOffset from AnimationManager::CommitToSlot).
-    // boneOffset: we embed it by convention — slot 0 = boneOffset 0, etc.
-    // This works when MAX_SKELETON_SLOTS is small and slots pack sequentially.
-    // A GpuSkeletonSlot buffer is the clean M3 fix.
-    //
-    // For now: boneCount and boneOffset are encoded from the anim track range.
-    // The anim's boneCount tracks tell us how many bones to evaluate.
+    GpuSkeletonSlotInfo skelSlot = ((GpuSkeletonSlotInfo*)fd->GpuSkeletonSlotAddr)[skelID];
+    GpuAnimSlotInfo     animSlot = ((GpuAnimSlotInfo*)fd->GpuAnimSlotAddr)[animID];
 
-    GpuAnimBoneTrack* tracks = (GpuAnimBoneTrack*)fd->AnimTrackAddr;
-    GpuAnimKeyframe*  kfs    = (GpuAnimKeyframe*)fd->AnimKeyframeAddr;
-    GpuBoneData*      bones  = (GpuBoneData*)fd->GpuBoneDataAddr;
+    uint boneCount = min(min(skelSlot.boneCount, animSlot.boneCount), MAX_BONES_PER_ENTITY);
+    if (boneCount == 0) return;
+
+    GpuAnimBoneTrack* tracks  = (GpuAnimBoneTrack*)fd->AnimTrackAddr;
+    GpuAnimKeyframe*  kfs     = (GpuAnimKeyframe*)fd->AnimKeyframeAddr;
+    GpuBoneData*      bones   = (GpuBoneData*)fd->GpuBoneDataAddr;
     uint*             parents = (uint*)fd->GpuBoneParentAddr;
     float4x4*         outMats = (float4x4*)fd->SkinMatrixAddr;
 
-    // Read entity world TRS from slab for world-space skin matrices.
     float posX  = ((float*)fd->CurrFieldAddrs[SemPosX  - 1u])[cacheIdx];
     float posY  = ((float*)fd->CurrFieldAddrs[SemPosY  - 1u])[cacheIdx];
     float posZ  = ((float*)fd->CurrFieldAddrs[SemPosZ  - 1u])[cacheIdx];
@@ -171,44 +160,25 @@ void main(uint3 tid : SV_DispatchThreadID)
                                    float4(rotQx, rotQy, rotQz, rotQw),
                                    float3(scaX, scaY, scaZ));
 
-    // Determine boneCount from animID. animID-1 is the 0-based slot.
-    // Tracks are contiguous: slot N has boneCount consecutive track entries
-    // starting at Slots[N].trackOffset. Since we don't have a GPU slot table
-    // for the animation yet, infer boneCount from the parent buffer:
-    // walk until we find a bone whose parent wraps back or is UINT32_MAX.
-    // For M2, use a reasonable cap (MAX_BONES_PER_ENTITY) and break early.
-    uint boneOffset = 0; // M2: assume skeleton slot packs bones at offset 0 per skelID
-    // TODO M3: add GpuSkeletonSlotBuffer {boneOffset, boneCount} indexed by skelID
-    // and GpuAnimSlotBuffer {trackOffset, boneCount} indexed by animID.
-
-    // Per-bone local world transforms (FK chain). Stored temporarily as float4x4.
-    // We compute them in parent-before-child order (bones are sorted in the asset).
+    // Per-bone world transforms for FK chain. Parent-before-child order is guaranteed
+    // by the asset importer — bones[i].parentIndex < i for all non-root bones.
     float4x4 worldBone[MAX_BONES_PER_ENTITY];
 
-    for (uint b = 0; b < MAX_BONES_PER_ENTITY; ++b)
+    for (uint b = 0; b < boneCount; ++b)
     {
-        uint globalBone = boneOffset + b;
+        uint globalBone = skelSlot.boneOffset + b;
+        uint parentIdx  = parents[globalBone]; // local (per-skeleton) index, 0xFFFFFFFF = root
 
-        // Check parent — UINT32_MAX means root.
-        uint parentIdx = parents[globalBone];
-
-        // Evaluate this bone's local transform from the animation.
-        GpuAnimBoneTrack track = tracks[(animID - 1u) * MAX_BONES_PER_ENTITY + b];
+        GpuAnimBoneTrack track = tracks[animSlot.trackOffset + b];
         float3 localT; float4 localQ;
         evalBoneAtTime(track, kfs, timestamp, localT, localQ);
         float4x4 localMat = makeTRS(localT, localQ, float3(1, 1, 1));
 
-        if (parentIdx == 0xFFFFFFFFu || parentIdx >= MAX_BONES_PER_ENTITY)
-        {
-            // Root bone: local space is entity space; apply entity world transform.
+        if (parentIdx == 0xFFFFFFFFu || parentIdx >= boneCount)
             worldBone[b] = mul(entityWorld, localMat);
-        }
         else
-        {
             worldBone[b] = mul(worldBone[parentIdx], localMat);
-        }
 
-        // SkinMatrix = worldBone × inverseBindPose
         float4x4 ibp = loadMat(&bones[globalBone].inverseBindPose[0]);
         outMats[compactIdx * MAX_BONES_PER_ENTITY + b] = mul(worldBone[b], ibp);
     }

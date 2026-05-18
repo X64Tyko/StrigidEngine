@@ -18,7 +18,7 @@ public:
     TNX_CONSTRUCT_WORLD
 
     SimFloat SpawnPosX = SimFloat(0.f);
-    SimFloat SpawnPosY = SimFloat(0.f);
+    SimFloat SpawnPosY = SimFloat(4.f);
     SimFloat SpawnPosZ = SimFloat(-4.f);
 
     ConstructView<EPlayerCharacter> Body;
@@ -28,9 +28,9 @@ public:
     static void PreloadAssets()
     {
         AssetRegistry& reg = AssetRegistry::Get();
-        reg.TriggerLoad(TNX_NAME("BrainStem_mesh"));
-        reg.TriggerLoad(TNX_NAME("BrainStem_skel"));
-        reg.TriggerLoad(TNX_NAME("BrainStem_anim"));
+        reg.TriggerLoad<AssetType::Mesh>(TNX_NAME("BrainStem"));
+        reg.TriggerLoad<AssetType::Skeleton>(TNX_NAME("BrainStem"));
+        reg.TriggerLoad<AssetType::Animation>(TNX_NAME("BrainStem"));
     }
 
     void InitializeViews()
@@ -42,11 +42,11 @@ public:
         Body.Transform.Rotation.SetIdentity();
         Body.VisTransform.VisBlend = SimFloat(1.f);
 
-        Body.SkeletonRef.SetSkeleton(TNX_NAME("BrainStem_skel"));
-        Body.SkeletonRef.SetSkinMesh(TNX_NAME("BrainStem_mesh"));
-        Body.AnimBase.SetAnim(TNX_NAME("BrainStem_anim"), SimFloat(0.f), true);
+        Body.SkeletonRef.SetSkeleton(TNX_NAME("BrainStem"));
+        Body.SkeletonRef.SetSkinMesh(TNX_NAME("BrainStem"));
+        Body.AnimBase.SetAnim(TNX_NAME("BrainStem"), SimFloat(0.f), true);
 
-        if (auto skelRef = AssetRegistry::Get().GetAssetData<SkeletonAsset>(TNX_NAME("BrainStem_skel")))
+        if (auto skelRef = AssetRegistry::Get().GetAssetData<SkeletonAsset>(TNX_NAME("BrainStem")))
             RegisterSockets(skelRef);
         else
             LOG_WARN("[BrainStemConstruct] Skeleton not yet loaded — call PreloadAssets() before spawning");
@@ -122,7 +122,7 @@ private:
 
         if (!SkeletonDumped)
         {
-            if (auto skelRef = AssetRegistry::Get().GetAssetData<SkeletonAsset>(TNX_NAME("BrainStem_skel")))
+            if (auto skelRef = AssetRegistry::Get().GetAssetData<SkeletonAsset>(TNX_NAME("BrainStem")))
             {
                 LOG_INFO_F("[BrainStem] Skeleton boneCount=%u", skelRef->boneCount);
                 for (uint32_t i = 0; i < skelRef->boneCount; ++i)

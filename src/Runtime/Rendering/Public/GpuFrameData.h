@@ -114,11 +114,13 @@ struct GpuFrameData
 	uint64_t SkinWeightAddr;                  // offset 224 — SkinWeights[MAX_TOTAL_SKIN_WEIGHTS]
 	uint64_t SkinSlotTableAddr;               // offset 232 — GpuSkinSlotInfo[MAX_MESH_SLOTS]
 	uint64_t SkeletalDispatchArgsAddr;        // offset 240 — VkDispatchIndirectCommand {x=skeletalCount,y=1,z=1}
-	uint64_t PrevFieldAddrs[MaxGpuFields];   // offset 248
+	uint64_t GpuSkeletonSlotAddr;             // offset 248 — GpuSkeletonSlotInfo[MAX_SKELETON_SLOTS]
+	uint64_t GpuAnimSlotAddr;                 // offset 256 — GpuAnimSlotInfo[MAX_ANIM_SLOTS]
+	uint64_t PrevFieldAddrs[MaxGpuFields];   // offset 264
 	uint64_t CurrFieldAddrs[MaxGpuFields];   // offset 1272
 	uint32_t FieldSemantics[MaxGpuFields];   // offset 2296
 	uint32_t FieldElementSize[MaxGpuFields]; // offset 2808
 };                                            // total  3320
 
-static_assert(sizeof(GpuFrameData) == 3320,
+static_assert(sizeof(GpuFrameData) == 3336,
 			  "GpuFrameData size mismatch — layout must match GpuFrameData.slang exactly");

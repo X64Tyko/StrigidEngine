@@ -115,8 +115,8 @@ public:
 	/// Find a mesh slot by TnxName (primary API). Returns UINT32_MAX if not registered.
 	uint32_t FindSlotByTName(TnxName name) const
 	{
-		const AssetEntry* e = AssetRegistry::Get().FindByTName(name);
-		if (!e || e->Type != AssetType::Mesh) return UINT32_MAX;
+		const AssetEntry* e = AssetRegistry::Get().FindByTNameAndType(name, AssetType::Mesh);
+		if (!e) return UINT32_MAX;
 		return static_cast<uint32_t>(reinterpret_cast<uintptr_t>(e->Data));
 	}
 

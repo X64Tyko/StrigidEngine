@@ -70,6 +70,12 @@ static const uint SlabIdx_Layer1Config    = 34;
 static const uint MAX_BONES_PER_ENTITY   = 128;
 static const uint MAX_SKELETAL_INSTANCES = 512;
 
+// Per-skeleton slot table entry — skinning shader reads to locate bones in the mega-buffer.
+struct GpuSkeletonSlotInfo { uint boneOffset; uint boneCount; };
+
+// Per-animation slot table entry — skinning shader reads to locate tracks in the mega-buffer.
+struct GpuAnimSlotInfo { uint trackOffset; uint boneCount; };
+
 // GPU-side mesh slot — mirrors MeshManager::MeshSlot for GPU read.
 struct GpuMeshInfo
 {
@@ -117,6 +123,8 @@ struct GpuFrameData
     uint64_t SkinWeightAddr;            // SkinWeights[MAX_TOTAL_SKIN_WEIGHTS]
     uint64_t SkinSlotTableAddr;         // GpuSkinSlotInfo[MAX_MESH_SLOTS]
     uint64_t SkeletalDispatchArgsAddr;  // VkDispatchIndirectCommand {x=skeletalCount,y=1,z=1}
+    uint64_t GpuSkeletonSlotAddr;       // GpuSkeletonSlotInfo[MAX_SKELETON_SLOTS]
+    uint64_t GpuAnimSlotAddr;           // GpuAnimSlotInfo[MAX_ANIM_SLOTS]
     uint64_t PrevFieldAddrs[MaxGpuFields];
     uint64_t CurrFieldAddrs[MaxGpuFields];
     uint     FieldSemantics[MaxGpuFields];

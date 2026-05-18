@@ -213,6 +213,14 @@ inline AssetType AssetTypeFromExtension(const char* ext)
 	return AssetType::Invalid;
 }
 
+// -----------------------------------------------------------------------
+// AssetTypeTraits — maps a C++ asset struct to its AssetType enum value.
+// Specialisations live in AssetRegistry.h alongside the forward declarations.
+// Usage: AssetTypeOf<SkeletonAsset>  →  AssetType::Skeleton
+// -----------------------------------------------------------------------
+template<typename T> struct AssetTypeTraits;
+template<typename T> inline constexpr AssetType AssetTypeOf = AssetTypeTraits<T>::Type;
+
 inline const char* AssetTypeName(AssetType type)
 {
 	switch (type)

@@ -71,7 +71,15 @@ void AssetRegistry::Register(const AssetID& id, TnxName name, const std::string&
 	entry.Flags         = flags;
 	entry.State         = RuntimeFlags::None;
 
-	if (name.IsValid()) NameIndex[entry.Name.Value] = id;
+	if (name.IsValid())
+	{
+		uint64_t key = (static_cast<uint64_t>(name.Value) << 8) | static_cast<uint8_t>(type);
+		auto [it, inserted] = TypedNameIndex.emplace(key, id);
+		if (!inserted)
+			LOG_ENG_WARN_F("[AssetRegistry] Duplicate name '%s' for type %s — overwriting existing entry",
+			               name.GetStr(), AssetTypeName(type));
+		it->second = id;
+	}
 
 	if (!ContentRoot.empty() && !path.empty())
 		Validate(id);
@@ -115,7 +123,11 @@ void AssetRegistry::Unregister(const AssetID& id)
 	if (it == Entries.end()) return;
 
 	const AssetEntry& entry = it->second;
-	NameIndex.erase(entry.Name.Value);
+	if (entry.Name.IsValid())
+	{
+		uint64_t key = (static_cast<uint64_t>(entry.Name.Value) << 8) | static_cast<uint8_t>(entry.Type);
+		TypedNameIndex.erase(key);
+	}
 
 	for (auto sit = SlotIndex.begin(); sit != SlotIndex.end(); )
 	{

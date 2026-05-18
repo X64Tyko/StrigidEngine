@@ -254,7 +254,7 @@ void FlowManagerBase::LoadLevelByName(const char* name, bool bBackground)
 		LOG_ENG_ERROR("[FlowManager] LoadLevelByName: empty name");
 		return;
 	}
-	std::string path = AssetRegistry::Get().ResolvePathByName(name);
+	std::string path = AssetRegistry::Get().ResolvePathByTNameAndType(TnxName(name), AssetType::Level);
 	if (path.empty())
 	{
 		LOG_ENG_ERROR_F("[FlowManager] LoadLevelByName: '%s' not found in AssetRegistry", name);
@@ -623,8 +623,8 @@ void FlowManagerBase::PreloadLevelAssets(const char* path)
 				const std::string& ref = fieldValue.AsString();
 				if (ref.empty()) continue;
 
-				const AssetEntry* entry = reg.FindByName(ref);
-				if (entry) reg.TriggerLoad(entry->ID);
+				for (const AssetEntry* entry : reg.GetAssetsByName(TnxName(ref.c_str())))
+					reg.TriggerLoad(entry->ID);
 			}
 		}
 	}

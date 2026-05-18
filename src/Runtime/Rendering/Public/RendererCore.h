@@ -141,12 +141,12 @@ protected:
 	VkFormat DepthFormat = VK_FORMAT_UNDEFINED;
 
 	FrameSync Frames[MaxFramesInFlight];
+	std::vector<vk::raii::Semaphore> RenderedSemaphores; // one per swapchain image
 	uint32_t CurrentFrame      = 0;
 	uint32_t LastRenderedFrame = 0;
 	uint64_t LastVolatileFrame = 0;
 	uint64_t LastTemporalFrame = 0;
 
-	std::vector<vk::raii::Semaphore> RenderedSems;
 
 	VkShaderModule VertShader = VK_NULL_HANDLE;
 	VkShaderModule FragShader = VK_NULL_HANDLE;

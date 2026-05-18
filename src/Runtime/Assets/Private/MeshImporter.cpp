@@ -171,16 +171,19 @@ static bool ImportPrimitive(
 	const float worldMatrix[16],
 	std::vector<Vertex>& rawVerts,
 	std::vector<uint32_t>& rawIndices,
+	std::vector<SkinWeights>& rawSkin,
 	float aabbMin[3], float aabbMax[3],
 	bool& anyMissingTangents)
 {
 	if (prim.type != cgltf_primitive_type_triangles) return false;
 
 	// Find accessors — filter by attribute index for UV/tangent
-	const cgltf_accessor* posAcc  = nullptr;
-	const cgltf_accessor* normAcc = nullptr;
-	const cgltf_accessor* uvAcc   = nullptr;
-	const cgltf_accessor* tanAcc  = nullptr;
+	const cgltf_accessor* posAcc     = nullptr;
+	const cgltf_accessor* normAcc    = nullptr;
+	const cgltf_accessor* uvAcc      = nullptr;
+	const cgltf_accessor* tanAcc     = nullptr;
+	const cgltf_accessor* jointsAcc  = nullptr;
+	const cgltf_accessor* weightsAcc = nullptr;
 
 	for (cgltf_size i = 0; i < prim.attributes_count; ++i)
 	{
@@ -194,6 +197,10 @@ static bool ImportPrimitive(
 			case cgltf_attribute_type_texcoord: if (attr.index == 0) uvAcc = attr.data; // TEXCOORD_0 only
 				break;
 			case cgltf_attribute_type_tangent: if (attr.index == 0) tanAcc = attr.data;
+				break;
+			case cgltf_attribute_type_joints:  if (attr.index == 0) jointsAcc  = attr.data;
+				break;
+			case cgltf_attribute_type_weights: if (attr.index == 0) weightsAcc = attr.data;
 				break;
 			default: break;
 		}
@@ -247,6 +254,29 @@ static bool ImportPrimitive(
 			TransformDir(worldMatrix, tan4, worldTan);
 			vert.t_oct16x2 = OctEncode(worldTan[0], worldTan[1], worldTan[2]);
 			vert.flags     = (tan4[3] < 0.0f) ? 1 : 0;
+		}
+	}
+
+	// Append skin weights — parallel to rawVerts, zero-initialized for non-skinned primitives.
+	size_t skinStart = rawSkin.size();
+	rawSkin.resize(skinStart + vertCount);
+	if (jointsAcc && weightsAcc)
+	{
+		for (size_t i = 0; i < vertCount; ++i)
+		{
+			SkinWeights& sw = rawSkin[skinStart + i];
+
+			// JOINTS_0: joint indices — use read_uint to avoid float normalization.
+			cgltf_uint joints[4] = {};
+			cgltf_accessor_read_uint(jointsAcc, i, joints, 4);
+			for (int j = 0; j < 4; ++j)
+				sw.boneIndices[j] = static_cast<uint8_t>(joints[j]);
+
+			// WEIGHTS_0: blend weights in [0, 1] — read as float.
+			float weights[4] = {};
+			cgltf_accessor_read_float(weightsAcc, i, weights, 4);
+			for (int j = 0; j < 4; ++j)
+				sw.boneWeights[j] = static_cast<uint8_t>(std::roundf(weights[j] * 255.0f));
 		}
 	}
 
@@ -309,6 +339,7 @@ bool ImportGLTFToAsset(const std::string& srcPath, MeshAsset& outAsset)
 
 	std::vector<Vertex> rawVerts;
 	std::vector<uint32_t> rawIndices;
+	std::vector<SkinWeights> rawSkin;
 	float aabbMin[3]        = {1e30f, 1e30f, 1e30f};
 	float aabbMax[3]        = {-1e30f, -1e30f, -1e30f};
 	bool anyMissingTangents = false;
@@ -388,7 +419,7 @@ bool ImportGLTFToAsset(const std::string& srcPath, MeshAsset& outAsset)
 
 		for (cgltf_size pi = 0; pi < mesh->primitives_count; ++pi)
 		{
-			if (ImportPrimitive(mesh->primitives[pi], worldMatrix, rawVerts, rawIndices,
+			if (ImportPrimitive(mesh->primitives[pi], worldMatrix, rawVerts, rawIndices, rawSkin,
 								aabbMin, aabbMax, anyMissingTangents))
 			{
 				++totalPrimitives;
@@ -430,7 +461,7 @@ bool ImportGLTFToAsset(const std::string& srcPath, MeshAsset& outAsset)
 
 		for (cgltf_size pi = 0; pi < mesh.primitives_count; ++pi)
 		{
-			if (ImportPrimitive(mesh.primitives[pi], identity, rawVerts, rawIndices,
+			if (ImportPrimitive(mesh.primitives[pi], identity, rawVerts, rawIndices, rawSkin,
 								aabbMin, aabbMax, anyMissingTangents))
 			{
 				++totalPrimitives;
@@ -449,6 +480,7 @@ bool ImportGLTFToAsset(const std::string& srcPath, MeshAsset& outAsset)
 	}
 
 	const size_t totalRawVerts = rawVerts.size();
+	const bool hasSkin = !rawSkin.empty() && rawSkin.size() == rawVerts.size();
 
 	// Zero tangent fields before dedup so they don't affect vertex identity
 	// when tangents will be regenerated.
@@ -461,11 +493,14 @@ bool ImportGLTFToAsset(const std::string& srcPath, MeshAsset& outAsset)
 		}
 	}
 
-	// Deduplicate vertices
+	// Deduplicate vertices — skin weights travel with the first raw vertex that maps to
+	// each deduped slot (consistent for typical skeletal meshes where seam vertices share weights).
 	std::unordered_map<Vertex, uint32_t, VertexHash, VertexEqual> vertMap;
 	vertMap.reserve(totalRawVerts);
 	std::vector<Vertex> dedupVerts;
 	dedupVerts.reserve(totalRawVerts);
+	std::vector<SkinWeights> dedupSkin;
+	if (hasSkin) dedupSkin.reserve(totalRawVerts);
 	std::vector<uint32_t> dedupIndices;
 	dedupIndices.reserve(rawIndices.size());
 
@@ -473,7 +508,11 @@ bool ImportGLTFToAsset(const std::string& srcPath, MeshAsset& outAsset)
 	{
 		const Vertex& v     = rawVerts[idx];
 		auto [it, inserted] = vertMap.emplace(v, static_cast<uint32_t>(dedupVerts.size()));
-		if (inserted) dedupVerts.push_back(v);
+		if (inserted)
+		{
+			dedupVerts.push_back(v);
+			if (hasSkin) dedupSkin.push_back(rawSkin[idx]);
+		}
 		dedupIndices.push_back(it->second);
 	}
 
@@ -482,12 +521,14 @@ bool ImportGLTFToAsset(const std::string& srcPath, MeshAsset& outAsset)
 
 	outAsset.Vertices = std::move(dedupVerts);
 	outAsset.Indices  = std::move(dedupIndices);
+	if (hasSkin) outAsset.Skin = std::move(dedupSkin);
 	std::memcpy(outAsset.AABBMin, aabbMin, sizeof(float) * 3);
 	std::memcpy(outAsset.AABBMax, aabbMax, sizeof(float) * 3);
 
-	LOG_ENG_INFO_F("[MeshImporter] Imported '%s': %zu meshes, %zu primitives, %zu verts, %zu indices (deduped from %zu)",
+	LOG_ENG_INFO_F("[MeshImporter] Imported '%s': %zu meshes, %zu primitives, %zu verts, %zu indices (deduped from %zu)%s",
 				   srcPath.c_str(), data->meshes_count, totalPrimitives,
-			   outAsset.Vertices.size(), outAsset.Indices.size(), totalRawVerts);
+			   outAsset.Vertices.size(), outAsset.Indices.size(), totalRawVerts,
+			   hasSkin ? " [skinned]" : "");
 	LOG_ENG_INFO_F("[MeshImporter] AABB: min(%.3f, %.3f, %.3f) max(%.3f, %.3f, %.3f) size(%.3f, %.3f, %.3f)",
 				   aabbMin[0], aabbMin[1], aabbMin[2],
 			   aabbMax[0], aabbMax[1], aabbMax[2],

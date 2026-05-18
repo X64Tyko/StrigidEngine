@@ -75,7 +75,7 @@ struct CAnimBase : ComponentView<CAnimBase, WIDTH>
     void SetAnim(TnxName name, SimFloat startTime = {}, bool loops = true, bool rootMotion = false)
         requires (WIDTH == FieldWidth::Scalar)
     {
-        AssetRegistry::RegisterPendingCheckout(&BaseAnimID.WriteArray[BaseAnimID.index], name);
+        AssetRegistry::RegisterPendingCheckout<AssetType::Animation>(&BaseAnimID.WriteArray[BaseAnimID.index], name);
         BlendspaceID  = 0u;
         BaseTimestamp = startTime;
         uint32_t f    = Flags.Value();

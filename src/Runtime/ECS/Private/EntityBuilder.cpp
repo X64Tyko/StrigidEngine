@@ -214,7 +214,7 @@ EntityHandle EntityBuilder::SpawnEntity(Registry* reg, const JsonValue& entityJs
 					if (field->RefAssetType != AssetType::Invalid && fieldVal.IsString())
 					{
 						auto* fieldPtr = static_cast<uint32_t*>(fieldArrayTable[field->ArrayIndex]) + localIndex;
-						AssetRegistry::RegisterPendingCheckout(fieldPtr, TnxName(fieldVal.AsString().c_str()));
+						AssetRegistry::RegisterPendingCheckout(fieldPtr, TnxName(fieldVal.AsString().c_str()), field->RefAssetType);
 					}
 					else
 					{

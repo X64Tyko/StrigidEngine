@@ -22,12 +22,12 @@ struct CSkeletonRef : ComponentView<CSkeletonRef, WIDTH>
 
 	void SetSkeleton(TnxName name) requires (WIDTH == FieldWidth::Scalar)
 	{
-		AssetRegistry::RegisterPendingCheckout(&SkeletonID.WriteArray[SkeletonID.index], name);
+		AssetRegistry::RegisterPendingCheckout<AssetType::Skeleton>(&SkeletonID.WriteArray[SkeletonID.index], name);
 	}
 
 	void SetSkinMesh(TnxName name) requires (WIDTH == FieldWidth::Scalar)
 	{
-		AssetRegistry::RegisterPendingCheckout(&SkinMeshID.WriteArray[SkinMeshID.index], name);
+		AssetRegistry::RegisterPendingCheckout<AssetType::Mesh>(&SkinMeshID.WriteArray[SkinMeshID.index], name);
 	}
 };
 

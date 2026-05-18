@@ -322,8 +322,8 @@ uint32_t MeshManager::LoadMesh(AssetID id)
 
 uint32_t MeshManager::LoadMesh(TnxName name)
 {
-	const AssetEntry* entry = AssetRegistry::Get().FindByTName(name);
-	if (!entry || entry->Type != AssetType::Mesh)
+	const AssetEntry* entry = AssetRegistry::Get().FindByTNameAndType(name, AssetType::Mesh);
+	if (!entry)
 	{
 		LOG_ENG_ERROR_F("[MeshManager] LoadMesh: TnxName '%s' not in registry", name.GetStr());
 		return UINT32_MAX;

@@ -77,9 +77,8 @@ public:
 
 	uint32_t FindSlotByTName(TnxName name) const
 	{
-		const AssetEntry* e = AssetRegistry::Get().FindByTName(name);
-		if (!e || e->Type != AssetType::Audio
-			|| (static_cast<uint8_t>(e->State) & static_cast<uint8_t>(RuntimeFlags::Loaded)) == 0)
+		const AssetEntry* e = AssetRegistry::Get().FindByTNameAndType(name, AssetType::Audio);
+		if (!e || (static_cast<uint8_t>(e->State) & static_cast<uint8_t>(RuntimeFlags::Loaded)) == 0)
 			return UINT32_MAX;
 		return static_cast<uint32_t>(reinterpret_cast<uintptr_t>(e->Data));
 	}

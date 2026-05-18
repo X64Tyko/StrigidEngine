@@ -42,6 +42,20 @@ bool SkeletonManager::Initialize(VulkanMemory* vkMem)
 	// 0xFFFFFFFF = root (no parent) — memset 0xFF initializes all entries to UINT32_MAX.
 	std::memset(BoneParentBuffer.MappedPtr, 0xFF, MAX_TOTAL_BONES * sizeof(uint32_t));
 
+	SkeletonSlotBuffer = vkMem->AllocateBuffer(
+		MAX_SKELETON_SLOTS * sizeof(GpuSkeletonSlotInfo),
+		VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+		GpuMemoryDomain::PersistentMapped,
+		/*requestDeviceAddress=*/ true);
+
+	if (!SkeletonSlotBuffer.IsValid())
+	{
+		LOG_ENG_ERROR("[SkeletonManager] Skeleton slot buffer allocation failed");
+		return false;
+	}
+
+	std::memset(SkeletonSlotBuffer.MappedPtr, 0, MAX_SKELETON_SLOTS * sizeof(GpuSkeletonSlotInfo));
+
 	LOG_ENG_INFO_F("[SkeletonManager] Initialized (max bones: %u, buffer: %.1f MB)",
 				   MAX_TOTAL_BONES,
 				   static_cast<float>(MAX_TOTAL_BONES * sizeof(GpuBoneData)) / (1024.f * 1024.f));
@@ -56,6 +70,7 @@ void SkeletonManager::Shutdown()
 {
 	BoneDataBuffer.Free();
 	BoneParentBuffer.Free();
+	SkeletonSlotBuffer.Free();
 }
 
 // -----------------------------------------------------------------------
@@ -84,6 +99,10 @@ uint32_t SkeletonManager::CommitToSlot(const SkeletonAsset& asset, AssetID id)
 
 	Slots[slotID].boneOffset = NextBoneOffset;
 	Slots[slotID].boneCount  = asset.boneCount;
+
+	auto* gpuSlots = static_cast<GpuSkeletonSlotInfo*>(SkeletonSlotBuffer.MappedPtr);
+	gpuSlots[slotID].boneOffset = NextBoneOffset;
+	gpuSlots[slotID].boneCount  = asset.boneCount;
 
 	// Fill CPU shadow (needed synchronously for chain walks / socket queries).
 	for (uint32_t i = 0; i < asset.boneCount; ++i)
@@ -173,8 +192,8 @@ uint32_t SkeletonManager::LoadSkeleton(AssetID id)
 
 uint32_t SkeletonManager::LoadSkeleton(TnxName name)
 {
-	const AssetEntry* entry = AssetRegistry::Get().FindByTName(name);
-	if (!entry || entry->Type != AssetType::Skeleton)
+	const AssetEntry* entry = AssetRegistry::Get().FindByTNameAndType(name, AssetType::Skeleton);
+	if (!entry)
 	{
 		LOG_ENG_ERROR_F("[SkeletonManager] LoadSkeleton: TnxName '%s' not in registry",
 						name.GetStr());

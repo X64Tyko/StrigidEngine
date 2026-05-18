@@ -22,6 +22,20 @@ struct GpuBoneData
 static_assert(sizeof(GpuBoneData) == 64, "GpuBoneData must be 64 bytes");
 
 // -----------------------------------------------------------------------
+// GpuSkeletonSlotInfo — per-skeleton slot table entry.
+// skinning.slang reads this to locate a skeleton's bones in the global
+// bone mega-buffer. Indexed by skelID (slot index in SkeletonManager).
+// -----------------------------------------------------------------------
+
+struct GpuSkeletonSlotInfo
+{
+	uint32_t boneOffset = 0; // first GpuBoneData entry for this skeleton
+	uint32_t boneCount  = 0;
+};
+
+static_assert(sizeof(GpuSkeletonSlotInfo) == 8, "GpuSkeletonSlotInfo must be 8 bytes");
+
+// -----------------------------------------------------------------------
 // SkeletonManager — mega-buffer management for all skeleton bone data.
 //
 // All loaded skeletons sub-allocate into a single GpuBoneData mega-buffer.
@@ -63,8 +77,9 @@ public:
 	/// CPU skeleton for hierarchy queries (chain walking, socket lookup).
 	const SkeletonAsset* GetSkeletonCPU(uint32_t slot) const;
 
-	uint64_t           GetBoneDataAddr()   const { return BoneDataBuffer.DeviceAddr; }
-	uint64_t           GetBoneParentAddr() const { return BoneParentBuffer.DeviceAddr; }
+	uint64_t           GetBoneDataAddr()       const { return BoneDataBuffer.DeviceAddr; }
+	uint64_t           GetBoneParentAddr()     const { return BoneParentBuffer.DeviceAddr; }
+	uint64_t           GetSkeletonSlotAddr()   const { return SkeletonSlotBuffer.DeviceAddr; }
 	const SkeletonSlot& GetSlot(uint32_t slot) const { return Slots[slot]; }
 	uint32_t           GetSkeletonCount() const { return SkeletonCount; }
 
@@ -76,15 +91,15 @@ public:
 
 	uint32_t FindSlotByTName(TnxName name) const
 	{
-		const AssetEntry* e = AssetRegistry::Get().FindByTName(name);
-		if (!e || e->Type != AssetType::Skeleton) return UINT32_MAX;
+		const AssetEntry* e = AssetRegistry::Get().FindByTNameAndType(name, AssetType::Skeleton);
+		if (!e || !e->Data) return UINT32_MAX;
 		return static_cast<uint32_t>(reinterpret_cast<uintptr_t>(e->Data));
 	}
 
 	uint32_t FindSlotByID(AssetID id) const
 	{
 		const AssetEntry* e = AssetRegistry::Get().Find(id);
-		if (!e || e->Type != AssetType::Skeleton) return UINT32_MAX;
+		if (!e || e->Type != AssetType::Skeleton || !e->Data) return UINT32_MAX;
 		return static_cast<uint32_t>(reinterpret_cast<uintptr_t>(e->Data));
 	}
 
@@ -101,8 +116,9 @@ private:
 	/// Does NOT call Register() — caller is responsible for registration.
 	uint32_t CommitToSlot(const SkeletonAsset& asset, AssetID id);
 
-	VulkanBuffer BoneDataBuffer;   // GpuBoneData[MAX_TOTAL_BONES], PersistentMapped + BDA
-	VulkanBuffer BoneParentBuffer; // uint32[MAX_TOTAL_BONES] parent indices, PersistentMapped + BDA
+	VulkanBuffer BoneDataBuffer;      // GpuBoneData[MAX_TOTAL_BONES], PersistentMapped + BDA
+	VulkanBuffer BoneParentBuffer;    // uint32[MAX_TOTAL_BONES] parent indices, PersistentMapped + BDA
+	VulkanBuffer SkeletonSlotBuffer;  // GpuSkeletonSlotInfo[MAX_SKELETON_SLOTS], PersistentMapped + BDA
 
 	GpuBoneData            BoneData[MAX_TOTAL_BONES]{};
 	SkeletonSlot           Slots[MAX_SKELETON_SLOTS]{};

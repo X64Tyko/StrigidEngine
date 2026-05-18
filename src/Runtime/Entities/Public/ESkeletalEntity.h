@@ -1,5 +1,6 @@
 #pragma once
 #include "EInterpEntity.h"
+#include "CColor.h"
 #include "CScale.h"
 #include "CSkeletonRef.h"
 #include "CAnimBase.h"
@@ -26,9 +27,10 @@
 template <template <FieldWidth> class Derived, FieldWidth WIDTH = FieldWidth::Scalar>
 class ESkeletalEntity : public EInterpEntity<Derived, WIDTH>
 {
-    TNX_REGISTER_SUPER_SCHEMA(ESkeletalEntity, EInterpEntity, Scale, SkeletonRef, AnimBase, AnimLayer)
+    TNX_REGISTER_SUPER_SCHEMA(ESkeletalEntity, EInterpEntity, Color, Scale, SkeletonRef, AnimBase, AnimLayer)
 
 public:
+    CColor<WIDTH>       Color;
     CScale<WIDTH>       Scale;
     CSkeletonRef<WIDTH> SkeletonRef;
     CAnimBase<WIDTH>    AnimBase;
@@ -37,6 +39,10 @@ public:
     void Initialize()
     {
         EInterpEntity<Derived, WIDTH>::Initialize();
+        Color.R = SimFloat(1.f);
+        Color.G = SimFloat(1.f);
+        Color.B = SimFloat(1.f);
+        Color.A = SimFloat(1.f);
         Scale.ScaleX = SimFloat(1.f);
         Scale.ScaleY = SimFloat(1.f);
         Scale.ScaleZ = SimFloat(1.f);

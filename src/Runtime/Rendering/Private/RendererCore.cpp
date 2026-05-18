@@ -399,7 +399,7 @@ int RendererCore<Derived>::RenderFrame()
 
 	VkSemaphoreSubmitInfo signalSemInfo{};
 	signalSemInfo.sType     = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO;
-	signalSemInfo.semaphore = *RenderedSems[imageIndex];
+	signalSemInfo.semaphore = *RenderedSemaphores[imageIndex];
 	signalSemInfo.stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
 
 	VkCommandBufferSubmitInfo cmdInfo{};
@@ -1143,9 +1143,11 @@ bool RendererCore<Derived>::CreateFrameSync()
 		}
 	}
 
-	const uint32_t imageCount = static_cast<uint32_t>(VkCtx->GetSwapchain().Images.size());
-	RenderedSems.reserve(imageCount);
-	for (uint32_t i = 0; i < imageCount; ++i) RenderedSems.push_back(raiiDev.createSemaphore(semCI));
+	const auto& swapImages = VkCtx->GetSwapchain().Images;
+	RenderedSemaphores.clear();
+	RenderedSemaphores.reserve(swapImages.size());
+	for (size_t i = 0; i < swapImages.size(); ++i)
+		RenderedSemaphores.emplace_back(raiiDev.createSemaphore(semCI));
 
 	LOG_ENG_INFO("[Renderer] Frame sync objects created");
 	return true;
@@ -1406,6 +1408,8 @@ void RendererCore<Derived>::FillGpuFrameData(FrameSync& frame)
 	FrameData->SkinWeightAddr           = Meshes.GetSkinWeightAddr();
 	FrameData->SkinSlotTableAddr        = Meshes.GetSkinSlotTableAddr();
 	FrameData->SkeletalDispatchArgsAddr = Skinning.GetSkeletalDispatchArgsAddr();
+	FrameData->GpuSkeletonSlotAddr      = SkeletonManager::Get().GetSkeletonSlotAddr();
+	FrameData->GpuAnimSlotAddr          = AnimationManager::Get().GetAnimSlotAddr();
 	// FieldCount includes GpuTotalFieldCount slab fields + 1 always-on EntityCacheIdx.
 	constexpr uint32_t kFieldCount = GpuTotalFieldCount + 1;
 	FrameData->FieldCount           = kFieldCount;
@@ -1928,6 +1932,15 @@ void RendererCore<Derived>::OnSwapchainResize()
 {
 	vkDeviceWaitIdle(Device);
 	VkCtx->RecreateSwapchain(WindowPtr);
+
+	const vk::SemaphoreCreateInfo semCI{};
+	const vk::raii::Device& raiiDev = VkCtx->GetRaiiDevice();
+	const auto& swapImages = VkCtx->GetSwapchain().Images;
+	RenderedSemaphores.clear();
+	RenderedSemaphores.reserve(swapImages.size());
+	for (size_t i = 0; i < swapImages.size(); ++i)
+		RenderedSemaphores.emplace_back(raiiDev.createSemaphore(semCI));
+
 	CreateDepthImage();
 #ifdef TNX_GPU_PICKING
 	CreatePickImages();
@@ -2022,6 +2035,12 @@ void RendererCore<Derived>::NameRenderResources()
 #endif
 	}
 
+	for (size_t i = 0; i < RenderedSemaphores.size(); ++i)
+	{
+		std::snprintf(buf, sizeof(buf), "Trinyx::Sem::Rendered[Image%zu]", i);
+		VulkanDebug::Name(Device, static_cast<VkSemaphore>(*RenderedSemaphores[i]), buf);
+	}
+
 	// --- Field slabs --------------------------------------------------
 	// These hold the SoA ECS field data the render thread streams every
 	// frame and the compute pipeline (predicate→prefix→scatter) reads
@@ -2031,13 +2050,6 @@ void RendererCore<Derived>::NameRenderResources()
 	{
 		std::snprintf(buf, sizeof(buf), "Trinyx::FieldSlab[%d]", i);
 		VulkanDebug::Name(Device, static_cast<VkBuffer>(FieldSlabs[i].Buffer), buf);
-	}
-
-	// --- Image-acquire semaphores (one per swapchain image) -----------
-	for (size_t i = 0; i < RenderedSems.size(); ++i)
-	{
-		std::snprintf(buf, sizeof(buf), "Trinyx::Sem::Rendered[%zu]", i);
-		VulkanDebug::Name(Device, static_cast<VkSemaphore>(*RenderedSems[i]), buf);
 	}
 
 	// --- Pipelines ----------------------------------------------------

@@ -97,7 +97,7 @@ public:
 
 	int64_t GetCharacterPrefab(const Soul& /*soul*/) const override
 	{
-		const AssetEntry* entry = AssetRegistry::Get().FindByName("DefaultCharacter");
+		const AssetEntry* entry = AssetRegistry::Get().FindByTNameAndType(TNX_NAME("DefaultCharacter"), AssetType::Prefab);
 		if (!entry)
 		{
 			LOG_WARN("[ArenaMode] DefaultCharacter asset not found in registry");

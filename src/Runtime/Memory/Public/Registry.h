@@ -393,19 +393,6 @@ EntityHandle Registry::Create()
 
 		view.InitializeInternal();
 
-		// Warn about mesh-ref fields still at 0 — slot 0 is the invalid sentinel.
-		// Material refs are excluded: MaterialID=0 means "no material", which is valid.
-		for (const auto& [fkey, fdesc] : record.Arch->ArchetypeFieldLayout)
-		{
-			if (fdesc.refAssetType != AssetType::Mesh &&
-				fdesc.refAssetType != AssetType::Skeleton)
-				continue;
-			auto* arr    = static_cast<uint32_t*>(fieldArrayTable[fdesc.fieldSlotIndex]);
-			uint32_t val = arr[record.LocalIndex];
-			if (val == 0)
-				LOG_ENG_WARN("Registry::Create - MeshID not set (slot 0 is invalid; use SetMesh in your init lambda)");
-		}
-
 		AssetRegistry::Get().DrainPendingCheckouts();
 	}
 

@@ -14,6 +14,20 @@
 // in the skinning compute shader.
 // -----------------------------------------------------------------------
 
+// -----------------------------------------------------------------------
+// GpuAnimSlotInfo — per-animation slot table entry.
+// skinning.slang reads this to locate an animation's bone tracks in the
+// global track mega-buffer. Indexed by animID (slot index in AnimationManager).
+// -----------------------------------------------------------------------
+
+struct GpuAnimSlotInfo
+{
+	uint32_t trackOffset = 0; // first GpuAnimBoneTrack entry for this animation
+	uint32_t boneCount   = 0;
+};
+
+static_assert(sizeof(GpuAnimSlotInfo) == 8, "GpuAnimSlotInfo must be 8 bytes");
+
 struct GpuAnimBoneTrack
 {
 	uint32_t keyframeOffset; // absolute index into global GpuAnimKeyframe array
@@ -87,6 +101,7 @@ public:
 
 	uint64_t        GetTrackBufferAddr()    const { return TrackBuffer.DeviceAddr; }
 	uint64_t        GetKeyframeBufferAddr() const { return KeyframeBuffer.DeviceAddr; }
+	uint64_t        GetAnimSlotAddr()       const { return AnimSlotBuffer.DeviceAddr; }
 	const AnimSlot& GetSlot(uint32_t slot)  const { return Slots[slot]; }
 	uint32_t        GetAnimCount()          const { return AnimCount; }
 
@@ -98,15 +113,15 @@ public:
 
 	uint32_t FindSlotByTName(TnxName name) const
 	{
-		const AssetEntry* e = AssetRegistry::Get().FindByTName(name);
-		if (!e || e->Type != AssetType::Animation) return UINT32_MAX;
+		const AssetEntry* e = AssetRegistry::Get().FindByTNameAndType(name, AssetType::Animation);
+		if (!e || !e->Data) return UINT32_MAX;
 		return static_cast<uint32_t>(reinterpret_cast<uintptr_t>(e->Data));
 	}
 
 	uint32_t FindSlotByID(AssetID id) const
 	{
 		const AssetEntry* e = AssetRegistry::Get().Find(id);
-		if (!e || e->Type != AssetType::Animation) return UINT32_MAX;
+		if (!e || e->Type != AssetType::Animation || !e->Data) return UINT32_MAX;
 		return static_cast<uint32_t>(reinterpret_cast<uintptr_t>(e->Data));
 	}
 
@@ -123,8 +138,9 @@ private:
 	/// Does NOT call Register() — caller owns that.
 	uint32_t CommitToSlot(const AnimationAsset& asset, AssetID id);
 
-	VulkanBuffer TrackBuffer;    // GpuAnimBoneTrack[MAX_TOTAL_BONE_TRACKS], PersistentMapped + BDA
-	VulkanBuffer KeyframeBuffer; // GpuAnimKeyframe[MAX_TOTAL_KEYFRAMES], PersistentMapped + BDA
+	VulkanBuffer TrackBuffer;     // GpuAnimBoneTrack[MAX_TOTAL_BONE_TRACKS], PersistentMapped + BDA
+	VulkanBuffer KeyframeBuffer;  // GpuAnimKeyframe[MAX_TOTAL_KEYFRAMES], PersistentMapped + BDA
+	VulkanBuffer AnimSlotBuffer;  // GpuAnimSlotInfo[MAX_ANIM_SLOTS], PersistentMapped + BDA
 
 	AnimSlot               Slots[MAX_ANIM_SLOTS]{};
 	AssetID                SlotIDs[MAX_ANIM_SLOTS]{};

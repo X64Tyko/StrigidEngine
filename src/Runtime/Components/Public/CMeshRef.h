@@ -33,38 +33,35 @@ struct CMeshRef : ComponentView<CMeshRef, WIDTH>
 	// Checks out MeshID and, if the entry has a DefaultMaterial, a conditional MaterialID checkout.
 	void SetMesh(TnxName name) requires (WIDTH == FieldWidth::Scalar)
 	{
-		const AssetEntry* entry = AssetRegistry::Get().FindByTName(name);
+		const AssetEntry* entry = AssetRegistry::Get().FindByTNameAndType(name, AssetType::Mesh);
 		if (!entry)
 		{
 			LOG_ENG_WARN_F("CMeshRef::SetMesh - mesh '%s' not found in asset registry", name.GetStr());
 			return;
 		}
 
-		AssetRegistry::RegisterPendingCheckout(&MeshID.WriteArray[MeshID.index], name);
+		AssetRegistry::RegisterPendingCheckout<AssetType::Mesh>(&MeshID.WriteArray[MeshID.index], name);
 
-		if (entry->DefaultMaterial.Value != 0) AssetRegistry::RegisterPendingCheckout(&MaterialID.WriteArray[MaterialID.index], entry->DefaultMaterial, true);
+		if (entry->DefaultMaterial.Value != 0)
+			AssetRegistry::RegisterPendingCheckout<AssetType::Material>(&MaterialID.WriteArray[MaterialID.index], entry->DefaultMaterial, true);
 	}
 
 	// Checks out MaterialID only.
 	void SetMaterial(TnxName name) requires (WIDTH == FieldWidth::Scalar)
 	{
-		AssetRegistry::RegisterPendingCheckout(&MaterialID.WriteArray[MaterialID.index], name);
+		AssetRegistry::RegisterPendingCheckout<AssetType::Material>(&MaterialID.WriteArray[MaterialID.index], name);
 	}
 
 	// Dispatches to SetMesh or SetMaterial based on the catalogued asset type.
 	CMeshRef& operator=(TnxName name) requires (WIDTH == FieldWidth::Scalar)
 	{
-		const AssetEntry* entry = AssetRegistry::Get().FindByTName(name);
-		if (!entry)
+		auto entries = AssetRegistry::Get().GetAssetsByName(name);
+		for (const AssetEntry* entry : entries)
 		{
-			LOG_ENG_WARN_F("CMeshRef::operator= - asset '%s' not found in asset registry", name.GetStr());
-			return *this;
+			if (entry->Type == AssetType::Mesh)     { SetMesh(name);     return *this; }
+			if (entry->Type == AssetType::Material) { SetMaterial(name); return *this; }
 		}
-
-		if (entry->Type == AssetType::Mesh || entry->Type == AssetType::Skeleton) SetMesh(name);
-		else if (entry->Type == AssetType::Material) SetMaterial(name);
-		else LOG_ENG_WARN_F("CMeshRef::operator= - asset '%s' is not a mesh or material (type: %s)", name.GetStr(), AssetTypeName(entry->Type));
-
+		LOG_ENG_WARN_F("CMeshRef::operator= - no mesh or material named '%s' found", name.GetStr());
 		return *this;
 	}
 };

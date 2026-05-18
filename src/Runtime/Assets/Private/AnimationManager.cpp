@@ -40,6 +40,20 @@ bool AnimationManager::Initialize(VulkanMemory* vkMem)
 	std::memset(TrackBuffer.MappedPtr,    0, MAX_TOTAL_BONE_TRACKS * sizeof(GpuAnimBoneTrack));
 	std::memset(KeyframeBuffer.MappedPtr, 0, MAX_TOTAL_KEYFRAMES   * sizeof(GpuAnimKeyframe));
 
+	AnimSlotBuffer = vkMem->AllocateBuffer(
+		MAX_ANIM_SLOTS * sizeof(GpuAnimSlotInfo),
+		VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+		GpuMemoryDomain::PersistentMapped,
+		/*requestDeviceAddress=*/ true);
+
+	if (!AnimSlotBuffer.IsValid())
+	{
+		LOG_ENG_ERROR("[AnimationManager] Anim slot buffer allocation failed");
+		return false;
+	}
+
+	std::memset(AnimSlotBuffer.MappedPtr, 0, MAX_ANIM_SLOTS * sizeof(GpuAnimSlotInfo));
+
 	LOG_ENG_INFO_F("[AnimationManager] Initialized (tracks: %u @ %u KB, keyframes: %u @ %u MB)",
 				   MAX_TOTAL_BONE_TRACKS,
 				   static_cast<uint32_t>(MAX_TOTAL_BONE_TRACKS * sizeof(GpuAnimBoneTrack) / 1024),
@@ -56,6 +70,7 @@ void AnimationManager::Shutdown()
 {
 	TrackBuffer.Free();
 	KeyframeBuffer.Free();
+	AnimSlotBuffer.Free();
 }
 
 // -----------------------------------------------------------------------
@@ -94,6 +109,10 @@ uint32_t AnimationManager::CommitToSlot(const AnimationAsset& asset, AssetID id)
 	Slots[slotID].boneCount      = asset.boneCount;
 	Slots[slotID].keyframeOffset = NextKeyframe;
 	Slots[slotID].duration       = asset.duration;
+
+	auto* gpuSlots = static_cast<GpuAnimSlotInfo*>(AnimSlotBuffer.MappedPtr);
+	gpuSlots[slotID].trackOffset = NextTrack;
+	gpuSlots[slotID].boneCount   = asset.boneCount;
 
 	CpuCopies[slotID] = asset; // full copy — vectors included; must precede lambda capture
 
@@ -185,8 +204,8 @@ uint32_t AnimationManager::LoadAnimation(AssetID id)
 
 uint32_t AnimationManager::LoadAnimation(TnxName name)
 {
-	const AssetEntry* entry = AssetRegistry::Get().FindByTName(name);
-	if (!entry || entry->Type != AssetType::Animation)
+	const AssetEntry* entry = AssetRegistry::Get().FindByTNameAndType(name, AssetType::Animation);
+	if (!entry)
 	{
 		LOG_ENG_ERROR_F("[AnimationManager] LoadAnimation: TnxName '%s' not in registry",
 						name.GetStr());

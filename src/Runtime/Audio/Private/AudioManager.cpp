@@ -186,8 +186,8 @@ uint32_t AudioManager::LoadSound(AssetID id, bool bPinned)
 
 uint32_t AudioManager::LoadSound(TnxName name, bool bPinned)
 {
-	const AssetEntry* entry = AssetRegistry::Get().FindByTName(name);
-	if (!entry || entry->Type != AssetType::Audio)
+	const AssetEntry* entry = AssetRegistry::Get().FindByTNameAndType(name, AssetType::Audio);
+	if (!entry)
 	{
 		LOG_ENG_ERROR_F("[Audio] LoadSound: TnxName '%s' not in registry", name.GetStr());
 		return UINT32_MAX;
@@ -219,8 +219,8 @@ void AudioManager::UnloadSound(AssetID id)
 
 void AudioManager::UnloadSound(TnxName name)
 {
-	const AssetEntry* entry = AssetRegistry::Get().FindByTName(name);
-	if (entry && entry->Type == AssetType::Audio) UnloadSound(entry->ID);
+	const AssetEntry* entry = AssetRegistry::Get().FindByTNameAndType(name, AssetType::Audio);
+	if (entry) UnloadSound(entry->ID);
 }
 
 // ---------------------------------------------------------------------------
@@ -282,8 +282,8 @@ void AudioManager::ReleaseVoice(Voice& v)
 
 SoundHandle AudioManager::Play(TnxName name, PlayParams params)
 {
-	const AssetEntry* entry = AssetRegistry::Get().FindByTName(name);
-	if (!entry || entry->Type != AssetType::Audio)
+	const AssetEntry* entry = AssetRegistry::Get().FindByTNameAndType(name, AssetType::Audio);
+	if (!entry)
 	{
 		LOG_ENG_ERROR_F("[Audio] Play: TnxName '%s' not found in registry", name.GetStr());
 		return SoundHandle::Invalid();
@@ -530,8 +530,8 @@ void AudioManager::RegisterEventInternal(TnxName eventName, const AssetEntry& as
 	}
 
 	// Event name must not shadow a different audio asset — Trigger's fallback would be ambiguous.
-	const AssetEntry* clash = AssetRegistry::Get().FindByTName(eventName);
-	if (clash && clash->Type == AssetType::Audio && clash->ID != asset.ID)
+	const AssetEntry* clash = AssetRegistry::Get().FindByTNameAndType(eventName, AssetType::Audio);
+	if (clash && clash->ID != asset.ID)
 	{
 		LOG_ENG_WARN_F("[Audio] RegisterEvent: event name '%s' collides with audio asset '%s' — rename the event", eventName.GetStr(), clash->Name.GetStr());
 		return;
@@ -573,8 +573,8 @@ void AudioManager::RegisterEvent(TnxName eventName, TnxName assetName, PlayParam
 		return;
 	}
 	
-	const AssetEntry* entry = AssetRegistry::Get().FindByTName(assetName);
-	if (!entry || entry->Type != AssetType::Audio)
+	const AssetEntry* entry = AssetRegistry::Get().FindByTNameAndType(assetName, AssetType::Audio);
+	if (!entry)
 	{
 		LOG_ENG_ERROR_F("[Audio] RegisterEvent: asset '%s' not found in registry", assetName.GetStr());
 		return;
@@ -616,8 +616,8 @@ SoundHandle AudioManager::Trigger(TnxName name, PlayParams overrides)
 	{
 		// No registered event — fall back to direct asset lookup by name.
 		// Allows Trigger(TnxName) without a prior RegisterEvent call.
-		const AssetEntry* entry = AssetRegistry::Get().FindByTName(name);
-		if (!entry || entry->Type != AssetType::Audio)
+		const AssetEntry* entry = AssetRegistry::Get().FindByTNameAndType(name, AssetType::Audio);
+		if (!entry)
 		{
 			LOG_ENG_WARN_F("[Audio] Trigger: no event or asset found for '%s'", name.GetStr());
 			return SoundHandle::Invalid();

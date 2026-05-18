@@ -24,7 +24,7 @@
 struct AssetEntry
 {
 	AssetID ID;
-	TnxName Name;     // FNV1a hash + owned string — primary key in NameIndex
+	TnxName Name;     // FNV1a hash + owned string
 	std::string Path; // relative to content root (runtime: pak-relative)
 	AssetType Type         = AssetType::Invalid;
 
@@ -127,17 +127,11 @@ public:
 		return e ? ResolvePath(*e) : std::string{};
 	}
 
-	// Convenience: resolve by display name (TnxName).
-	std::string ResolvePathByTName(TnxName name) const
+	// Convenience: resolve by typed display name — required when multiple asset types share a name.
+	std::string ResolvePathByTNameAndType(TnxName name, AssetType type) const
 	{
-		const AssetEntry* e = FindByTName(name);
+		const AssetEntry* e = FindByTNameAndType(name, type);
 		return e ? ResolvePath(*e) : std::string{};
-	}
-
-	// Convenience: resolve by display name (string shim).
-	std::string ResolvePathByName(const std::string& name) const
-	{
-		return ResolvePathByTName(TnxName(name.c_str()));
 	}
 
 	// --- Registration (editor/import pipeline) ---
@@ -161,17 +155,27 @@ public:
 		return FindInternal(ResolveAlias(id));
 	}
 
-	// Primary name lookup — O(1) hash compare.
-	const AssetEntry* FindByTName(TnxName name) const
+	// Type-filtered name lookup — resolves correctly when multiple assets share a display name.
+	// Key: (nameHash << 8) | type — unique per (name, AssetType) pair.
+	const AssetEntry* FindByTNameAndType(TnxName name, AssetType type) const
 	{
-		auto it = NameIndex.find(name.Value);
-		return it != NameIndex.end() ? Find(it->second) : nullptr;
+		uint64_t key = (static_cast<uint64_t>(name.Value) << 8) | static_cast<uint8_t>(type);
+		auto it = TypedNameIndex.find(key);
+		return it != TypedNameIndex.end() ? Find(it->second) : nullptr;
 	}
 
-	// String shim — hashes at call time, delegates to FindByTName.
-	const AssetEntry* FindByName(const std::string& name) const
+	// Returns all assets that share a display name, one per registered asset type.
+	// Queries each known asset type — per-type uniqueness is enforced at Register() time.
+	std::vector<const AssetEntry*> GetAssetsByName(TnxName name) const
 	{
-		return FindByTName(TnxName(name.c_str()));
+		std::vector<const AssetEntry*> results;
+		for (AssetType t : { AssetType::Mesh, AssetType::Skeleton, AssetType::Animation,
+		                     AssetType::Audio, AssetType::Material, AssetType::Texture,
+		                     AssetType::Level, AssetType::Prefab, AssetType::DataAsset })
+		{
+			if (auto* e = FindByTNameAndType(name, t)) results.push_back(e);
+		}
+		return results;
 	}
 
 	AssetEntry* FindMutable(const AssetID& id)
@@ -217,7 +221,7 @@ public:
 	AssetDataRef<T> GetAssetData(TnxName name) const
 	{
 		AssetDataRef<T> ref;
-		ref.EntryPtr = FindByTName(name);
+		ref.EntryPtr = FindByTNameAndType(name, AssetTypeOf<T>);
 		return ref;
 	}
 
@@ -263,9 +267,10 @@ public:
 			Loaders[typeIdx].Fn(Loaders[typeIdx].Ctx, id);
 	}
 
+	template<AssetType TType>
 	void TriggerLoad(TnxName name)
 	{
-		const AssetEntry* e = FindByTName(name);
+		const AssetEntry* e = FindByTNameAndType(name, TType);
 		if (e) TriggerLoad(e->ID);
 	}
 
@@ -383,12 +388,28 @@ public:
 	// Checkin(assetID, fieldPtr) at despawn cleanly unbinds without needing a separate
 	// entity-level context.
 
-	static void RegisterPendingCheckout(uint32_t* fieldPtr, TnxName name, bool conditional = false)
+	// Runtime-typed overload — used by EntityBuilder where type is known at runtime from field metadata.
+	static void RegisterPendingCheckout(uint32_t* fieldPtr, TnxName name, AssetType type, bool conditional = false)
 	{
-		const AssetEntry* entry = Get().FindByTName(name);
+		const AssetEntry* entry = Get().FindByTNameAndType(name, type);
 		if (!entry)
 		{
-			LOG_ENG_WARN_F("AssetRegistry::RegisterPendingCheckout - asset '%s' not found in registry", name.GetStr());
+			LOG_ENG_WARN_F("AssetRegistry::RegisterPendingCheckout - asset '%s' (type: %s) not found in registry",
+						   name.GetStr(), AssetTypeName(type));
+			return;
+		}
+		PendingList().push_back({fieldPtr, entry->ID, conditional});
+	}
+
+	// Compile-time-typed overload — preferred when the asset type is statically known.
+	template<AssetType TType>
+	static void RegisterPendingCheckout(uint32_t* fieldPtr, TnxName name, bool conditional = false)
+	{
+		const AssetEntry* entry = Get().FindByTNameAndType(name, TType);
+		if (!entry)
+		{
+			LOG_ENG_WARN_F("AssetRegistry::RegisterPendingCheckout - asset '%s' (type: %s) not found in registry",
+						   name.GetStr(), AssetTypeName(TType));
 			return;
 		}
 		PendingList().push_back({fieldPtr, entry->ID, conditional});
@@ -464,7 +485,7 @@ public:
 	{
 		Entries.clear();
 		AliasTable.clear();
-		NameIndex.clear();
+		TypedNameIndex.clear();
 		SlotIndex.clear();
 	}
 
@@ -511,6 +532,20 @@ private:
 	AssetLoader Loaders[256];
 	std::unordered_map<AssetID, AssetID, AssetIDHash> AliasTable;
 	std::unordered_map<AssetID, AssetEntry, AssetIDHash> Entries;
-	std::unordered_map<uint32_t, AssetID> NameIndex; // TnxName hash → AssetID
-	std::unordered_map<uint64_t, AssetID> SlotIndex; // (type<<32|slot) → AssetID
+	std::unordered_map<uint64_t, AssetID> TypedNameIndex; // (nameHash<<8|type) → AssetID; unique per (name, type)
+	std::unordered_map<uint64_t, AssetID> SlotIndex;      // (type<<32|slot) → AssetID
 };
+
+// -----------------------------------------------------------------------
+// AssetTypeTraits specialisations — forward-declared types; full definitions
+// live in their respective manager/asset headers.
+// -----------------------------------------------------------------------
+struct MeshAsset;
+struct SkeletonAsset;
+struct AnimationAsset;
+struct SoundAsset;
+
+template<> struct AssetTypeTraits<MeshAsset>      { static constexpr AssetType Type = AssetType::Mesh; };
+template<> struct AssetTypeTraits<SkeletonAsset>  { static constexpr AssetType Type = AssetType::Skeleton; };
+template<> struct AssetTypeTraits<AnimationAsset> { static constexpr AssetType Type = AssetType::Animation; };
+template<> struct AssetTypeTraits<SoundAsset>     { static constexpr AssetType Type = AssetType::Audio; };
