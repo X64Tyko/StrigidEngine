@@ -28,8 +28,16 @@ void main(uint3 tid : SV_DispatchThreadID)
     uint active = (flags >> 31u) & 1u;
 
     // MeshID == 0 means the mesh slot is not yet populated; skip this entity.
+    // Skeletal entities have no CMeshRef — fall back to SkinMeshID (from CSkeletonRef).
+    // This must match the scatter shader's early-exit condition exactly.
     uint64_t meshFieldAddr = fd->CurrFieldAddrs[SemMeshID - 1u];
     uint meshID = meshFieldAddr != 0 ? ((uint*)meshFieldAddr)[i] : 0u;
+    if (meshID == 0)
+    {
+        uint64_t skinMeshFieldAddr = fd->CurrFieldAddrs[SlabIdx_SkinMeshID];
+        if (skinMeshFieldAddr != 0)
+            meshID = ((uint*)skinMeshFieldAddr)[i];
+    }
 
     // Write raw predicate into scan[i].  prefix_sum will overwrite in-place.
     ((uint*)fd->ScanAddr)[i] = active & (meshID != 0u ? 1u : 0u);

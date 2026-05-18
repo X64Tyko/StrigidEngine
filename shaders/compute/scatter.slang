@@ -37,6 +37,19 @@ void main(uint3 gid : SV_DispatchThreadID)
     if ((flags >> 31u) == 0u)
         return;
 
+    // Mirror the predicate's meshID visibility check.  An active entity with meshID=0
+    // was assigned scan[i]=0 by predicate, so its outIdx equals the next active entity's
+    // slot — writing here would corrupt that entity's compact-buffer entry.
+    uint64_t meshFieldAddr_vis = fd->CurrFieldAddrs[SemMeshID - 1u];
+    uint meshID_vis = meshFieldAddr_vis != 0 ? ((uint*)meshFieldAddr_vis)[i] : 0u;
+    if (meshID_vis == 0)
+    {
+        uint64_t skinMeshAddr_vis = fd->CurrFieldAddrs[SlabIdx_SkinMeshID];
+        if (skinMeshAddr_vis != 0) meshID_vis = ((uint*)skinMeshAddr_vis)[i];
+    }
+    if (meshID_vis == 0)
+        return;
+
     uint outIdx = ((uint*)fd->ScanAddr)[i];
     float alpha  = fd->Alpha;
     uint  stride = fd->OutFieldStride;
