@@ -9,125 +9,767 @@
 #include "TnxWidgets.h"
 #include "imgui.h"
 
+#include <algorithm>
+#include <cstring>
 #include <filesystem>
+#include <fstream>
+
+namespace fs = std::filesystem;
+
+// ---------------------------------------------------------------------------
+// Type helpers (file-scope, no header dependency on ImVec4)
+// ---------------------------------------------------------------------------
+
+static ImVec4 TypeColor(AssetType t)
+{
+    switch (t)
+    {
+        case AssetType::Mesh:      return {0.24f, 0.52f, 0.90f, 1.0f};
+        case AssetType::Texture:   return {0.90f, 0.58f, 0.20f, 1.0f};
+        case AssetType::Audio:     return {0.30f, 0.75f, 0.42f, 1.0f};
+        case AssetType::Level:     return TnxStyle::Color::PurpleHot;
+        case AssetType::Prefab:    return TnxStyle::Color::Yellow;
+        case AssetType::DataAsset: return TnxStyle::Color::FgMuted;
+        case AssetType::Material:  return {0.85f, 0.32f, 0.50f, 1.0f};
+        case AssetType::Animation: return {0.20f, 0.85f, 0.85f, 1.0f};
+        case AssetType::Skeleton:  return {0.70f, 0.50f, 0.30f, 1.0f};
+        default:                   return TnxStyle::Color::FgGhost;
+    }
+}
+
+static const char* TypeAbbr(AssetType t)
+{
+    switch (t)
+    {
+        case AssetType::Mesh:      return "MSH";
+        case AssetType::Texture:   return "TEX";
+        case AssetType::Audio:     return "AUD";
+        case AssetType::Level:     return "LVL";
+        case AssetType::Prefab:    return "PFB";
+        case AssetType::DataAsset: return "DAT";
+        case AssetType::Material:  return "MAT";
+        case AssetType::Animation: return "ANM";
+        case AssetType::Skeleton:  return "SKL";
+        default:                   return "???";
+    }
+}
+
+bool ContentBrowserPanel::MatchesFilter(const AssetDatabaseEntry& entry) const
+{
+    std::string entryDir = fs::path(entry.Path).parent_path().generic_string();
+    if (entryDir != CurrentFolder) return false;
+    if (TypeFilter != 0 && static_cast<uint8_t>(entry.Type) != TypeFilter) return false;
+    if (SearchBuf[0] != '\0' && !std::strstr(entry.Name.GetStr(), SearchBuf)) return false;
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// Main draw
+// ---------------------------------------------------------------------------
 
 void ContentBrowserPanel::Draw(EditorState& state)
 {
-	if (!ImGui::Begin(Title, &bVisible)) { ImGui::End(); return; }
-	TnxWidgets::PanelHeader(nullptr, "Content Browser");
+    if (!ImGui::Begin(Title, &bVisible)) { ImGui::End(); return; }
+    if (state.ConfigPtr && state.ConfigPtr->ProjectDir[0])
+        ContentRoot = std::string(state.ConfigPtr->ProjectDir) + "/content";
+    else
+        ContentRoot.clear();
 
-	if (!state.AssetDB)
-	{
-		ImGui::TextDisabled("No asset database (missing project directory?)");
-		ImGui::End();
-		return;
-	}
+    if (!state.AssetDB || ContentRoot.empty())
+    {
+        ImGui::TextDisabled("No asset database (missing project directory?)");
+        ImGui::End();
+        return;
+    }
 
-	const auto& entries = state.AssetDB->GetEntries();
+    DrawToolbar(state);
 
-	// --- Toolbar ---
-	if (TnxWidgets::ButtonPrimary("Import Mesh...") && state.EditorCtx)
-	{
-		state.EditorCtx->ShowImportDialog();
-	}
-	ImGui::SameLine();
-	ImGui::Text("Assets: %zu", entries.size());
-	ImGui::SameLine();
+    // Split: folder tree (left) + asset area (right)
+    ImGui::BeginChild("##FolderTree", {180.0f, 0}, ImGuiChildFlags_Borders,
+                      ImGuiWindowFlags_HorizontalScrollbar);
+    DrawFolderPane(state);
+    ImGui::EndChild();
 
-	// Type filter combo
-	const char* typeNames[] = {
-		"All", "Data", "Mesh", "Skeleton", "Material",
-		"Texture", "Audio", "Animation", "Level", "Prefab"
-	};
-	ImGui::SetNextItemWidth(120.0f);
-	ImGui::Combo("##TypeFilter", &TypeFilter, typeNames, 10);
+    ImGui::SameLine(0, 4.0f);
 
-	ImGui::Separator();
+    ImGui::BeginChild("##AssetArea", {0, 0}, ImGuiChildFlags_None);
+    if (CurrentViewMode == ViewMode::Icons)
+        DrawAssetPane(state);
+    else
+        DrawAssetList(state);
+    ImGui::EndChild();
 
-	// --- Asset list ---
-	ImGui::BeginChild("AssetList", ImVec2(0, 0), ImGuiChildFlags_None, ImGuiWindowFlags_HorizontalScrollbar);
+    // Modals live at the top level (outside child windows)
+    DrawCreatePopup(state);
 
-	ImGui::Columns(4, "AssetColumns", true);
-	ImGui::SetColumnWidth(0, 220.0f);
-	ImGui::SetColumnWidth(1, 100.0f);
-	ImGui::SetColumnWidth(2, 60.0f);
-	ImGui::Text("Path");
-	ImGui::NextColumn();
-	ImGui::Text("Type");
-	ImGui::NextColumn();
-	ImGui::Text("MeshID");
-	ImGui::NextColumn();
-	ImGui::Text("UUID");
-	ImGui::NextColumn();
-	ImGui::Separator();
+    if (bShowRename) { ImGui::OpenPopup("##CBRename"); bShowRename = false; }
+    ImGui::SetNextWindowSize({280, 0}, ImGuiCond_Always);
+    if (ImGui::BeginPopupModal("##CBRename", nullptr,
+                               ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize))
+    {
+        ImGui::PushFont(TnxStyle::Font::UiSemibold);
+        ImGui::Text("Rename Asset");
+        ImGui::PopFont();
+        ImGui::Spacing();
 
-	for (auto& entry : entries)
-	{
-		// Apply type filter (0 = All, otherwise match AssetType value)
-		if (TypeFilter != 0 && static_cast<uint8_t>(entry.Type) != TypeFilter) continue;
+        if (ImGui::IsWindowAppearing()) ImGui::SetKeyboardFocusHere();
+        ImGui::SetNextItemWidth(-1);
+        bool enter = ImGui::InputText("##CBRenInput", RenameBuf, sizeof(RenameBuf),
+                                      ImGuiInputTextFlags_EnterReturnsTrue);
+        ImGui::Spacing();
 
-		// Selectable row
-		bool selected = false;
-		ImGui::Selectable(entry.Path.c_str(), &selected, ImGuiSelectableFlags_SpanAllColumns);
+        bool ok = TnxWidgets::ButtonPrimary("OK") || enter;
+        ImGui::SameLine();
+        bool cancel = TnxWidgets::ButtonGhost("Cancel") ||
+                      ImGui::IsKeyPressed(ImGuiKey_Escape);
 
-		// Drag source for prefabs
-		if (entry.Type == AssetType::Prefab && state.ConfigPtr)
-		{
-			if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID))
-			{
-				std::string absPath = std::string(state.ConfigPtr->ProjectDir)
-					+ "/content/" + entry.Path;
-				ImGui::SetDragDropPayload("PREFAB_PATH", absPath.c_str(), absPath.size() + 1);
-				ImGui::Text("Spawn: %s", entry.Path.c_str());
-				ImGui::EndDragDropSource();
-			}
-		}
+        if (ok && RenameBuf[0] && state.AssetDB)
+        {
+            state.AssetDB->Rename(RenamingID, RenameBuf);
+            ImGui::CloseCurrentPopup();
+        }
+        if (cancel) ImGui::CloseCurrentPopup();
 
-		// Drag source for meshes — payload is the slot index
-		if (entry.Type == AssetType::Mesh && state.MeshMgrPtr)
-		{
-			if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID))
-			{
-				uint32_t meshSlot = state.MeshMgrPtr->FindSlotByID(entry.ID);
-				ImGui::SetDragDropPayload("MESH_SLOT", &meshSlot, sizeof(meshSlot));
-				ImGui::Text("Mesh: %s", entry.Name.GetStr());
-				ImGui::EndDragDropSource();
-			}
-		}
+        ImGui::EndPopup();
+    }
 
-		// Double-click: load scenes; prefabs will open prefab editor (TODO)
-		if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(0))
-		{
-			if (state.EditorCtx && state.ConfigPtr)
-			{
-				std::string absPath = std::string(state.ConfigPtr->ProjectDir)
-					+ "/content/" + entry.Path;
+    ImGui::End();
+}
 
-				if (entry.Type == AssetType::Level) state.EditorCtx->LoadScene(absPath);
-				// TODO: Prefab double-click → open prefab editor
-			}
-		}
+// ---------------------------------------------------------------------------
+// Toolbar + breadcrumb — single elevated bar with controls right-anchored
+// ---------------------------------------------------------------------------
 
-		ImGui::NextColumn();
-		ImGui::Text("%s", AssetTypeName(entry.Type));
-		ImGui::NextColumn();
+void ContentBrowserPanel::DrawToolbar(EditorState& state)
+{
+    // --- Integrated header bar ---
+    const float  H    = 40.0f;
+    const ImVec2 barP = ImGui::GetCursorScreenPos();
+    const float  barW = ImGui::GetContentRegionAvail().x;
+    ImDrawList*  dl   = ImGui::GetWindowDrawList();
 
-		// MeshID column — show slot index for mesh assets
-		if (entry.Type == AssetType::Mesh && state.MeshMgrPtr)
-		{
-			uint32_t meshSlot = state.MeshMgrPtr->FindSlotByID(entry.ID);
-			if (meshSlot != UINT32_MAX) ImGui::Text("%u", meshSlot);
-			else ImGui::TextDisabled("--");
-		}
-		else ImGui::TextDisabled("--");
+    dl->AddRectFilled(barP, {barP.x + barW, barP.y + H},
+                      ImGui::ColorConvertFloat4ToU32(TnxStyle::Color::BgElev));
+    dl->AddLine({barP.x, barP.y + H}, {barP.x + barW, barP.y + H},
+                ImGui::ColorConvertFloat4ToU32(TnxStyle::Color::BorderSoft), 1.0f);
 
-		ImGui::NextColumn();
-		ImGui::Text("%012llX", static_cast<unsigned long long>(entry.ID.GetUUID() >> 8));
-		ImGui::NextColumn();
-	}
+    // Reduced FramePadding so controls sit neatly inside H=40
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(8.0f, 4.0f));
+    const float itemH = ImGui::GetFrameHeight();           // font + 2*4 = ~23px
+    const float ctrlY = barP.y + (H - itemH) * 0.5f;      // vertically centred
 
-	ImGui::Columns(1);
-	ImGui::EndChild();
+    // Compute right-side total width so we can anchor controls to the right
+    static const char* kTypeNames[] = {
+        "All", "Data", "Mesh", "Skeleton", "Material",
+        "Texture", "Audio", "Animation", "Level", "Prefab"
+    };
+    const float padX    = 8.0f;
+    const float searchW = 130.0f;
+    const float filterW = 94.0f;
+    const float gridW   = ImGui::CalcTextSize("Grid").x + padX * 2.0f;
+    const float listW   = ImGui::CalcTextSize("List").x + padX * 2.0f;
+    const float sliderW = 68.0f;
+    const float gap     = 4.0f;
 
-	ImGui::End();
+    float rightW = searchW + gap + filterW + gap + gridW + 2.0f + listW;
+    if (CurrentViewMode == ViewMode::Icons) rightW += gap + sliderW;
+
+    // Title — left side
+    ImGui::SetCursorScreenPos({barP.x + 10.0f,
+                               barP.y + (H - ImGui::GetTextLineHeight()) * 0.5f});
+    ImGui::PushFont(TnxStyle::Font::UiSemibold);
+    ImGui::PushStyleColor(ImGuiCol_Text, TnxStyle::Color::FgMuted);
+    ImGui::TextUnformatted("CONTENT BROWSER");
+    ImGui::PopStyleColor();
+    ImGui::PopFont();
+
+    // Right-side controls
+    ImGui::SetCursorScreenPos({barP.x + barW - rightW - 10.0f, ctrlY});
+
+    ImGui::SetNextItemWidth(searchW);
+    ImGui::InputTextWithHint("##CBSearch", "Search...", SearchBuf, sizeof(SearchBuf));
+    ImGui::SameLine(0, gap);
+
+    ImGui::SetNextItemWidth(filterW);
+    ImGui::Combo("##CBTypeFilter", &TypeFilter, kTypeNames, 10);
+    ImGui::SameLine(0, gap);
+
+    // Grid / List toggle
+    auto ViewBtn = [](const char* label, bool active) -> bool
+    {
+        ImVec4 bg = active ? TnxStyle::Color::PurpleSoft : ImVec4(0, 0, 0, 0);
+        ImGui::PushStyleColor(ImGuiCol_Button,        bg);
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, TnxStyle::Color::PurpleFaint);
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive,  TnxStyle::Color::PurpleSoft);
+        bool hit = ImGui::Button(label, {0, 0});
+        ImGui::PopStyleColor(3);
+        return hit;
+    };
+
+    if (ViewBtn("Grid", CurrentViewMode == ViewMode::Icons)) CurrentViewMode = ViewMode::Icons;
+    ImGui::SameLine(0, 2);
+    if (ViewBtn("List", CurrentViewMode == ViewMode::List))  CurrentViewMode = ViewMode::List;
+
+    if (CurrentViewMode == ViewMode::Icons)
+    {
+        ImGui::SameLine(0, gap);
+        ImGui::SetNextItemWidth(sliderW);
+        ImGui::SliderFloat("##CBThumb", &ThumbnailSize, 40.0f, 120.0f, "%.0f");
+    }
+
+    ImGui::PopStyleVar(); // FramePadding
+
+    // Advance cursor past the bar
+    ImGui::SetCursorScreenPos({barP.x, barP.y + H + 1.0f});
+
+    // --- Secondary row: Import + breadcrumb ---
+    ImGui::Spacing();
+
+    if (TnxWidgets::ButtonPrimary("Import...") && state.EditorCtx)
+        state.EditorCtx->ShowImportDialog();
+    ImGui::SameLine(0, 12.0f);
+
+    ImGui::PushStyleColor(ImGuiCol_Text, TnxStyle::Color::FgMuted);
+    ImGui::PushFont(TnxStyle::Font::UiSemibold);
+    if (ImGui::SmallButton("Content")) CurrentFolder.clear();
+    ImGui::PopFont();
+
+    if (!CurrentFolder.empty())
+    {
+        std::string accum;
+        size_t      pos = 0;
+        while (pos < CurrentFolder.size())
+        {
+            size_t end = CurrentFolder.find('/', pos);
+            if (end == std::string::npos) end = CurrentFolder.size();
+
+            std::string seg = CurrentFolder.substr(pos, end - pos);
+            if (!accum.empty()) accum += '/';
+            accum += seg;
+
+            ImGui::SameLine(0, 2); ImGui::TextUnformatted(">");
+            ImGui::SameLine(0, 2);
+
+            std::string nav = accum;
+            ImGui::PushFont(TnxStyle::Font::UiSemibold);
+            if (ImGui::SmallButton(seg.c_str())) CurrentFolder = nav;
+            ImGui::PopFont();
+
+            pos = end + 1;
+        }
+    }
+
+    ImGui::PopStyleColor();
+    ImGui::Spacing();
+}
+
+// ---------------------------------------------------------------------------
+// Folder tree
+// ---------------------------------------------------------------------------
+
+void ContentBrowserPanel::DrawFolderPane(EditorState& state)
+{
+    ImGuiTreeNodeFlags rootFlags =
+        ImGuiTreeNodeFlags_OpenOnArrow   |
+        ImGuiTreeNodeFlags_DefaultOpen   |
+        ImGuiTreeNodeFlags_SpanFullWidth |
+        (CurrentFolder.empty() ? ImGuiTreeNodeFlags_Selected : 0);
+
+    ImGui::PushStyleColor(ImGuiCol_Header,        TnxStyle::Color::PurpleFaint);
+    ImGui::PushStyleColor(ImGuiCol_HeaderHovered, TnxStyle::Color::BgElev);
+    ImGui::PushStyleColor(ImGuiCol_HeaderActive,  TnxStyle::Color::PurpleSoft);
+    bool rootOpen = ImGui::TreeNodeEx("##cbroot", rootFlags, "Content");
+    ImGui::PopStyleColor(3);
+
+    if (ImGui::IsItemClicked(0) && !ImGui::IsItemToggledOpen())
+        CurrentFolder.clear();
+
+    if (ImGui::BeginPopupContextItem("##rootFolderCtx"))
+    {
+        if (ImGui::MenuItem("New Folder..."))
+        {
+            CurrentFolder.clear();
+            OpenCreatePopup(true);
+        }
+        if (ImGui::MenuItem("Refresh"))
+            state.AssetDB->Reconcile();
+        ImGui::EndPopup();
+    }
+
+    if (rootOpen)
+    {
+        try
+        {
+            std::vector<fs::path> subdirs;
+            for (const auto& e : fs::directory_iterator(ContentRoot))
+                if (e.is_directory()) subdirs.push_back(e.path());
+            std::sort(subdirs.begin(), subdirs.end());
+            for (const auto& d : subdirs)
+                DrawFolderNode(d, 0);
+        }
+        catch (...) {}
+        ImGui::TreePop();
+    }
+}
+
+void ContentBrowserPanel::DrawFolderNode(const fs::path& dir, int depth)
+{
+    std::string rel;
+    try { rel = fs::relative(dir, ContentRoot).generic_string(); }
+    catch (...) { return; }
+
+    const std::string name = dir.filename().generic_string();
+    const bool selected = (CurrentFolder == rel);
+
+    bool hasChildren = false;
+    try {
+        for (const auto& e : fs::directory_iterator(dir))
+            if (e.is_directory()) { hasChildren = true; break; }
+    } catch (...) {}
+
+    ImGuiTreeNodeFlags flags =
+        ImGuiTreeNodeFlags_OpenOnArrow   |
+        ImGuiTreeNodeFlags_SpanFullWidth |
+        (selected       ? ImGuiTreeNodeFlags_Selected : 0) |
+        (!hasChildren   ? ImGuiTreeNodeFlags_Leaf     : 0);
+
+    ImGui::PushID(rel.c_str());
+    ImGui::PushStyleColor(ImGuiCol_Header,        TnxStyle::Color::PurpleFaint);
+    ImGui::PushStyleColor(ImGuiCol_HeaderHovered, TnxStyle::Color::BgElev);
+    ImGui::PushStyleColor(ImGuiCol_HeaderActive,  TnxStyle::Color::PurpleSoft);
+    bool open = ImGui::TreeNodeEx("##folderNode", flags, "%s", name.c_str());
+    ImGui::PopStyleColor(3);
+
+    if (ImGui::IsItemClicked(0) && !ImGui::IsItemToggledOpen())
+        CurrentFolder = rel;
+
+    if (ImGui::BeginPopupContextItem("##folderCtx"))
+    {
+        if (ImGui::MenuItem("New Folder Here..."))
+        {
+            CurrentFolder = rel;
+            OpenCreatePopup(true);
+        }
+        ImGui::Separator();
+        if (ImGui::MenuItem("Delete Folder"))
+        {
+            try { fs::remove_all(dir); } catch (...) {}
+            // Navigate up if inside the deleted folder
+            if (CurrentFolder == rel || CurrentFolder.rfind(rel + "/", 0) == 0)
+                CurrentFolder.clear();
+        }
+        ImGui::EndPopup();
+    }
+
+    if (open)
+    {
+        try
+        {
+            std::vector<fs::path> subdirs;
+            for (const auto& e : fs::directory_iterator(dir))
+                if (e.is_directory()) subdirs.push_back(e.path());
+            std::sort(subdirs.begin(), subdirs.end());
+            for (const auto& d : subdirs)
+                DrawFolderNode(d, depth + 1);
+        }
+        catch (...) {}
+        ImGui::TreePop();
+    }
+
+    ImGui::PopID();
+}
+
+// ---------------------------------------------------------------------------
+// Asset pane — icon grid
+// ---------------------------------------------------------------------------
+
+void ContentBrowserPanel::DrawAssetPane(EditorState& state)
+{
+    const auto& entries  = state.AssetDB->GetEntries();
+    const float padding  = 8.0f;
+    const float availW   = ImGui::GetContentRegionAvail().x;
+    const int   columns  = std::max(1, (int)((availW + padding) / (ThumbnailSize + padding)));
+
+    if (ImGui::BeginPopupContextWindow("##AssetGridCtx",
+            ImGuiPopupFlags_MouseButtonRight | ImGuiPopupFlags_NoOpenOverItems))
+    {
+        DrawBlankContextMenu(state);
+        ImGui::EndPopup();
+    }
+
+    int  col      = 0;
+    bool anyDrawn = false;
+
+    for (const auto& entry : entries)
+    {
+        if (!MatchesFilter(entry)) continue;
+        if (col > 0) ImGui::SameLine(0, padding);
+        DrawAssetTile(state, entry);
+        if (++col == columns) { col = 0; ImGui::Spacing(); }
+        anyDrawn = true;
+    }
+
+    if (!anyDrawn)
+    {
+        ImGui::Spacing();
+        ImGui::TextDisabled("  No assets in this folder.");
+        ImGui::Spacing();
+        ImGui::TextDisabled("  Right-click to create or import.");
+    }
+}
+
+void ContentBrowserPanel::DrawAssetTile(EditorState& state, const AssetDatabaseEntry& entry)
+{
+    const bool   selected = (SelectedAsset == entry.ID);
+    const ImVec4 typeCol  = TypeColor(entry.Type);
+    const char*  abbr     = TypeAbbr(entry.Type);
+    const char*  name     = entry.Name.GetStr();
+    const float  nameH    = 22.0f;
+
+    ImGui::PushID(entry.Path.c_str());
+
+    ImVec2 p       = ImGui::GetCursorScreenPos();
+    bool   pressed = ImGui::InvisibleButton("##tile", {ThumbnailSize, ThumbnailSize + nameH});
+    bool   hovered = ImGui::IsItemHovered();
+
+    if (pressed) SelectedAsset = entry.ID;
+
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+
+    // Tile background — desaturated type color
+    float shade = hovered ? 0.75f : 0.55f;
+    ImVec4 bg   = {typeCol.x * shade, typeCol.y * shade, typeCol.z * shade, 1.0f};
+    dl->AddRectFilled(p, {p.x + ThumbnailSize, p.y + ThumbnailSize},
+                      ImGui::ColorConvertFloat4ToU32(bg), 6.0f);
+
+    // Border
+    if (selected)
+        dl->AddRect(p, {p.x + ThumbnailSize, p.y + ThumbnailSize},
+                    ImGui::ColorConvertFloat4ToU32(TnxStyle::Color::PurpleHot),
+                    6.0f, 0, 2.0f);
+    else if (hovered)
+        dl->AddRect(p, {p.x + ThumbnailSize, p.y + ThumbnailSize},
+                    ImGui::ColorConvertFloat4ToU32(TnxStyle::Color::BorderStrong),
+                    6.0f, 0, 1.0f);
+
+    // Type abbreviation centered in tile
+    ImVec2 abbrSz = ImGui::CalcTextSize(abbr);
+    dl->AddText({p.x + (ThumbnailSize - abbrSz.x) * 0.5f,
+                 p.y + (ThumbnailSize - abbrSz.y) * 0.5f},
+                IM_COL32(255, 255, 255, 200), abbr);
+
+    // Name label — truncate to fit tile width (binary search)
+    const float   maxNameW = ThumbnailSize - 4.0f;
+    const char*   nameEnd  = name + std::strlen(name);
+    {
+        int lo = 0, hi = (int)(nameEnd - name);
+        while (lo < hi)
+        {
+            int mid = (lo + hi + 1) / 2;
+            if (ImGui::CalcTextSize(name, name + mid).x <= maxNameW) lo = mid;
+            else hi = mid - 1;
+        }
+        nameEnd = name + lo;
+    }
+    ImVec2 nameSz = ImGui::CalcTextSize(name, nameEnd);
+    dl->AddText(
+        {p.x + (ThumbnailSize - nameSz.x) * 0.5f, p.y + ThumbnailSize + 3.0f},
+        ImGui::ColorConvertFloat4ToU32(selected ? TnxStyle::Color::Fg : TnxStyle::Color::FgMuted),
+        name, nameEnd);
+
+    // Context menu
+    if (ImGui::BeginPopupContextItem("##tileCtx"))
+    {
+        DrawAssetContextMenu(state, entry);
+        ImGui::EndPopup();
+    }
+
+    // Drag sources
+    if (entry.Type == AssetType::Prefab && state.ConfigPtr)
+    {
+        if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID))
+        {
+            std::string absPath = ContentRoot + "/" + entry.Path;
+            ImGui::SetDragDropPayload("PREFAB_PATH", absPath.c_str(), absPath.size() + 1);
+            ImGui::Text("Spawn: %s", name);
+            ImGui::EndDragDropSource();
+        }
+    }
+    if (entry.Type == AssetType::Mesh && state.MeshMgrPtr)
+    {
+        if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID))
+        {
+            uint32_t slot = state.MeshMgrPtr->FindSlotByID(entry.ID);
+            ImGui::SetDragDropPayload("MESH_SLOT", &slot, sizeof(slot));
+            ImGui::Text("Mesh: %s", name);
+            ImGui::EndDragDropSource();
+        }
+    }
+
+    // Double-click
+    if (hovered && ImGui::IsMouseDoubleClicked(0) && state.EditorCtx)
+    {
+        std::string absPath = ContentRoot + "/" + entry.Path;
+        if (entry.Type == AssetType::Level) state.EditorCtx->LoadScene(absPath);
+    }
+
+    ImGui::PopID();
+}
+
+// ---------------------------------------------------------------------------
+// Asset pane — list view
+// ---------------------------------------------------------------------------
+
+void ContentBrowserPanel::DrawAssetList(EditorState& state)
+{
+    const auto& entries = state.AssetDB->GetEntries();
+
+    if (ImGui::BeginPopupContextWindow("##AssetListCtx",
+            ImGuiPopupFlags_MouseButtonRight | ImGuiPopupFlags_NoOpenOverItems))
+    {
+        DrawBlankContextMenu(state);
+        ImGui::EndPopup();
+    }
+
+    ImGui::PushStyleColor(ImGuiCol_Text, TnxStyle::Color::FgDim);
+    ImGui::Columns(3, "##listcols", false);
+    ImGui::SetColumnWidth(0, 220.0f);
+    ImGui::SetColumnWidth(1, 90.0f);
+    ImGui::Text("Name");  ImGui::NextColumn();
+    ImGui::Text("Type");  ImGui::NextColumn();
+    ImGui::Text("UUID");  ImGui::NextColumn();
+    ImGui::PopStyleColor();
+    ImGui::Separator();
+
+    bool anyDrawn = false;
+    for (const auto& entry : entries)
+    {
+        if (!MatchesFilter(entry)) continue;
+        DrawAssetRow(state, entry);
+        anyDrawn = true;
+    }
+
+    if (!anyDrawn)
+    {
+        ImGui::Columns(1);
+        ImGui::Spacing();
+        ImGui::TextDisabled("  No assets in this folder.");
+    }
+    else
+    {
+        ImGui::Columns(1);
+    }
+}
+
+void ContentBrowserPanel::DrawAssetRow(EditorState& state, const AssetDatabaseEntry& entry)
+{
+    const bool selected = (SelectedAsset == entry.ID);
+
+    ImGui::PushID(entry.Path.c_str());
+    ImGui::PushStyleColor(ImGuiCol_Header,        TnxStyle::Color::PurpleFaint);
+    ImGui::PushStyleColor(ImGuiCol_HeaderHovered, TnxStyle::Color::BgElev);
+    ImGui::PushStyleColor(ImGuiCol_HeaderActive,  TnxStyle::Color::PurpleSoft);
+
+    if (ImGui::Selectable(entry.Name.GetStr(), selected, ImGuiSelectableFlags_SpanAllColumns))
+        SelectedAsset = entry.ID;
+
+    if (ImGui::BeginPopupContextItem("##rowCtx"))
+    {
+        DrawAssetContextMenu(state, entry);
+        ImGui::EndPopup();
+    }
+
+    if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(0) && state.EditorCtx)
+    {
+        std::string absPath = ContentRoot + "/" + entry.Path;
+        if (entry.Type == AssetType::Level) state.EditorCtx->LoadScene(absPath);
+    }
+
+    ImGui::PopStyleColor(3);
+    ImGui::NextColumn();
+
+    ImGui::PushStyleColor(ImGuiCol_Text, TypeColor(entry.Type));
+    ImGui::TextUnformatted(AssetTypeName(entry.Type));
+    ImGui::PopStyleColor();
+    ImGui::NextColumn();
+
+    ImGui::TextDisabled("%012llX", static_cast<unsigned long long>(entry.ID.GetUUID() >> 8));
+    ImGui::NextColumn();
+
+    ImGui::PopID();
+}
+
+// ---------------------------------------------------------------------------
+// Context menus
+// ---------------------------------------------------------------------------
+
+void ContentBrowserPanel::DrawAssetContextMenu(EditorState& state,
+                                                const AssetDatabaseEntry& entry)
+{
+    if (entry.Type == AssetType::Level && state.EditorCtx)
+    {
+        if (ImGui::MenuItem("Open Level"))
+            state.EditorCtx->LoadScene(ContentRoot + "/" + entry.Path);
+        ImGui::Separator();
+    }
+    if (entry.Type == AssetType::Prefab)
+    {
+        ImGui::BeginDisabled();
+        ImGui::MenuItem("Edit Prefab  (TODO)");
+        ImGui::EndDisabled();
+        ImGui::Separator();
+    }
+
+    if (ImGui::MenuItem("Rename..."))
+    {
+        bShowRename = true;
+        RenamingID  = entry.ID;
+        std::snprintf(RenameBuf, sizeof(RenameBuf), "%s", entry.Name.GetStr());
+    }
+
+    if (ImGui::MenuItem("Delete"))
+    {
+        state.AssetDB->Remove(entry.ID);
+        try { fs::remove(fs::path(ContentRoot) / entry.Path); } catch (...) {}
+        if (SelectedAsset == entry.ID) SelectedAsset = {};
+    }
+
+    ImGui::Separator();
+    ImGui::TextDisabled("UUID: %012llX",
+                        static_cast<unsigned long long>(entry.ID.GetUUID() >> 8));
+}
+
+void ContentBrowserPanel::DrawBlankContextMenu(EditorState& state)
+{
+    if (ImGui::BeginMenu("New"))
+    {
+        if (ImGui::MenuItem("Folder..."))
+            OpenCreatePopup(true);
+
+        ImGui::Separator();
+
+        if (ImGui::MenuItem("Level  (.tnxscene)"))
+            OpenCreatePopup(false, AssetType::Level);
+        if (ImGui::MenuItem("Prefab  (.tnxprefab)"))
+            OpenCreatePopup(false, AssetType::Prefab);
+        if (ImGui::MenuItem("Data Asset  (.json)"))
+            OpenCreatePopup(false, AssetType::DataAsset);
+
+        ImGui::Separator();
+
+        ImGui::BeginDisabled();
+        ImGui::MenuItem("Material   (import required)");
+        ImGui::MenuItem("Texture    (import required)");
+        ImGui::MenuItem("Audio      (import required)");
+        ImGui::MenuItem("Animation  (import required)");
+        ImGui::EndDisabled();
+
+        ImGui::EndMenu();
+    }
+
+    ImGui::Separator();
+
+    if (ImGui::MenuItem("Import Mesh...") && state.EditorCtx)
+        state.EditorCtx->ShowImportDialog();
+
+    if (ImGui::MenuItem("Refresh"))
+        state.AssetDB->Reconcile();
+}
+
+// ---------------------------------------------------------------------------
+// Create popup
+// ---------------------------------------------------------------------------
+
+void ContentBrowserPanel::OpenCreatePopup(bool forFolder, AssetType type)
+{
+    bShowCreate      = true;
+    bCreateIsFolder  = forFolder;
+    CreateType       = type;
+    CreateNameBuf[0] = '\0';
+}
+
+void ContentBrowserPanel::DrawCreatePopup(EditorState& state)
+{
+    if (bShowCreate) { ImGui::OpenPopup("##CBCreate"); bShowCreate = false; }
+
+    ImGui::SetNextWindowSize({300, 0}, ImGuiCond_Always);
+    if (!ImGui::BeginPopupModal("##CBCreate", nullptr,
+                                ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize))
+        return;
+
+    const char* heading =
+        bCreateIsFolder                      ? "New Folder"     :
+        CreateType == AssetType::Level       ? "New Level"      :
+        CreateType == AssetType::Prefab      ? "New Prefab"     :
+        CreateType == AssetType::DataAsset   ? "New Data Asset" : "New File";
+
+    const char* hint =
+        bCreateIsFolder                      ? "folder_name"  :
+        CreateType == AssetType::Level       ? "my_level"     :
+        CreateType == AssetType::Prefab      ? "my_prefab"    : "my_asset";
+
+    ImGui::PushFont(TnxStyle::Font::UiSemibold);
+    ImGui::Text("%s", heading);
+    ImGui::PopFont();
+    ImGui::Spacing();
+
+    if (ImGui::IsWindowAppearing()) ImGui::SetKeyboardFocusHere();
+    ImGui::SetNextItemWidth(-1);
+    bool enter = ImGui::InputTextWithHint("##CBCreateName", hint,
+                                          CreateNameBuf, sizeof(CreateNameBuf),
+                                          ImGuiInputTextFlags_EnterReturnsTrue);
+    ImGui::Spacing();
+
+    bool ok     = TnxWidgets::ButtonPrimary("Create") || enter;
+    ImGui::SameLine();
+    bool cancel = TnxWidgets::ButtonGhost("Cancel");
+
+    if (ok && CreateNameBuf[0])
+    {
+        CommitCreate(state);
+        ImGui::CloseCurrentPopup();
+    }
+    if (cancel) ImGui::CloseCurrentPopup();
+
+    ImGui::EndPopup();
+}
+
+void ContentBrowserPanel::CommitCreate(EditorState& state)
+{
+    fs::path base = fs::path(ContentRoot);
+    if (!CurrentFolder.empty()) base /= CurrentFolder;
+
+    if (bCreateIsFolder)
+    {
+        try { fs::create_directories(base / CreateNameBuf); } catch (...) {}
+        return;
+    }
+
+    const char* ext  = "";
+    const char* stub = "";
+    switch (CreateType)
+    {
+        case AssetType::Level:
+            ext  = ".tnxscene";
+            stub = "{\"version\":1,\"entities\":[]}";
+            break;
+        case AssetType::Prefab:
+            ext  = ".tnxprefab";
+            stub = "{\"version\":1,\"root\":null}";
+            break;
+        case AssetType::DataAsset:
+            ext  = ".json";
+            stub = "{}";
+            break;
+        default: return;
+    }
+
+    fs::path filePath = base / (std::string(CreateNameBuf) + ext);
+    std::ofstream f(filePath);
+    if (f.is_open())
+    {
+        f << stub;
+        f.close();
+        if (state.AssetDB) state.AssetDB->Reconcile();
+    }
 }

@@ -1137,7 +1137,7 @@ void EditorContext::BuildMenuBar()
 			"Layout", "Logic", "Simulate", "Network", "Profile"
 		};
 		ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 10.0f);
-		ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,  ImVec2(10.0f, 2.0f));
+		ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,  ImVec2(14.0f, 5.0f));
 		for (int i = 0; i < static_cast<int>(Workspace::COUNT); ++i)
 		{
 			bool active = CurrentWorkspace == static_cast<Workspace>(i);
@@ -1147,6 +1147,7 @@ void EditorContext::BuildMenuBar()
 				ImGui::PushStyleColor(ImGuiCol_ButtonHovered, TnxStyle::Color::PurpleHot);
 				ImGui::PushStyleColor(ImGuiCol_ButtonActive,  TnxStyle::Color::PurpleSoft);
 				ImGui::PushStyleColor(ImGuiCol_Text,          ImVec4(1.0f, 1.0f, 1.0f, 1.0f));
+				ImGui::PushFont(TnxStyle::Font::UiSemibold);
 			}
 			else
 			{
@@ -1161,8 +1162,9 @@ void EditorContext::BuildMenuBar()
 				// Layout will be applied on next frame if not already built
 				// (bWorkspaceLayoutBuilt[i] stays true if user has already visited)
 			}
+			if (active) ImGui::PopFont();
 			ImGui::PopStyleColor(4);
-			ImGui::SameLine(0.0f, 2.0f);
+			ImGui::SameLine(0.0f, 4.0f);
 		}
 		ImGui::PopStyleVar(2);
 
