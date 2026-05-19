@@ -13,6 +13,8 @@
 // so N instances produce N PostPhysics ticks but zero extra Construct registrations.
 class BrainStemConstruct : public AnimConstruct, public Construct<BrainStemConstruct>
 {
+	TNX_REGISTER_CONSTRUCT(BrainStemConstruct)
+
 public:
 	TNX_CONSTRUCT_WORLD
 
@@ -34,16 +36,29 @@ public:
 
 	void InitializeViews()
 	{
-		Body.Initialize(this);
+		if (bIsClientSide)
+		{
+			Body.Attach(this, ReplicationEntityHandle);
+			Body.SetFlags(TemporalFlagBits::Active | TemporalFlagBits::Alive | TemporalFlagBits::Replicated);
+		}
+		else
+		{
+			Body.Initialize(this);
 
-		Vector3 spawnPos{SpawnPosX, SpawnPosY, SpawnPosZ};
-		Body.SetPosition(spawnPos);
-		Body.Transform.Rotation.SetIdentity();
-		Body.VisTransform.VisBlend = SimFloat(1.f);
+			Vector3 spawnPos{SpawnPosX, SpawnPosY, SpawnPosZ};
+			Body.SetPosition(spawnPos);
+			Body.Transform.Rotation.SetIdentity();
 
+			// CAnimBase is Temporal+Net — replicated on the client path, so SetAnim stays server-only.
+			Body.AnimBase.SetAnim(TNX_NAME("BrainStem_anim"), SimFloat(0.f), true);
+
+			Body.SetFlags(TemporalFlagBits::Active | TemporalFlagBits::Alive | TemporalFlagBits::Replicated);
+		}
+
+		// CMeshRef (Cold) and CSkeletonRef (Volatile) are never replicated — must be set on both paths.
 		Body.Mesh.SetMesh(TNX_NAME("BrainStem"));
 		Body.SkeletonRef.SetSkeleton(TNX_NAME("BrainStem"));
-		Body.AnimBase.SetAnim(TNX_NAME("BrainStem_anim"), SimFloat(0.f), true);
+		Body.VisTransform.VisBlend = SimFloat(1.f);
 
 		if (auto skelRef = AssetRegistry::Get().GetAssetData<SkeletonAsset>(TNX_NAME("BrainStem"))) RegisterSockets(skelRef);
 		else
@@ -103,14 +118,17 @@ public:
 		DebugAnimState(baseAnimID, baseT, baseDur);
 	}
 
-	void InitializeForReplication(WorldBase* world,
-								  [[maybe_unused]] EntityHandle* viewHandles,
-								  [[maybe_unused]] uint8_t viewCount)
+	void InitializeForReplication(WorldBase* world, EntityHandle* viewHandles, uint8_t viewCount)
 	{
+		bIsClientSide = true;
+		if (viewCount > 0) ReplicationEntityHandle = viewHandles[0];
 		Initialize(world);
 	}
 
 private:
+	bool bIsClientSide = false;
+	EntityHandle ReplicationEntityHandle{};
+
 	static constexpr uint32_t kDebugLogInterval = 512; // 512Hz → ~1 log/sec
 
 	uint32_t DebugTickCount = 0;

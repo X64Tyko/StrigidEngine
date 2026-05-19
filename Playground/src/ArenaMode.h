@@ -84,12 +84,19 @@ public:
 			});
 
 			// Spawn the BrainStem skeletal mesh for animation display
-			cr->Create<BrainStemConstruct>(world, [](BrainStemConstruct* bs)
+			BrainStemConstruct* bs = cr->Create<BrainStemConstruct>(world, [](BrainStemConstruct* bs)
 			{
 				bs->SpawnPosX = SimFloat(0.0f);
 				bs->SpawnPosY = SimFloat(4.0f);
 				bs->SpawnPosZ = SimFloat(-4.0f);
 			});
+
+			ReplicationSystem* repl = world->GetReplicationSystem();
+			if (repl && bs)
+			{
+				const uint16_t bsTypeHash = ReflectionRegistry::ConstructTypeHashFromName("BrainStemConstruct");
+				repl->RegisterConstruct<BrainStemConstruct>(cr, bs, 0, bsTypeHash, 0);
+			}
 		});
 	}
 
