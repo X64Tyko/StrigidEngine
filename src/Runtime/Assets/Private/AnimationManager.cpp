@@ -59,6 +59,9 @@ bool AnimationManager::Initialize(VulkanMemory* vkMem)
 				   static_cast<uint32_t>(MAX_TOTAL_BONE_TRACKS * sizeof(GpuAnimBoneTrack) / 1024),
 				   MAX_TOTAL_KEYFRAMES,
 				   static_cast<uint32_t>(MAX_TOTAL_KEYFRAMES * sizeof(GpuAnimKeyframe) / (1024 * 1024)));
+
+	AssetRegistry::Get().RegisterUploadChecker(
+		[](void*) { return AnimationManager::Get().IsUploadComplete(); }, nullptr);
 	return true;
 }
 

@@ -58,6 +58,12 @@ public:
 		uint32_t boneCount  = 0;
 	};
 
+	static SkeletonManager& Get()
+	{
+		static SkeletonManager instance;
+		return instance;
+	}
+
 	bool Initialize(VulkanMemory* vkMem);
 
 	/// Free GPU buffers. Must be called before VulkanMemory::Shutdown().
@@ -104,12 +110,6 @@ public:
 	}
 
 	AssetID GetSlotID(uint32_t slot) const { return SlotIDs[slot]; }
-
-	static SkeletonManager& Get()
-	{
-		static SkeletonManager instance;
-		return instance;
-	}
 
 private:
 	/// Copy asset data into mega-buffer and CPU copy array, update AssetRegistry.

@@ -199,6 +199,7 @@ void LogicThread::ThreadMain()
 		TNX_ZONE_NC("Logic Frame", TNX_COLOR_LOGIC);
 
 		TrinyxJobs::DrainWorldQueue(WQHandle);
+		AssetRegistry::Get().DrainPendingCheckouts();
 		RegistryPtr->ProcessDeferredDestructions();
 		if (ConstructsPtr) ConstructsPtr->ProcessDeferredDestructions();
 		RegistryPtr->TickDefrag(WQHandle);

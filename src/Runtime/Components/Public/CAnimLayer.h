@@ -24,7 +24,7 @@
 template <FieldWidth WIDTH = FieldWidth::Scalar>
 struct CAnimLayer : ComponentView<CAnimLayer, WIDTH>
 {
-    TNX_TEMPORAL_FIELDS(CAnimLayer, Logic,
+    TNX_TEMPORAL_FIELDS(CAnimLayer, Render,
         LayerAnimID0,    LayerAnimID1,
         LayerTimestamp0, LayerTimestamp1,
         LayerAlpha0,     LayerAlpha1,

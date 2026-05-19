@@ -2,6 +2,7 @@
 
 #include <vector>
 
+#include "AssetRegistry.h"
 #include "EntityMeta.h"
 #include "EntityRecord.h"
 #include "LogicThreadBase.h"
@@ -90,6 +91,7 @@ public:
 		if constexpr (requires { static_cast<Derived*>(this)->InitializeViews(); })
 		{
 			static_cast<Derived*>(this)->InitializeViews();
+			AssetRegistry::Get().DrainPendingCheckouts();
 		}
 
 		// Auto-register tick methods via concept detection

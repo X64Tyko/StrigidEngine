@@ -1,9 +1,7 @@
 
 #pragma once
-#include "AnimationManager.h"
 #include "AssetRegistry.h"
 #include "BrainStemConstruct.h"
-#include "SkeletonManager.h"
 #include "ConstructRegistry.h"
 #include "GameMode.h"
 #include "Logger.h"
@@ -36,7 +34,7 @@ public:
 
 	bool AreUploadsReady() const override
 	{
-		return SkeletonManager::Get().IsUploadComplete() && AnimationManager::Get().IsUploadComplete();
+		return AssetRegistry::Get().IsUploadComplete();
 	}
 
 	void Initialize(WorldBase* world) override

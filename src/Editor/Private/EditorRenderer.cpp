@@ -14,6 +14,7 @@
 #include "TnxStyle.h"
 
 #include "AnimationManager.h"
+#include "MeshManager.h"
 #include "CacheSlotMeta.h"
 #include "CAnimBase.h"
 #include "CAnimLayer.h"
@@ -206,7 +207,7 @@ bool EditorRenderer::InitImGui()
 	EventQueue = new ImGuiEventQueue();
 
 	Editor = new EditorContext();
-	Editor->Initialize(EnginePtr, LogicPtr, &Meshes);
+	Editor->Initialize(EnginePtr, LogicPtr);
 
 	// Allocate the persistent editor viewport for the main world.
 	// Use a modest initial resolution — the panel will resize it on the first frame.
@@ -668,6 +669,7 @@ void EditorRenderer::WriteToViewportSlab(WorldViewport* vp)
 				}
 			}
 		}
+		
 		flushImmediate();
 		return;
 	}
@@ -816,7 +818,7 @@ void EditorRenderer::FillGpuFrameDataForViewport(WorldViewport* vp, FrameSync& f
 	data->AspectRatio = vp->Width > 0 ? static_cast<float>(vp->Width) / static_cast<float>(vp->Height) : 1.0f;
 
 	// Scratch buffers from shared FrameSync
-	data->VerticesAddr          = Meshes.GetVertexBufferAddr();
+	data->VerticesAddr          = MeshManager::Get().GetVertexBufferAddr();
 	data->InstancesAddr         = frame.InstancesBuffer.DeviceAddr;
 	data->ScanAddr              = frame.ScanBuffer.DeviceAddr;
 	data->CompactCounterAddr    = frame.CompactCounterBuffer.DeviceAddr;
@@ -824,8 +826,8 @@ void EditorRenderer::FillGpuFrameDataForViewport(WorldViewport* vp, FrameSync& f
 	data->UnsortedInstancesAddr = frame.UnsortedInstancesBuffer.DeviceAddr;
 	data->MeshHistogramAddr     = frame.MeshHistogramBuffer.DeviceAddr;
 	data->MeshWriteIdxAddr      = frame.MeshWriteIdxBuffer.DeviceAddr;
-	data->MeshTableAddr         = Meshes.GetMeshTableAddr();
-	data->MeshCount             = Meshes.GetMeshCount();
+	data->MeshTableAddr         = MeshManager::Get().GetMeshTableAddr();
+	data->MeshCount             = MeshManager::Get().GetMeshCount();
 
 	LogicThreadBase* logic = vp->TargetWorld->GetLogicThread();
 	data->Alpha          = logic ? static_cast<float>(std::clamp(logic->GetFixedAlpha(), 0.0, 1.0)) : 1.0f;
@@ -840,8 +842,8 @@ void EditorRenderer::FillGpuFrameDataForViewport(WorldViewport* vp, FrameSync& f
 	data->GpuBoneParentAddr        = SkeletonManager::Get().GetBoneParentAddr();
 	data->AnimTrackAddr            = AnimationManager::Get().GetTrackBufferAddr();
 	data->AnimKeyframeAddr         = AnimationManager::Get().GetKeyframeBufferAddr();
-	data->SkinWeightAddr           = Meshes.GetSkinWeightAddr();
-	data->SkinSlotTableAddr        = Meshes.GetSkinSlotTableAddr();
+	data->SkinWeightAddr           = MeshManager::Get().GetSkinWeightAddr();
+	data->SkinSlotTableAddr        = MeshManager::Get().GetSkinSlotTableAddr();
 	data->SkeletalDispatchArgsAddr = Skinning.GetSkeletalDispatchArgsAddr();
 
 	// Field addresses from viewport's slabs — semantics from shared SlabFieldDescs.
@@ -1152,11 +1154,11 @@ void EditorRenderer::RecordViewportScenePass(VkCommandBuffer cmd, FrameSync& fra
 		vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, *Pipeline);
 #endif
 
-		VkBuffer indexBuf = Meshes.GetIndexBufferHandle();
+		VkBuffer indexBuf = MeshManager::Get().GetIndexBufferHandle();
 		vkCmdBindIndexBuffer(cmd, indexBuf, 0, VK_INDEX_TYPE_UINT32);
 
 		VkBuffer drawBuf = static_cast<VkBuffer>(frame.DrawArgsBuffer.Buffer);
-		vkCmdDrawIndexedIndirect(cmd, drawBuf, 0, Meshes.GetMeshCount(),
+		vkCmdDrawIndexedIndirect(cmd, drawBuf, 0, MeshManager::Get().GetMeshCount(),
 								 sizeof(VkDrawIndexedIndirectCommand));
 
 		vkCmdEndRendering(cmd);

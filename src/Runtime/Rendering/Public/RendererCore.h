@@ -8,7 +8,6 @@
 
 #include "GpuFrameData.h"
 #include "Input.h"
-#include "MeshManager.h"
 #include "SkinningPass.h"
 #include "TrinyxJobs.h"
 #include "VulkanContext.h"
@@ -189,7 +188,6 @@ protected:
 	// GpuTotalFieldCount slab fields + 1 always-on EntityCacheIdx slot.
 	std::array<GpuSlabFieldDesc, GpuTotalFieldCount + 1> SlabFieldDescs{};
 
-	MeshManager  Meshes;
 	SkinningPass Skinning;
 
 	vk::raii::PipelineLayout PipelineLayout{nullptr};

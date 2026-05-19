@@ -7,6 +7,8 @@
 #include "AudioAsset.h"
 #include "Logger.h"
 
+AudioManager* AudioManager::s_Instance = nullptr;
+
 // ---------------------------------------------------------------------------
 // Lifecycle
 // ---------------------------------------------------------------------------
@@ -48,6 +50,7 @@ bool AudioManager::Initialize(int maxVoices)
 	Pool      = std::make_unique<Voice[]>(maxVoices);
 
 	bInitialized = true;
+	s_Instance   = this;
 	LOG_ENG_INFO_F("[Audio] AudioManager initialized (%d voice slots)", MaxVoices);
 	return true;
 }
@@ -80,6 +83,7 @@ void AudioManager::Shutdown()
 	SoundCount = 0;
 
 	bInitialized = false;
+	s_Instance   = nullptr;
 	LOG_ENG_INFO("[Audio] AudioManager shut down");
 }
 

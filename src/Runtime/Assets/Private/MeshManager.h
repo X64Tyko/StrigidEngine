@@ -80,7 +80,16 @@ public:
 
 	static_assert(sizeof(GpuSkinSlotInfo) == 8, "GpuSkinSlotInfo must be 8 bytes");
 
+	static MeshManager& Get()
+	{
+		static MeshManager instance;
+		return instance;
+	}
+
 	bool Initialize(VulkanMemory* vkMem);
+
+	/// Free GPU buffers. Must be called before VulkanMemory::Shutdown().
+	void Shutdown();
 
 	/// Load a MeshAsset — copies vertex/index data into the mega-buffers,
 	/// then records name/ID in AssetRegistry (Data = slot index).
@@ -145,6 +154,11 @@ public:
 	AssetID GetSlotID(uint32_t slot) const { return SlotIDs[slot]; }
 
 private:
+	MeshManager()  = default;
+	~MeshManager() = default;
+	MeshManager(const MeshManager&)            = delete;
+	MeshManager& operator=(const MeshManager&) = delete;
+
 	uint32_t CommitToSlot(const MeshAsset& asset, AssetID id);
 	uint32_t LoadSkinWeights(uint32_t meshSlot, const std::vector<SkinWeights>& weights);
 

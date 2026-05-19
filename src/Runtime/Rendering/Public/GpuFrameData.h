@@ -18,8 +18,8 @@
 constexpr uint32_t MaxGpuFields      = 128;
 constexpr uint32_t MaxMeshSlots      = 256;
 constexpr uint32_t GpuOutFieldCount  = 16; // Flags + PosXYZ(3) + RotQxyzw(4) + ScaleXYZ(3) + ColorRGBA(4) + MeshID
-constexpr uint32_t GpuAnimFieldCount = 19; // SkeletonID + SkinMeshID + CAnimBase(10) + CAnimLayer(8) - StateNodeID(1)
-constexpr uint32_t GpuTotalFieldCount = GpuOutFieldCount + GpuAnimFieldCount; // 35 slab slots total
+constexpr uint32_t GpuAnimFieldCount  = 18; // SkeletonID + CAnimBase(10-StateNodeID) + CAnimLayer(8)
+constexpr uint32_t GpuTotalFieldCount = GpuOutFieldCount + GpuAnimFieldCount; // 34 slab slots total
 
 // GpuFieldSemantic constants — match values in GpuFrameData.slang.
 // Render output fields (sems 1-16): SoA slot in instance buffer = sem - 1.
@@ -47,8 +47,7 @@ constexpr uint32_t SemMeshID  = 16;
 constexpr uint32_t SemEntityCacheIdx = 17;
 // Animation slab fields — slab slot = f index in FieldDescriptions (16..34).
 constexpr uint32_t SemSkeletonID          = 18;
-constexpr uint32_t SemSkinMeshID          = 19;
-constexpr uint32_t SemAnimBaseAnimID      = 20;
+constexpr uint32_t SemAnimBaseAnimID      = 19;
 constexpr uint32_t SemAnimBlendspaceID    = 21;
 constexpr uint32_t SemAnimBaseTimestamp   = 22;
 constexpr uint32_t SemAnimBlendCoordX     = 23;

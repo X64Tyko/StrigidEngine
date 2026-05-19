@@ -7,6 +7,7 @@
 #include "AssetRegistry.h"
 #include "AssetTypes.h"
 #include "AudioHandle.h"
+#include "AudioTypes.h"
 #include "TnxName.h"
 
 /** @addtogroup audio
@@ -14,17 +15,6 @@
  */
 
 struct SoundAsset;
-
-enum class BusID : uint8_t { Master = 0 };
-
-struct PlayParams
-{
-	float Volume     = 1.f;
-	float Pitch      = 1.f; // > 1 = faster/higher
-	bool Loop        = false;
-	BusID Bus        = BusID::Master;
-	uint8_t Priority = 128; // 0 = lowest; voice stealing picks smallest value
-};
 
 // Fixed heap array — std::atomic<float> is not movable.
 struct Voice
@@ -58,6 +48,9 @@ public:
 	~AudioManager();
 	AudioManager(const AudioManager&)            = delete;
 	AudioManager& operator=(const AudioManager&) = delete;
+
+	/// Returns the active AudioManager instance. Only valid after TrinyxEngine::Initialize().
+	static AudioManager& Get() { return *s_Instance; }
 
 	bool Initialize(int maxVoices = 64);
 	void Shutdown();
@@ -136,6 +129,8 @@ public:
 	void Update(float dt);
 
 private:
+	static AudioManager* s_Instance;
+
 	SoundHandle PlayAsset(const SoundAsset* asset, PlayParams params);
 	void TryAutoUnload(const SoundAsset* asset);
 	Voice* FindVoice(SoundHandle handle);
@@ -168,4 +163,3 @@ private:
 };
 
 /** @} */
-

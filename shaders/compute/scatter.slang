@@ -43,11 +43,6 @@ void main(uint3 gid : SV_DispatchThreadID)
     uint64_t meshFieldAddr_vis = fd->CurrFieldAddrs[SemMeshID - 1u];
     uint meshID_vis = meshFieldAddr_vis != 0 ? ((uint*)meshFieldAddr_vis)[i] : 0u;
     if (meshID_vis == 0)
-    {
-        uint64_t skinMeshAddr_vis = fd->CurrFieldAddrs[SlabIdx_SkinMeshID];
-        if (skinMeshAddr_vis != 0) meshID_vis = ((uint*)skinMeshAddr_vis)[i];
-    }
-    if (meshID_vis == 0)
         return;
 
     uint outIdx = ((uint*)fd->ScanAddr)[i];
@@ -93,12 +88,9 @@ void main(uint3 gid : SV_DispatchThreadID)
             continue;   // Animation slab fields — read by skinning compute directly, not scatter output
 
         // MeshID: uint field, no interpolation — copy current value and build histogram.
-        // Skeletal entities have no CMeshRef; fall back to SkinMeshID as the draw mesh.
         if (sem == SemMeshID)
         {
             uint meshID = ((uint*)fd->CurrFieldAddrs[f])[i];
-            if (meshID == 0)
-                meshID = ((uint*)fd->CurrFieldAddrs[SlabIdx_SkinMeshID])[i];
 
             outBuf[(sem - 1u) * stride + outIdx] = asfloat(meshID);
 

@@ -75,6 +75,12 @@ public:
 		float    duration;
 	};
 
+	static AnimationManager& Get()
+	{
+		static AnimationManager instance;
+		return instance;
+	}
+
 	bool Initialize(VulkanMemory* vkMem);
 
 	/// Free GPU buffers. Must be called before VulkanMemory::Shutdown().
@@ -126,12 +132,6 @@ public:
 	}
 
 	AssetID GetSlotID(uint32_t slot) const { return SlotIDs[slot]; }
-
-	static AnimationManager& Get()
-	{
-		static AnimationManager instance;
-		return instance;
-	}
 
 private:
 	/// Pack asset data into flat buffers, mirror to GPU, update AssetRegistry.

@@ -30,7 +30,7 @@ struct CMeshRef : ComponentView<CMeshRef, WIDTH>
 
 	// --- Init-lambda assignment API (Scalar only) ---
 
-	// Checks out MeshID and, if the entry has a DefaultMaterial, a conditional MaterialID checkout.
+	// Checks out MeshID and, if the entry has a DefaultMaterial and MaterialID is unset, a MaterialID checkout.
 	void SetMesh(TnxName name) requires (WIDTH == FieldWidth::Scalar)
 	{
 		const AssetEntry* entry = AssetRegistry::Get().FindByTNameAndType(name, AssetType::Mesh);
@@ -39,17 +39,24 @@ struct CMeshRef : ComponentView<CMeshRef, WIDTH>
 			LOG_ENG_WARN_F("CMeshRef::SetMesh - mesh '%s' not found in asset registry", name.GetStr());
 			return;
 		}
+		OnMeshLoad.Bind<CMeshRef, &CMeshRef::SetMeshID>(this);
+		OnMeshEvict.Bind<CMeshRef, &CMeshRef::ResetMeshID>(this);
+		AssetRegistry::RegisterPendingCheckout<AssetType::Mesh>(name, OnMeshLoad, OnMeshEvict);
 
-		AssetRegistry::RegisterPendingCheckout<AssetType::Mesh>(&MeshID.WriteArray[MeshID.index], name);
-
-		if (entry->DefaultMaterial.Value != 0)
-			AssetRegistry::RegisterPendingCheckout<AssetType::Material>(&MaterialID.WriteArray[MaterialID.index], entry->DefaultMaterial, true);
+		if (entry->DefaultMaterial.Value != 0 && MaterialID.Value() == 0)
+		{
+			OnMatLoad.Bind<CMeshRef, &CMeshRef::SetMaterialID>(this);
+			OnMatEvict.Bind<CMeshRef, &CMeshRef::ResetMaterialID>(this);
+			AssetRegistry::RegisterPendingCheckout<AssetType::Material>(entry->DefaultMaterial, OnMatLoad, OnMatEvict);
+		}
 	}
 
 	// Checks out MaterialID only.
 	void SetMaterial(TnxName name) requires (WIDTH == FieldWidth::Scalar)
 	{
-		AssetRegistry::RegisterPendingCheckout<AssetType::Material>(&MaterialID.WriteArray[MaterialID.index], name);
+		OnMatLoad.Bind<CMeshRef, &CMeshRef::SetMaterialID>(this);
+		OnMatEvict.Bind<CMeshRef, &CMeshRef::ResetMaterialID>(this);
+		AssetRegistry::RegisterPendingCheckout<AssetType::Material>(name, OnMatLoad, OnMatEvict);
 	}
 
 	// Dispatches to SetMesh or SetMaterial based on the catalogued asset type.
@@ -64,6 +71,17 @@ struct CMeshRef : ComponentView<CMeshRef, WIDTH>
 		LOG_ENG_WARN_F("CMeshRef::operator= - no mesh or material named '%s' found", name.GetStr());
 		return *this;
 	}
+
+private:
+	AssetLoad  OnMeshLoad;
+	AssetEvict OnMeshEvict;
+	AssetLoad  OnMatLoad;
+	AssetEvict OnMatEvict;
+
+	void SetMeshID(uint32_t id)     requires (WIDTH == FieldWidth::Scalar) { MeshID     = id;  OnMeshLoad.Reset(); }
+	void ResetMeshID()              requires (WIDTH == FieldWidth::Scalar) { MeshID     = 0u;  OnMeshEvict.Reset(); }
+	void SetMaterialID(uint32_t id) requires (WIDTH == FieldWidth::Scalar) { MaterialID = id;  OnMatLoad.Reset(); }
+	void ResetMaterialID()          requires (WIDTH == FieldWidth::Scalar) { MaterialID = 0u;  OnMatEvict.Reset(); }
 };
 
 TNX_REGISTER_COMPONENT(CMeshRef)

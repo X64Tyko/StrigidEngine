@@ -26,9 +26,9 @@ using NetThreadType = OwnerNet;
 #include "VulkanContext.h"
 #include "VulkanMemory.h"
 #include "../../Rendering/Private/FramePacer.h"
-#include "AudioManager.h"
 #endif
 
+class AudioManager;
 class RenderThread;
 class Registry;
 class LogicThreadBase;

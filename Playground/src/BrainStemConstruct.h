@@ -1,5 +1,4 @@
 #pragma once
-#include "AnimationManager.h"
 #include "AnimConstruct.h"  // AnimConstruct, AnimationAsset, SkeletonAsset, AssetRegistry, AssetTypes
 #include "Construct.h"
 #include "ConstructView.h"
@@ -15,144 +14,145 @@
 class BrainStemConstruct : public AnimConstruct, public Construct<BrainStemConstruct>
 {
 public:
-    TNX_CONSTRUCT_WORLD
+	TNX_CONSTRUCT_WORLD
 
-    SimFloat SpawnPosX = SimFloat(0.f);
-    SimFloat SpawnPosY = SimFloat(4.f);
-    SimFloat SpawnPosZ = SimFloat(-4.f);
+	SimFloat SpawnPosX = SimFloat(0.f);
+	SimFloat SpawnPosY = SimFloat(4.f);
+	SimFloat SpawnPosZ = SimFloat(-4.f);
 
-    ConstructView<EPlayerCharacter> Body;
+	ConstructView<EPlayerCharacter> Body;
 
-    // Pre-warm asset loading before any BrainStemConstruct is spawned.
-    // Checkouts in InitializeViews fire immediately on spawn if called first.
-    static void PreloadAssets()
-    {
-        AssetRegistry& reg = AssetRegistry::Get();
-        reg.TriggerLoad<AssetType::Mesh>(TNX_NAME("BrainStem"));
-        reg.TriggerLoad<AssetType::Skeleton>(TNX_NAME("BrainStem"));
-        reg.TriggerLoad<AssetType::Animation>(TNX_NAME("BrainStem"));
-    }
+	// Pre-warm asset loading before any BrainStemConstruct is spawned.
+	// Checkouts in InitializeViews fire immediately on spawn if called first.
+	static void PreloadAssets()
+	{
+		AssetRegistry& reg = AssetRegistry::Get();
+		reg.TriggerLoad<AssetType::Mesh>(TNX_NAME("BrainStem"));
+		reg.TriggerLoad<AssetType::Skeleton>(TNX_NAME("BrainStem"));
+		reg.TriggerLoad<AssetType::Animation>(TNX_NAME("BrainStem"));
+	}
 
-    void InitializeViews()
-    {
-        Body.Initialize(this);
+	void InitializeViews()
+	{
+		Body.Initialize(this);
 
-        Vector3 spawnPos{ SpawnPosX, SpawnPosY, SpawnPosZ };
-        Body.SetPosition(spawnPos);
-        Body.Transform.Rotation.SetIdentity();
-        Body.VisTransform.VisBlend = SimFloat(1.f);
+		Vector3 spawnPos{SpawnPosX, SpawnPosY, SpawnPosZ};
+		Body.SetPosition(spawnPos);
+		Body.Transform.Rotation.SetIdentity();
+		Body.VisTransform.VisBlend = SimFloat(1.f);
 
-        Body.SkeletonRef.SetSkeleton(TNX_NAME("BrainStem"));
-        Body.SkeletonRef.SetSkinMesh(TNX_NAME("BrainStem"));
-        Body.AnimBase.SetAnim(TNX_NAME("BrainStem"), SimFloat(0.f), true);
+		Body.Mesh.SetMesh(TNX_NAME("BrainStem"));
+		Body.SkeletonRef.SetSkeleton(TNX_NAME("BrainStem"));
+		Body.AnimBase.SetAnim(TNX_NAME("BrainStem"), SimFloat(0.f), true);
 
-        if (auto skelRef = AssetRegistry::Get().GetAssetData<SkeletonAsset>(TNX_NAME("BrainStem")))
-            RegisterSockets(skelRef);
-        else
-            LOG_WARN("[BrainStemConstruct] Skeleton not yet loaded — call PreloadAssets() before spawning");
-    }
+		if (auto skelRef = AssetRegistry::Get().GetAssetData<SkeletonAsset>(TNX_NAME("BrainStem"))) RegisterSockets(skelRef);
+		else
+			LOG_WARN("[BrainStemConstruct] Skeleton not yet loaded — call PreloadAssets() before spawning");
+	}
 
-    void PostPhysics(SimFloat /*dt*/)
-    {
-        // Wide ESkeletalEntity::PostPhysics advances all timestamps each frame.
-        // This scalar pass handles only state machine logic and loop wrapping.
+	void PostPhysics(SimFloat /*dt*/)
+	{
+		// Wide ESkeletalEntity::PostPhysics advances all timestamps each frame.
+		// This scalar pass handles only state machine logic and loop wrapping.
 
-        const uint32_t baseAnimID = Body.AnimBase.BaseAnimID.Value();
-        if (baseAnimID == 0) return;
+		if (Body.Mesh.MeshID.Value() == 0) return; // wait for mesh slot to arrive
 
-        BeginAnimTick();
+		const uint32_t baseAnimID = Body.AnimBase.BaseAnimID.Value();
+		if (baseAnimID == 0) return;
 
-        // Base layer — wrap on loop
-        const float baseDur = AnimationManager::Get().GetDuration(baseAnimID);
-        SimFloat    baseT   = Body.AnimBase.GetBaseTimestamp();
-        if (WrapTimestamp(baseT, baseDur, /*loops=*/true))
-        {
-            NotifyState.ClearLoopedRecords(0, SimFloat(baseDur));
-            Body.AnimBase.SetBaseTimestamp(baseT);
-        }
+		BeginAnimTick();
 
-        // Fade layer — wrap source clip; clear when fully blended
-        if (Body.AnimBase.HasFade())
-        {
-            const uint32_t fadeID  = Body.AnimBase.FadeAnimID.Value();
-            const float    fadeDur = AnimationManager::Get().GetDuration(fadeID);
-            SimFloat       fadeT   = Body.AnimBase.GetFadeTimestamp();
-            if (WrapTimestamp(fadeT, fadeDur, Body.AnimBase.GetFadeLoop()))
-            {
-                NotifyState.ClearLoopedRecords(1, SimFloat(fadeDur));
-                Body.AnimBase.FadeTimestamp = fadeT;
-            }
-            if (Body.AnimBase.GetFadeAlpha() >= SimFloat(1.f))
-                Body.AnimBase.ClearFade();
-        }
+		// Base layer — wrap on loop
+		const AssetDataRef<AnimationAsset> AssetRef = AssetRegistry::Get().GetAssetData<AnimationAsset>(AssetType::Animation, baseAnimID);
+		const float baseDur = AssetRef->duration;
+		SimFloat baseT      = Body.AnimBase.GetBaseTimestamp();
+		if (WrapTimestamp(baseT, baseDur, /*loops=*/true))
+		{
+			NotifyState.ClearLoopedRecords(0, SimFloat(baseDur));
+			Body.AnimBase.SetBaseTimestamp(baseT);
+		}
 
-        // Overlay layers — wrap each active slot
-        for (uint32_t s = 0; s < CAnimLayer<>::Slots; ++s)
-        {
-            const uint32_t layerID = Body.AnimLayer.GetAnimID(s);
-            if (layerID == 0) continue;
-            const float layerDur = AnimationManager::Get().GetDuration(layerID);
-            SimFloat    layerT   = Body.AnimLayer.GetTimestamp(s);
-            if (WrapTimestamp(layerT, layerDur, CAnimLayer<>::GetLoop(Body.AnimLayer.GetConfig(s))))
-            {
-                NotifyState.ClearLoopedRecords(2 + s, SimFloat(layerDur));
-                Body.AnimLayer.SetTimestamp(s, layerT);
-            }
-        }
+		// Fade layer — wrap source clip; clear when fully blended
+		if (Body.AnimBase.HasFade())
+		{
+			const AssetDataRef<AnimationAsset> FadeRef = AssetRegistry::Get().GetAssetData<AnimationAsset>(AssetType::Animation, Body.AnimBase.FadeAnimID);
+			const float fadeDur   = FadeRef->duration;
+			SimFloat fadeT        = Body.AnimBase.GetFadeTimestamp();
+			if (WrapTimestamp(fadeT, fadeDur, Body.AnimBase.GetFadeLoop()))
+			{
+				NotifyState.ClearLoopedRecords(1, SimFloat(fadeDur));
+				Body.AnimBase.FadeTimestamp = fadeT;
+			}
+			if (Body.AnimBase.GetFadeAlpha() >= SimFloat(1.f)) Body.AnimBase.ClearFade();
+		}
 
-        DebugAnimState(baseAnimID, baseT, baseDur);
-    }
+		// Overlay layers — wrap each active slot
+		for (uint32_t s = 0; s < CAnimLayer<>::Slots; ++s)
+		{
+			const AssetDataRef<AnimationAsset> LayerRef = AssetRegistry::Get().GetAssetData<AnimationAsset>(AssetType::Animation, Body.AnimLayer.GetAnimID(s));
+			if (!LayerRef) continue;
+			const float layerDur = LayerRef->duration;
+			SimFloat layerT      = Body.AnimLayer.GetTimestamp(s);
+			if (WrapTimestamp(layerT, layerDur, CAnimLayer<>::GetLoop(Body.AnimLayer.GetConfig(s))))
+			{
+				NotifyState.ClearLoopedRecords(2 + s, SimFloat(layerDur));
+				Body.AnimLayer.SetTimestamp(s, layerT);
+			}
+		}
 
-    void InitializeForReplication(WorldBase* world,
-                                  [[maybe_unused]] EntityHandle* viewHandles,
-                                  [[maybe_unused]] uint8_t viewCount)
-    {
-        Initialize(world);
-    }
+		DebugAnimState(baseAnimID, baseT, baseDur);
+	}
+
+	void InitializeForReplication(WorldBase* world,
+								  [[maybe_unused]] EntityHandle* viewHandles,
+								  [[maybe_unused]] uint8_t viewCount)
+	{
+		Initialize(world);
+	}
 
 private:
-    static constexpr uint32_t kDebugLogInterval = 512; // 512Hz → ~1 log/sec
+	static constexpr uint32_t kDebugLogInterval = 512; // 512Hz → ~1 log/sec
 
-    uint32_t DebugTickCount = 0;
-    bool     SkeletonDumped = false;
+	uint32_t DebugTickCount = 0;
+	bool SkeletonDumped     = false;
 
-    void DebugAnimState(uint32_t animID, SimFloat t, float dur)
-    {
-        ++DebugTickCount;
+	void DebugAnimState(uint32_t animID, SimFloat t, float dur)
+	{
+		++DebugTickCount;
 
-        if (!SkeletonDumped)
-        {
-            if (auto skelRef = AssetRegistry::Get().GetAssetData<SkeletonAsset>(TNX_NAME("BrainStem")))
-            {
-                LOG_INFO_F("[BrainStem] Skeleton boneCount=%u", skelRef->boneCount);
-                for (uint32_t i = 0; i < skelRef->boneCount; ++i)
-                    LOG_INFO_F("[BrainStem]   bone[%2u] %-32s  parent=%u",
-                               i, skelRef->bones[i].name.GetStr(), skelRef->bones[i].parentIndex);
-                SkeletonDumped = true;
-            }
-        }
+		if (!SkeletonDumped)
+		{
+			if (auto skelRef = AssetRegistry::Get().GetAssetData<SkeletonAsset>(TNX_NAME("BrainStem")))
+			{
+				LOG_INFO_F("[BrainStem] Skeleton boneCount=%u", skelRef->boneCount);
+				for (uint32_t i = 0; i < skelRef->boneCount; ++i)
+					LOG_INFO_F("[BrainStem]   bone[%2u] %-32s  parent=%u",
+						   i, skelRef->bones[i].name.GetStr(), skelRef->bones[i].parentIndex);
+				SkeletonDumped = true;
+			}
+		}
 
-        if (DebugTickCount % kDebugLogInterval != 0) return;
+		if (DebugTickCount % kDebugLogInterval != 0) return;
 
-        const float tF = t.ToFloat();
-        LOG_INFO_F("[BrainStem] animSlot=%u  t=%.3f / %.3f s  (%.1f%%)",
-                   animID, tF, dur, dur > 0.f ? 100.f * tF / dur : 0.f);
+		const float tF = t.ToFloat();
+		LOG_INFO_F("[BrainStem] animSlot=%u  t=%.3f / %.3f s  (%.1f%%)",
+				   animID, tF, dur, dur > 0.f ? 100.f * tF / dur : 0.f);
 
-        static constexpr uint32_t kTrackedBone = 1;
-        auto animRef = AssetRegistry::Get().GetAssetData<AnimationAsset>(AssetType::Animation, animID);
-        if (!animRef) return;
+		static constexpr uint32_t kTrackedBone = 1;
+		auto animRef                           = AssetRegistry::Get().GetAssetData<AnimationAsset>(AssetType::Animation, animID);
+		if (!animRef) return;
 
-        if (kTrackedBone < animRef->boneCount)
-        {
-            BoneTransform b = animRef->EvaluateBone(kTrackedBone, tF);
-            LOG_INFO_F("[BrainStem]   bone[%u] tx=%.4f ty=%.4f tz=%.4f  rx=%.4f ry=%.4f rz=%.4f rw=%.4f",
-                       kTrackedBone,
-                       b.tx.ToFloat(), b.ty.ToFloat(), b.tz.ToFloat(),
-                       b.rx.ToFloat(), b.ry.ToFloat(), b.rz.ToFloat(), b.rw.ToFloat());
-        }
-        else
-        {
-            LOG_WARN_F("[BrainStem] kTrackedBone=%u out of range (boneCount=%u)", kTrackedBone, animRef->boneCount);
-        }
-    }
+		if (kTrackedBone < animRef->boneCount)
+		{
+			BoneTransform b = animRef->EvaluateBone(kTrackedBone, tF);
+			LOG_INFO_F("[BrainStem]   bone[%u] tx=%.4f ty=%.4f tz=%.4f  rx=%.4f ry=%.4f rz=%.4f rw=%.4f",
+					   kTrackedBone,
+					   b.tx.ToFloat(), b.ty.ToFloat(), b.tz.ToFloat(),
+					   b.rx.ToFloat(), b.ry.ToFloat(), b.rz.ToFloat(), b.rw.ToFloat());
+		}
+		else
+		{
+			LOG_WARN_F("[BrainStem] kTrackedBone=%u out of range (boneCount=%u)", kTrackedBone, animRef->boneCount);
+		}
+	}
 };

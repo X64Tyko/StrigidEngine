@@ -1,5 +1,6 @@
 #pragma once
 #include "EInterpEntity.h"
+#include "CMeshRef.h"
 #include "CColor.h"
 #include "CScale.h"
 #include "CSkeletonRef.h"
@@ -10,7 +11,8 @@
 // ESkeletalEntity — CRTP base for GPU-skinned skeletal entities.
 //
 // Holds the minimum slab data required for GPU skinning and rollback:
-//   CSkeletonRef  (Volatile) — which skeleton and skin mesh to use
+//   CMeshRef      (Volatile) — mesh slot; skin weights are stored in the same asset
+//   CSkeletonRef  (Volatile) — skeleton slot for bone hierarchy and pose evaluation
 //   CAnimBase     (Temporal) — base layer: 2-slot cross-fade or blendspace + state node
 //   CAnimLayer    (Temporal) — overlay layers: up to 2 masked replace/additive slots
 //
@@ -27,9 +29,10 @@
 template <template <FieldWidth> class Derived, FieldWidth WIDTH = FieldWidth::Scalar>
 class ESkeletalEntity : public EInterpEntity<Derived, WIDTH>
 {
-    TNX_REGISTER_SUPER_SCHEMA(ESkeletalEntity, EInterpEntity, Color, Scale, SkeletonRef, AnimBase, AnimLayer)
+    TNX_REGISTER_SUPER_SCHEMA(ESkeletalEntity, EInterpEntity, Mesh, Color, Scale, SkeletonRef, AnimBase, AnimLayer)
 
 public:
+    CMeshRef<WIDTH>     Mesh;
     CColor<WIDTH>       Color;
     CScale<WIDTH>       Scale;
     CSkeletonRef<WIDTH> SkeletonRef;

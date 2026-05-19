@@ -9,7 +9,6 @@
 class Archetype;
 class AssetDatabase;
 class EditorContext;
-class MeshManager;
 class Registry;
 class LogicThreadBase;
 class ReplicationSystem;
@@ -86,5 +85,4 @@ struct EditorState
 	// --- Asset database (editor only, set by EditorContext) ---
 	AssetDatabase* AssetDB   = nullptr;
 	EditorContext* EditorCtx = nullptr;
-	MeshManager* MeshMgrPtr  = nullptr;
 };

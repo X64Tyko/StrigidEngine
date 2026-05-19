@@ -15,11 +15,9 @@
 #include "UndoCommand.h"
 #include "imgui.h"
 
-class AudioManager;
 class EditorPanel;
 class FlowManagerBase;
 class LogicThreadBase;
-class MeshManager;
 class ReplicationSystem;
 class TrinyxEngine;
 class WorldBase;
@@ -35,7 +33,7 @@ public:
 	EditorContext();
 	~EditorContext();
 
-	void Initialize(TrinyxEngine* engine, LogicThreadBase* logic, MeshManager* meshMgr);
+	void Initialize(TrinyxEngine* engine, LogicThreadBase* logic);
 
 	/// Build the editor UI for this frame.  Called on the render thread
 	/// after ImGui::NewFrame(), before ImGui::Render().
@@ -224,6 +222,5 @@ private:
 	std::string FileDialogPath;
 	std::string ImportDialogPath;
 
-	MeshManager* MeshMgr   = nullptr;
-	AudioManager* AudioMgr = nullptr;
 };
+

@@ -28,6 +28,7 @@
 #include "VulkanDebug.h"
 
 #include "AnimationManager.h"
+#include "MeshManager.h"
 #include "SkeletonManager.h"
 #include "SkinningPass.h"
 
@@ -104,9 +105,8 @@ void RendererCore<Derived>::Initialize(Registry* registry,
 		{GpuSlabTier::Volatile, GpuSlabKind::SimFloat,  static_cast<uint32_t>(CColor<>::StaticTemporalIndex()),           2, SemColorB},
 		{GpuSlabTier::Volatile, GpuSlabKind::SimFloat,  static_cast<uint32_t>(CColor<>::StaticTemporalIndex()),           3, SemColorA},
 		{GpuSlabTier::Volatile, GpuSlabKind::RawU32,    static_cast<uint32_t>(CMeshRef<>::StaticTemporalIndex()),         0, SemMeshID},
-		// Animation slab fields (f=16..34, scatter skips sem > GpuOutFieldCount)
+		// Animation slab fields (f=16..33, scatter skips sem > GpuOutFieldCount)
 		{GpuSlabTier::Volatile, GpuSlabKind::RawU32,    static_cast<uint32_t>(CSkeletonRef<>::StaticTemporalIndex()),     0, SemSkeletonID},
-		{GpuSlabTier::Volatile, GpuSlabKind::RawU32,    static_cast<uint32_t>(CSkeletonRef<>::StaticTemporalIndex()),     1, SemSkinMeshID},
 		{GpuSlabTier::Temporal, GpuSlabKind::RawU32,    static_cast<uint32_t>(CAnimBase<>::StaticTemporalIndex()),        0, SemAnimBaseAnimID},
 		{GpuSlabTier::Temporal, GpuSlabKind::RawU32,    static_cast<uint32_t>(CAnimBase<>::StaticTemporalIndex()),        1, SemAnimBlendspaceID},
 		{GpuSlabTier::Temporal, GpuSlabKind::SimFloat,  static_cast<uint32_t>(CAnimBase<>::StaticTemporalIndex()),        2, SemAnimBaseTimestamp},
@@ -862,11 +862,11 @@ void RendererCore<Derived>::RecordCommandBuffer(FrameSync& frame, uint32_t image
 		vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, *Pipeline);
 #endif
 
-		VkBuffer indexBuf = Meshes.GetIndexBufferHandle();
+		VkBuffer indexBuf = MeshManager::Get().GetIndexBufferHandle();
 		vkCmdBindIndexBuffer(cmd, indexBuf, 0, VK_INDEX_TYPE_UINT32);
 
 		VkBuffer drawBuf = static_cast<VkBuffer>(frame.DrawArgsBuffer.Buffer);
-		vkCmdDrawIndexedIndirect(cmd, drawBuf, 0, Meshes.GetMeshCount(),
+		vkCmdDrawIndexedIndirect(cmd, drawBuf, 0, MeshManager::Get().GetMeshCount(),
 								 sizeof(VkDrawIndexedIndirectCommand));
 	}
 
@@ -1300,20 +1300,20 @@ bool RendererCore<Derived>::CreateComputePipelines()
 template <typename Derived>
 bool RendererCore<Derived>::CreateMeshBuffers()
 {
-	if (!Meshes.Initialize(VkMem))
+	if (!MeshManager::Get().Initialize(VkMem))
 	{
 		LOG_ENG_ERROR("[Renderer] MeshManager initialization failed");
 		return false;
 	}
 
-	uint32_t cubeSlot = Meshes.LoadBuiltinCube();
+	uint32_t cubeSlot = MeshManager::Get().LoadBuiltinCube();
 	if (cubeSlot == UINT32_MAX)
 	{
 		LOG_ENG_ERROR("[Renderer] Failed to load built-in cube mesh");
 		return false;
 	}
 
-	uint32_t capsuleSlot = Meshes.LoadBuiltinCapsule(0.4f, 0.9f, 16);
+	uint32_t capsuleSlot = MeshManager::Get().LoadBuiltinCapsule(0.4f, 0.9f, 16);
 	if (capsuleSlot == UINT32_MAX)
 	{
 		LOG_ENG_ERROR("[Renderer] Failed to load built-in capsule mesh");
@@ -1384,7 +1384,7 @@ void RendererCore<Derived>::FillGpuFrameData(FrameSync& frame)
 	const vk::Extent2D ext = VkCtx->GetSwapchain().Extent;
 	FrameData->AspectRatio  = ext.height > 0 ? static_cast<float>(ext.width) / static_cast<float>(ext.height) : 1.0f;
 
-	FrameData->VerticesAddr          = Meshes.GetVertexBufferAddr();
+	FrameData->VerticesAddr          = MeshManager::Get().GetVertexBufferAddr();
 	FrameData->InstancesAddr         = frame.InstancesBuffer.DeviceAddr;
 	FrameData->ScanAddr              = frame.ScanBuffer.DeviceAddr;
 	FrameData->CompactCounterAddr    = frame.CompactCounterBuffer.DeviceAddr;
@@ -1395,8 +1395,8 @@ void RendererCore<Derived>::FillGpuFrameData(FrameSync& frame)
 	FrameData->UnsortedInstancesAddr = frame.UnsortedInstancesBuffer.DeviceAddr;
 	FrameData->MeshHistogramAddr     = frame.MeshHistogramBuffer.DeviceAddr;
 	FrameData->MeshWriteIdxAddr      = frame.MeshWriteIdxBuffer.DeviceAddr;
-	FrameData->MeshTableAddr         = Meshes.GetMeshTableAddr();
-	FrameData->MeshCount             = Meshes.GetMeshCount();
+	FrameData->MeshTableAddr         = MeshManager::Get().GetMeshTableAddr();
+	FrameData->MeshCount             = MeshManager::Get().GetMeshCount();
 
 	FrameData->SkinMatrixAddr           = Skinning.GetSkinMatrixAddr();
 	FrameData->SkeletalListAddr         = Skinning.GetSkeletalListAddr();
@@ -1405,8 +1405,8 @@ void RendererCore<Derived>::FillGpuFrameData(FrameSync& frame)
 	FrameData->GpuBoneParentAddr       = SkeletonManager::Get().GetBoneParentAddr();
 	FrameData->AnimTrackAddr           = AnimationManager::Get().GetTrackBufferAddr();
 	FrameData->AnimKeyframeAddr        = AnimationManager::Get().GetKeyframeBufferAddr();
-	FrameData->SkinWeightAddr           = Meshes.GetSkinWeightAddr();
-	FrameData->SkinSlotTableAddr        = Meshes.GetSkinSlotTableAddr();
+	FrameData->SkinWeightAddr           = MeshManager::Get().GetSkinWeightAddr();
+	FrameData->SkinSlotTableAddr        = MeshManager::Get().GetSkinSlotTableAddr();
 	FrameData->SkeletalDispatchArgsAddr = Skinning.GetSkeletalDispatchArgsAddr();
 	FrameData->GpuSkeletonSlotAddr      = SkeletonManager::Get().GetSkeletonSlotAddr();
 	FrameData->GpuAnimSlotAddr          = AnimationManager::Get().GetAnimSlotAddr();
@@ -1660,6 +1660,7 @@ void RendererCore<Derived>::WriteToFrameSlab()
 				}
 			}
 		}
+
 		flushImmediate();
 		return;
 	}

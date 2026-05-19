@@ -159,6 +159,12 @@ target_include_directories(${PROJECT_NAME} PUBLIC
         "${CMAKE_SOURCE_DIR}/src/Editor/Public"
 )
 
+# Engine-private headers — accessible to Trinyx .cpp files only, not exposed to consumers.
+target_include_directories(${PROJECT_NAME} PRIVATE
+    "${CMAKE_SOURCE_DIR}/src/Runtime/Assets/Private"
+    "${CMAKE_SOURCE_DIR}/src/Runtime/Audio/Private"
+)
+
 # stb_vorbis (single-header, no separate build step)
 target_include_directories(${PROJECT_NAME} SYSTEM PUBLIC
         "${CMAKE_SOURCE_DIR}/libs/stb_vorbis"

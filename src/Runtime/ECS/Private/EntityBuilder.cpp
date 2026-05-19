@@ -214,7 +214,9 @@ EntityHandle EntityBuilder::SpawnEntity(Registry* reg, const JsonValue& entityJs
 					if (field->RefAssetType != AssetType::Invalid && fieldVal.IsString())
 					{
 						auto* fieldPtr = static_cast<uint32_t*>(fieldArrayTable[field->ArrayIndex]) + localIndex;
-						AssetRegistry::RegisterPendingCheckout(fieldPtr, TnxName(fieldVal.AsString().c_str()), field->RefAssetType);
+						AssetLoad  onLoaded;  onLoaded.BindStatic([](void* c, uint32_t s) { *static_cast<uint32_t*>(c) = s; }, fieldPtr);
+						AssetEvict onEvicted; onEvicted.BindStatic([](void* c) { *static_cast<uint32_t*>(c) = 0; }, fieldPtr);
+						AssetRegistry::RegisterPendingCheckout(TnxName(fieldVal.AsString().c_str()), field->RefAssetType, onLoaded, onEvicted);
 					}
 					else
 					{

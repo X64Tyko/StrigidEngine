@@ -33,6 +33,9 @@ using FuncName = Callback<RetVal, __VA_ARGS__>;
 #define DEFINE_CALLBACK(FuncName, ...) \
 using FuncName = Callback<void, __VA_ARGS__>;
 
+#define DEFINE_CALLBACK_VOID(FuncName) \
+	using FuncName = Callback<void>;
+
 
 /**
  * @brief Type-erased single-binding delegate — stores one member function or free function.

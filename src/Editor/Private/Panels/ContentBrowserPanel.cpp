@@ -495,11 +495,11 @@ void ContentBrowserPanel::DrawAssetTile(EditorState& state, const AssetDatabaseE
             ImGui::EndDragDropSource();
         }
     }
-    if (entry.Type == AssetType::Mesh && state.MeshMgrPtr)
+    if (entry.Type == AssetType::Mesh)
     {
         if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID))
         {
-            uint32_t slot = state.MeshMgrPtr->FindSlotByID(entry.ID);
+            uint32_t slot = MeshManager::Get().FindSlotByID(entry.ID);
             ImGui::SetDragDropPayload("MESH_SLOT", &slot, sizeof(slot));
             ImGui::Text("Mesh: %s", name);
             ImGui::EndDragDropSource();

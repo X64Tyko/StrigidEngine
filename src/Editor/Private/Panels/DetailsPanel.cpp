@@ -161,12 +161,12 @@ static void DrawComponentList(const ReflectionRegistry& cfr, Archetype* arch,
 		}
 
 		// Asset-ref fields: combo or read-only name
-		if (fdesc.refAssetType != AssetType::Invalid && state.MeshMgrPtr)
+		if (fdesc.refAssetType != AssetType::Invalid)
 		{
 			uint8_t* base     = static_cast<uint8_t*>(fieldArrayTable[idx]);
 			uint32_t* slotPtr = reinterpret_cast<uint32_t*>(base + entityLocalIndex * fdesc.fieldSize);
 			uint32_t slotIdx  = *slotPtr;
-			const char* assetName = state.MeshMgrPtr->GetSlotName(slotIdx);
+			const char* assetName = MeshManager::Get().GetSlotName(slotIdx);
 
 			ImGui::PushID(fieldName);
 			ImGui::PushStyleColor(ImGuiCol_Text, TnxStyle::Color::FgMuted);
@@ -181,10 +181,10 @@ static void DrawComponentList(const ReflectionRegistry& cfr, Archetype* arch,
 				ImGui::SetNextItemWidth(-1.0f);
 				if (ImGui::BeginCombo("##asset", preview))
 				{
-					uint32_t meshCount = state.MeshMgrPtr->GetMeshCount();
+					uint32_t meshCount = MeshManager::Get().GetMeshCount();
 					for (uint32_t i = 0; i < meshCount; ++i)
 					{
-						const char* name  = state.MeshMgrPtr->GetSlotName(i);
+						const char* name  = MeshManager::Get().GetSlotName(i);
 						const char* lbl   = (!name || !*name) ? "(unnamed)" : name;
 						bool sel          = (i == slotIdx);
 						if (ImGui::Selectable(lbl, sel))

@@ -61,14 +61,10 @@ EditorContext::~EditorContext()
 	if (bPIEActive) StopPIE();
 }
 
-void EditorContext::Initialize(TrinyxEngine* engine, LogicThreadBase* logic, MeshManager* meshMgr)
+void EditorContext::Initialize(TrinyxEngine* engine, LogicThreadBase* logic)
 {
 	EnginePtr = engine;
 	LogicPtr  = logic;
-	MeshMgr   = meshMgr;
-#ifndef TNX_HEADLESS
-	AudioMgr = engine->GetAudio();
-#endif
 
 	// Populate shared state pointers for panels
 	State.EnginePtr   = engine;
@@ -76,7 +72,6 @@ void EditorContext::Initialize(TrinyxEngine* engine, LogicThreadBase* logic, Mes
 	State.ConfigPtr   = engine->GetConfig();
 	State.LogicPtr    = logic;
 	State.EditorCtx   = this;
-	State.MeshMgrPtr  = meshMgr;
 
 	// Initialize asset database from project content directory
 	const EngineConfig* cfg = engine->GetConfig();
@@ -89,8 +84,8 @@ void EditorContext::Initialize(TrinyxEngine* engine, LogicThreadBase* logic, Mes
 		// Register demand loaders — assets load on first Checkout(), not at boot.
 		AssetRegistry::Get().RegisterLoader(
 			AssetType::Mesh,
-			[](void* ctx, AssetID id) { static_cast<MeshManager*>(ctx)->LoadMesh(id); },
-			MeshMgr);
+			[](void*, AssetID id) { MeshManager::Get().LoadMesh(id); },
+			nullptr);
 		AssetRegistry::Get().RegisterLoader(
 			AssetType::Skeleton,
 			[](void*, AssetID id) { SkeletonManager::Get().LoadSkeleton(id); },
@@ -98,6 +93,10 @@ void EditorContext::Initialize(TrinyxEngine* engine, LogicThreadBase* logic, Mes
 		AssetRegistry::Get().RegisterLoader(
 			AssetType::Animation,
 			[](void*, AssetID id) { AnimationManager::Get().LoadAnimation(id); },
+			nullptr);
+		AssetRegistry::Get().RegisterLoader(
+			AssetType::Audio,
+			[](void*, AssetID id) { AudioManager::Get().LoadSound(id); },
 			nullptr);
 
 		CheckForAssetIssues();
@@ -973,7 +972,7 @@ void EditorContext::BuildMenuBar()
 			FileDialogPath         = contentDir + defaultName + ".prefab";
 		}
 		ImGui::Separator();
-		if (ImGui::MenuItem("Import Mesh...", nullptr, false, MeshMgr != nullptr))
+		if (ImGui::MenuItem("Import Mesh...", nullptr, false, State.ConfigPtr != nullptr))
 		{
 			bShowImportDialog = true;
 			ImportDialogPath.clear();
@@ -1730,7 +1729,7 @@ void EditorContext::DrawImportDialog()
 
 uint32_t EditorContext::ImportMeshAsset(const std::string& gltfPath)
 {
-	if (!MeshMgr || !State.ConfigPtr) return UINT32_MAX;
+	if (!State.ConfigPtr) return UINT32_MAX;
 
 	std::filesystem::path src(gltfPath);
 	std::string stem       = src.stem().string();
@@ -1770,7 +1769,7 @@ uint32_t EditorContext::ImportMeshAsset(const std::string& gltfPath)
 		// Load mesh geometry + skin weights into MeshManager
 		const auto* meshEntry = AssetDB.FindByPath(stem + ".tnxmesh");
 		AssetID meshID  = meshEntry ? meshEntry->ID : AssetID{};
-		uint32_t meshSlot = MeshMgr->LoadMesh(skelResult.mesh, TnxName(stem.c_str()), meshID);
+		uint32_t meshSlot = MeshManager::Get().LoadMesh(skelResult.mesh, TnxName(stem.c_str()), meshID);
 		if (meshSlot == UINT32_MAX)
 		{
 			LOG_ENG_ERROR_F("[Editor] MeshManager::LoadMesh failed for '%s'", stem.c_str());
@@ -1826,7 +1825,7 @@ uint32_t EditorContext::ImportMeshAsset(const std::string& gltfPath)
 
 	const auto* dbEntry = AssetDB.FindByPath(stem + ".tnxmesh");
 	AssetID meshID      = dbEntry ? dbEntry->ID : AssetID{};
-	uint32_t slot       = MeshMgr->LoadMesh(asset, TnxName(stem.c_str()), meshID);
+	uint32_t slot       = MeshManager::Get().LoadMesh(asset, TnxName(stem.c_str()), meshID);
 	if (slot != UINT32_MAX)
 		LOG_ENG_INFO_F("[Editor] Registered mesh '%s' at slot %u (AssetID: %lld)",
 					   stem.c_str(), slot, static_cast<long long>(meshID.GetUUID() >> 8));
@@ -1855,7 +1854,7 @@ void EditorContext::HandleDroppedFile(const std::string& path)
 	else if (ext == ".tnxmesh")
 	{
 		// Already in engine format — copy to content/ and load
-		if (MeshMgr && State.ConfigPtr)
+		if (State.ConfigPtr)
 		{
 			std::string destPath = std::string(State.ConfigPtr->ProjectDir)
 				+ "/content/" + p.filename().string();
@@ -1871,7 +1870,7 @@ void EditorContext::HandleDroppedFile(const std::string& path)
 				AssetID dropID          = dropEntry ? dropEntry->ID : AssetID{};
 				TnxName dropName = dropEntry ? dropEntry->Name : TnxName(p.stem().string().c_str());
 
-				uint32_t slot = MeshMgr->LoadMesh(asset, dropName, dropID);
+				uint32_t slot = MeshManager::Get().LoadMesh(asset, dropName, dropID);
 				if (slot != UINT32_MAX)
 					LOG_ENG_INFO_F("[Editor] Loaded dropped mesh '%s' → slot %u", dropName.GetStr(), slot);
 			}
@@ -1885,7 +1884,7 @@ void EditorContext::HandleDroppedFile(const std::string& path)
 	else if (ext == ".wav" || ext == ".ogg")
 	{
 		// Convert source → .tnxaudio in content/. The source file is not copied.
-		if (AudioMgr && State.ConfigPtr)
+		if (State.ConfigPtr)
 		{
 			std::string stem    = p.stem().string();
 			std::string outPath = std::string(State.ConfigPtr->ProjectDir)
@@ -1903,7 +1902,7 @@ void EditorContext::HandleDroppedFile(const std::string& path)
 				AssetID audioID     = dbEntry ? dbEntry->ID : AssetID{};
 				TnxName name = dbEntry ? dbEntry->Name : TnxName(stem.c_str());
 
-				uint32_t slot = AudioMgr->LoadSound(outPath.c_str(), name, audioID);
+				uint32_t slot = AudioManager::Get().LoadSound(outPath.c_str(), name, audioID);
 				if (slot != UINT32_MAX)
 					LOG_ENG_INFO_F("[Editor] Imported audio '%s' → slot %u", name.GetStr(), slot);
 				else
@@ -1914,7 +1913,7 @@ void EditorContext::HandleDroppedFile(const std::string& path)
 	else if (ext == ".tnxaudio")
 	{
 		// Already engine format — copy to content/ and register.
-		if (AudioMgr && State.ConfigPtr)
+		if (State.ConfigPtr)
 		{
 			std::string destPath = std::string(State.ConfigPtr->ProjectDir)
 				+ "/content/" + p.filename().string();
@@ -1927,7 +1926,7 @@ void EditorContext::HandleDroppedFile(const std::string& path)
 			AssetID audioID     = dbEntry ? dbEntry->ID : AssetID{};
 			TnxName name = dbEntry ? dbEntry->Name : TnxName(stem.c_str());
 
-			uint32_t slot = AudioMgr->LoadSound(destPath.c_str(), name, audioID);
+			uint32_t slot = AudioManager::Get().LoadSound(destPath.c_str(), name, audioID);
 			if (slot != UINT32_MAX)
 				LOG_ENG_INFO_F("[Editor] Loaded dropped .tnxaudio '%s' → slot %u", name.GetStr(), slot);
 			else

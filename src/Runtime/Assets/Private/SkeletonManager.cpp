@@ -59,6 +59,9 @@ bool SkeletonManager::Initialize(VulkanMemory* vkMem)
 	LOG_ENG_INFO_F("[SkeletonManager] Initialized (max bones: %u, buffer: %.1f MB)",
 				   MAX_TOTAL_BONES,
 				   static_cast<float>(MAX_TOTAL_BONES * sizeof(GpuBoneData)) / (1024.f * 1024.f));
+
+	AssetRegistry::Get().RegisterUploadChecker(
+		[](void*) { return SkeletonManager::Get().IsUploadComplete(); }, nullptr);
 	return true;
 }
 

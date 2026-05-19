@@ -4,31 +4,33 @@
 #include "ComponentView.h"
 #include "SchemaReflector.h"
 
-// CSkeletonRef — skeletal mesh binding for an entity.
+// CSkeletonRef — skeletal binding for an entity.
 // Volatile: set at spawn, rarely changes, no rollback needed.
-// Render group: SkeletonID drives GPU skinning; SkinMeshID provides vertex+skin data.
+// Render group: SkeletonID drives GPU skinning. Vertex + skin weight data
+// come from CMeshRef.MeshID on the same entity (skin and mesh are combined).
 template <FieldWidth WIDTH = FieldWidth::Scalar>
 struct CSkeletonRef : ComponentView<CSkeletonRef, WIDTH>
 {
-	TNX_VOLATILE_FIELDS(CSkeletonRef, Render, SkeletonID, SkinMeshID)
+	TNX_VOLATILE_FIELDS(CSkeletonRef, Render, SkeletonID)
 
 	UIntProxy<WIDTH> SkeletonID{}; // slot in SkeletonManager (0 = none)
-	UIntProxy<WIDTH> SkinMeshID{}; // slot in MeshManager that has skin weights (0 = none)
 
 	static constexpr auto FieldRefTypes = std::array{
 		AssetType::Skeleton, // SkeletonID
-		AssetType::Mesh,     // SkinMeshID
 	};
 
 	void SetSkeleton(TnxName name) requires (WIDTH == FieldWidth::Scalar)
 	{
-		AssetRegistry::RegisterPendingCheckout<AssetType::Skeleton>(&SkeletonID.WriteArray[SkeletonID.index], name);
+		OnSkelLoad.Bind<CSkeletonRef, &CSkeletonRef::SetSkeletonID>(this);
+		OnSkelEvict.Bind<CSkeletonRef, &CSkeletonRef::ResetSkeletonID>(this);
+		AssetRegistry::RegisterPendingCheckout<AssetType::Skeleton>(name, OnSkelLoad, OnSkelEvict);
 	}
 
-	void SetSkinMesh(TnxName name) requires (WIDTH == FieldWidth::Scalar)
-	{
-		AssetRegistry::RegisterPendingCheckout<AssetType::Mesh>(&SkinMeshID.WriteArray[SkinMeshID.index], name);
-	}
+private:
+	AssetLoad  OnSkelLoad;
+	AssetEvict OnSkelEvict;
+	void SetSkeletonID(uint32_t newID) requires (WIDTH == FieldWidth::Scalar) { SkeletonID = newID; OnSkelLoad.Reset(); }
+	void ResetSkeletonID()             requires (WIDTH == FieldWidth::Scalar) { SkeletonID = 0u;    OnSkelEvict.Reset(); }
 };
 
 TNX_REGISTER_COMPONENT(CSkeletonRef)

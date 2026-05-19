@@ -22,7 +22,7 @@
 template <FieldWidth WIDTH = FieldWidth::Scalar>
 struct CAnimBase : ComponentView<CAnimBase, WIDTH>
 {
-    TNX_TEMPORAL_FIELDS(CAnimBase, Logic,
+    TNX_TEMPORAL_FIELDS(CAnimBase, Render,
         BaseAnimID, BlendspaceID,
         BaseTimestamp, BlendCoordX, BlendCoordY,
         FadeAnimID, FadeTimestamp, FadeAlpha,
@@ -75,7 +75,9 @@ struct CAnimBase : ComponentView<CAnimBase, WIDTH>
     void SetAnim(TnxName name, SimFloat startTime = {}, bool loops = true, bool rootMotion = false)
         requires (WIDTH == FieldWidth::Scalar)
     {
-        AssetRegistry::RegisterPendingCheckout<AssetType::Animation>(&BaseAnimID.WriteArray[BaseAnimID.index], name);
+        OnAnimLoad.Bind<CAnimBase, &CAnimBase::SetBaseAnimID>(this);
+        OnAnimEvict.Bind<CAnimBase, &CAnimBase::ResetBaseAnimID>(this);
+        AssetRegistry::RegisterPendingCheckout<AssetType::Animation>(name, OnAnimLoad, OnAnimEvict);
         BlendspaceID  = 0u;
         BaseTimestamp = startTime;
         uint32_t f    = Flags.Value();
@@ -142,6 +144,13 @@ struct CAnimBase : ComponentView<CAnimBase, WIDTH>
         FadeAnimID = 0u; FadeTimestamp = SimFloat(0.f); FadeAlpha = SimFloat(0.f);
         StateNodeID = 0u; Flags = 0u;
     }
+
+private:
+    AssetLoad  OnAnimLoad;
+    AssetEvict OnAnimEvict;
+
+    void SetBaseAnimID(uint32_t id) requires (WIDTH == FieldWidth::Scalar) { BaseAnimID = id;  OnAnimLoad.Reset(); }
+    void ResetBaseAnimID()          requires (WIDTH == FieldWidth::Scalar) { BaseAnimID = 0u;  OnAnimEvict.Reset(); }
 };
 
 TNX_REGISTER_COMPONENT(CAnimBase)

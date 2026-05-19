@@ -59,11 +59,14 @@ struct AssetEntry
 // entity context. The thread_local list is cleared after each drain.
 // -----------------------------------------------------------------------
 
+DEFINE_CALLBACK(AssetLoad, uint32_t)
+DEFINE_CALLBACK_VOID(AssetEvict)
+
 struct PendingCheckout
 {
-	uint32_t* FieldPtr; // stable slab pointer — written by onLoaded, cleared by onEvicted
-	AssetID ID;
-	bool Conditional; // if true, skip when *FieldPtr != 0 (field already set by user)
+	AssetLoad  OnLoaded;
+	AssetEvict OnEvicted;
+	AssetID    ID;
 };
 
 // -----------------------------------------------------------------------
@@ -287,6 +290,25 @@ public:
 		Loaders[idx].Ctx = ctx;
 	}
 
+	// --- GPU upload checker registry ---
+	//
+	// Asset managers that perform async GPU uploads register a checker here at
+	// Initialize() time. IsUploadComplete() returns true only when all registered
+	// checkers agree. Callers (e.g., the render thread before first draw) can spin
+	// on this or call the individual manager FlushPendingUploads() to block.
+	void RegisterUploadChecker(bool (*fn)(void*), void* ctx)
+	{
+		if (UploadCheckerCount < kMaxUploadCheckers)
+			UploadCheckers[UploadCheckerCount++] = {fn, ctx};
+	}
+
+	bool IsUploadComplete() const
+	{
+		for (uint8_t i = 0; i < UploadCheckerCount; ++i)
+			if (!UploadCheckers[i].Fn(UploadCheckers[i].Ctx)) return false;
+		return true;
+	}
+
 	// --- Checkout / Checkin — callback-driven asset lifetime ---
 	//
 	// Checkout increments PinCount and registers OnLoaded/OnEvicted callbacks
@@ -384,12 +406,11 @@ public:
 	// init lambda (e.g., CMeshRef::SetMesh). Create<T>(Fn&&) calls DrainPendingCheckouts()
 	// after the lambda to wire all callbacks at once with a stable context.
 	//
-	// Both callbacks use the field slab pointer (FieldPtr) as their bindObj so that
-	// Checkin(assetID, fieldPtr) at despawn cleanly unbinds without needing a separate
-	// entity-level context.
+	// Callers own callback construction. Using the field slab pointer as bindObj allows
+	// Checkin(assetID, fieldPtr) at despawn to cleanly unbind without entity-level context.
 
 	// Runtime-typed overload — used by EntityBuilder where type is known at runtime from field metadata.
-	static void RegisterPendingCheckout(uint32_t* fieldPtr, TnxName name, AssetType type, bool conditional = false)
+	static void RegisterPendingCheckout(TnxName name, AssetType type, AssetLoad onLoaded, AssetEvict onEvicted = {})
 	{
 		const AssetEntry* entry = Get().FindByTNameAndType(name, type);
 		if (!entry)
@@ -398,12 +419,12 @@ public:
 						   name.GetStr(), AssetTypeName(type));
 			return;
 		}
-		PendingList().push_back({fieldPtr, entry->ID, conditional});
+		PendingList().push_back({onLoaded, onEvicted, entry->ID});
 	}
 
 	// Compile-time-typed overload — preferred when the asset type is statically known.
 	template<AssetType TType>
-	static void RegisterPendingCheckout(uint32_t* fieldPtr, TnxName name, bool conditional = false)
+	static void RegisterPendingCheckout(TnxName name, AssetLoad onLoaded, AssetEvict onEvicted = {})
 	{
 		const AssetEntry* entry = Get().FindByTNameAndType(name, TType);
 		if (!entry)
@@ -412,28 +433,14 @@ public:
 						   name.GetStr(), AssetTypeName(TType));
 			return;
 		}
-		PendingList().push_back({fieldPtr, entry->ID, conditional});
+		PendingList().push_back({onLoaded, onEvicted, entry->ID});
 	}
 
 	void DrainPendingCheckouts()
 	{
 		auto& pending = PendingList();
 		for (const PendingCheckout& pc : pending)
-		{
-			if (pc.Conditional && *pc.FieldPtr != 0) continue;
-
-			Callback<void, uint32_t> onLoaded;
-			onLoaded.BindStatic(
-				[](void* ctx, uint32_t slot) { *static_cast<uint32_t*>(ctx) = slot; },
-				pc.FieldPtr);
-
-			Callback<void> onEvicted;
-			onEvicted.BindStatic(
-				[](void* ctx) { *static_cast<uint32_t*>(ctx) = 0; },
-				pc.FieldPtr);
-
-			Checkout(pc.ID, onLoaded, onEvicted);
-		}
+			Checkout(pc.ID, pc.OnLoaded, pc.OnEvicted);
 		pending.clear();
 	}
 
@@ -526,10 +533,15 @@ private:
 		return (static_cast<uint8_t>(state) & static_cast<uint8_t>(flag)) != 0;
 	}
 
-	struct AssetLoader { void (*Fn)(void*, AssetID) = nullptr; void* Ctx = nullptr; };
+	struct AssetLoader   { void (*Fn)(void*, AssetID) = nullptr; void* Ctx = nullptr; };
+	struct UploadChecker { bool (*Fn)(void*)          = nullptr; void* Ctx = nullptr; };
+
+	static constexpr uint8_t kMaxUploadCheckers = 8;
 
 	std::string ContentRoot;
-	AssetLoader Loaders[256];
+	AssetLoader   Loaders[256];
+	UploadChecker UploadCheckers[kMaxUploadCheckers]{};
+	uint8_t       UploadCheckerCount = 0;
 	std::unordered_map<AssetID, AssetID, AssetIDHash> AliasTable;
 	std::unordered_map<AssetID, AssetEntry, AssetIDHash> Entries;
 	std::unordered_map<uint64_t, AssetID> TypedNameIndex; // (nameHash<<8|type) → AssetID; unique per (name, type)

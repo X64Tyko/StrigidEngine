@@ -78,6 +78,19 @@ namespace BuiltinCube
 }
 
 // -----------------------------------------------------------------------
+// Shutdown
+// -----------------------------------------------------------------------
+
+void MeshManager::Shutdown()
+{
+	VertexMegaBuffer.Free();
+	IndexMegaBuffer.Free();
+	MeshTableBuffer.Free();
+	SkinWeightMegaBuffer.Free();
+	SkinSlotTableBuffer.Free();
+}
+
+// -----------------------------------------------------------------------
 // Initialize
 // -----------------------------------------------------------------------
 
@@ -150,6 +163,9 @@ bool MeshManager::Initialize(VulkanMemory* vkMem)
 				   VERTEX_MEGA_BUFFER_SIZE / (1024 * 1024),
 				   INDEX_MEGA_BUFFER_SIZE / (1024 * 1024),
 				   static_cast<uint32_t>(MAX_TOTAL_SKIN_WEIGHTS * sizeof(SkinWeights) / (1024 * 1024)));
+
+	AssetRegistry::Get().RegisterUploadChecker(
+		[](void*) { return MeshManager::Get().IsUploadComplete(); }, nullptr);
 	return true;
 }
 

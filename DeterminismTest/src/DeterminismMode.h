@@ -56,14 +56,14 @@ public:
 			e.Transform.PosZ = SpawnZ;
 			e.Transform.Rotation.SetIdentity();
 
-			e.Scale.ScaleX = 3.0f;
-			e.Scale.ScaleY = 3.0f;
-			e.Scale.ScaleZ = 3.0f;
+			e.Scale.ScaleX = SimFloat(3.0f);
+			e.Scale.ScaleY = SimFloat(3.0f);
+			e.Scale.ScaleZ = SimFloat(3.0f);
 
-			e.Color.R = 0.2f;
-			e.Color.G = 0.4f;
-			e.Color.B = 0.9f;
-			e.Color.A = 1.0f;
+			e.Color.R = SimFloat(0.2f);
+			e.Color.G = SimFloat(0.4f);
+			e.Color.B = SimFloat(0.9f);
+			e.Color.A = SimFloat(1.0f);
 
 			e.Mesh.MeshID = 1u; // Cube (slot 0=invalid, slot 1=Cube)
 		});
@@ -134,9 +134,9 @@ public:
 	{
 		Self.Initialize(this, [](EPoint<FieldWidth::Scalar>& e)
 		{
-			e.Transform.PosX = 0.f;
-			e.Transform.PosY = 0.f;
-			e.Transform.PosZ = 0.f;
+			e.Transform.PosX = SimFloat(0.f);
+			e.Transform.PosY = SimFloat(0.f);
+			e.Transform.PosZ = SimFloat(0.f);
 			e.Transform.Rotation.SetIdentity();
 		});
 	}

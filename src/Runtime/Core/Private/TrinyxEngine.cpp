@@ -22,13 +22,14 @@
 #include "World.h"
 #ifndef TNX_HEADLESS
 #include "AudioManager.h"
-#include "../../../Runtime/Audio/Private/AudioInternal.h"
+#include "AudioInternal.h"
 #if TNX_ENABLE_EDITOR
 #include "EditorRenderer.h"
 #else
 #include "GameplayRenderer.h"
 #endif
 #include "AnimationManager.h"
+#include "MeshManager.h"
 #include "SkeletonManager.h"
 #endif
 #include "JoltPhysics.h"
@@ -518,6 +519,7 @@ void TrinyxEngine::Shutdown()
 	// destructors would otherwise fire after vmaDestroyAllocator.
 	AnimationManager::Get().Shutdown();
 	SkeletonManager::Get().Shutdown();
+	MeshManager::Get().Shutdown();
 
 	// Tear down Vulkan
 	VkMem.Shutdown();
