@@ -170,7 +170,7 @@
     },
     {
       "name": "debug-playground-opt-windows",
-      "displayName": "DebugGame | Playground (Engine Optimized) | Windows",
+      "displayName": "DebugEditor | Playground (Engine Optimized) | Windows",
       "configurePreset": "debug-engine-opt-windows",
       "configuration": "Debug",
       "targets": [
