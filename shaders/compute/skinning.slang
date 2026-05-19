@@ -28,9 +28,9 @@ float4x4 quatToMat(float4 q)
     float yy = y*y2, yz = y*z2, zz = z*z2;
     float wx = w*x2, wy = w*y2, wz = w*z2;
     float4x4 m;
-    m[0] = float4(1-(yy+zz), xy+wz,    xz-wy,    0);
-    m[1] = float4(xy-wz,     1-(xx+zz), yz+wx,   0);
-    m[2] = float4(xz+wy,     yz-wx,    1-(xx+yy), 0);
+    m[0] = float4(1-(yy+zz), xy-wz,    xz+wy,    0);
+    m[1] = float4(xy+wz,     1-(xx+zz), yz-wx,   0);
+    m[2] = float4(xz-wy,     yz+wx,    1-(xx+yy), 0);
     m[3] = float4(0,         0,         0,         1);
     return m;
 }

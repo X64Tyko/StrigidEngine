@@ -833,7 +833,13 @@ void EditorRenderer::FillGpuFrameDataForViewport(WorldViewport* vp, FrameSync& f
 	data->Alpha          = logic ? static_cast<float>(std::clamp(logic->GetFixedAlpha(), 0.0, 1.0)) : 1.0f;
 	data->EntityCount    = static_cast<uint32_t>(ConfigPtr->MAX_CACHED_ENTITIES);
 	data->OutFieldStride = static_cast<uint32_t>(ConfigPtr->MAX_CACHED_ENTITIES);
-	data->FieldCount     = GpuTotalFieldCount;
+
+	// +1 for the always-on EntityCacheIdx slot (GpuTotalFieldCount slab fields + 1).
+	// Scatter iterates FieldCount; missing this entry skips SemEntityCacheIdx, which
+	// means it never writes entity cache indices to the sorted SoA (breaking GPU picking)
+	// and never registers skeletal entities in SkeletalIdxByEntityAddr (breaking LBS).
+	constexpr uint32_t kFieldCount = GpuTotalFieldCount + 1;
+	data->FieldCount = kFieldCount;
 
 	data->SkinMatrixAddr           = Skinning.GetSkinMatrixAddr();
 	data->SkeletalListAddr         = Skinning.GetSkeletalListAddr();
@@ -845,17 +851,28 @@ void EditorRenderer::FillGpuFrameDataForViewport(WorldViewport* vp, FrameSync& f
 	data->SkinWeightAddr           = MeshManager::Get().GetSkinWeightAddr();
 	data->SkinSlotTableAddr        = MeshManager::Get().GetSkinSlotTableAddr();
 	data->SkeletalDispatchArgsAddr = Skinning.GetSkeletalDispatchArgsAddr();
+	data->GpuSkeletonSlotAddr      = SkeletonManager::Get().GetSkeletonSlotAddr();
+	data->GpuAnimSlotAddr          = AnimationManager::Get().GetAnimSlotAddr();
 
 	// Field addresses from viewport's slabs — semantics from shared SlabFieldDescs.
 	const VkDeviceSize fieldStride = static_cast<VkDeviceSize>(ConfigPtr->MAX_CACHED_ENTITIES) * sizeof(float);
 	const uint64_t currBase        = vp->FieldSlabs[vp->CurrentFieldSlab].DeviceAddr;
 	const uint64_t prevBase        = vp->FieldSlabs[vp->PrevFieldSlab].DeviceAddr;
 
-	for (uint32_t f = 0; f < GpuTotalFieldCount; ++f)
+	for (uint32_t f = 0; f < kFieldCount; ++f)
 	{
-		data->CurrFieldAddrs[f]   = currBase + static_cast<uint64_t>(f) * fieldStride;
-		data->PrevFieldAddrs[f]   = prevBase + static_cast<uint64_t>(f) * fieldStride;
-		data->FieldSemantics[f]   = SlabFieldDescs[f].sem;
+		const GpuSlabFieldDesc& desc = SlabFieldDescs[f];
+		if (desc.kind == GpuSlabKind::EntityIndex)
+		{
+			data->CurrFieldAddrs[f] = 0;
+			data->PrevFieldAddrs[f] = 0;
+		}
+		else
+		{
+			data->CurrFieldAddrs[f] = currBase + static_cast<uint64_t>(f) * fieldStride;
+			data->PrevFieldAddrs[f] = prevBase + static_cast<uint64_t>(f) * fieldStride;
+		}
+		data->FieldSemantics[f]   = desc.sem;
 		data->FieldElementSize[f] = sizeof(float);
 	}
 

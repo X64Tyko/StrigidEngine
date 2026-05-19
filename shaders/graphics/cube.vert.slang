@@ -278,10 +278,33 @@ VSOut main(uint vertIdx : SV_VertexID, uint baseVert : SV_StartVertexLocation,
     float4 clipPos = mul(vp, worldPos);
 
 #ifdef TNX_DEBUG_RENDERING
-    if (fd->DebugDrawMode == 1u) // skin path
-        color = (skelIdx != 0xFFFFFFFFu && fd->SkinWeightAddr != 0)
-                    ? float4(0.0, 1.0, 1.0, 1.0)  // cyan  = skeletal
-                    : float4(0.0, 1.0, 0.0, 1.0); // green = static
+    if (fd->DebugDrawMode == 1u)
+    {
+        // Per-pipeline-stage skin debug.  Read SkeletonID from the GPU slab directly so we can
+        // distinguish an upload failure (red) from a scatter registration failure (magenta).
+        //
+        //  red     — no SkeletonID in GPU slab AND no scatter slot  (upload failed or genuine static)
+        //  magenta — SkeletonID in GPU slab but scatter never claimed a slot  (scatter bug)
+        //  blue    — scatter slot exists but no SkeletonID in slab  (should not occur)
+        //  orange  — SkelID + slot OK but skin-weight buffer absent  (asset upload issue)
+        //  yellow  — SkelID + slot + weights OK but skin-matrix buffer absent  (skinning compute miss)
+        //  cyan    — all three present: full LBS path executing correctly
+        uint skelIDInSlab = 0u;
+        if (fd->CurrFieldAddrs[SlabIdx_SkeletonID] != 0)
+            skelIDInSlab = ((uint*)fd->CurrFieldAddrs[SlabIdx_SkeletonID])[cacheIdx];
+
+        bool hasSkelSlab = (skelIDInSlab != 0u);
+        bool hasSkelIdx  = (skelIdx != 0xFFFFFFFFu);
+        bool hasSkinWt   = (fd->SkinWeightAddr  != 0);
+        bool hasSkinMat  = (fd->SkinMatrixAddr   != 0);
+
+        if      (!hasSkelSlab && !hasSkelIdx)              color = float4(1.0, 0.0, 0.0, 1.0); // red
+        else if ( hasSkelSlab && !hasSkelIdx)              color = float4(1.0, 0.0, 1.0, 1.0); // magenta
+        else if (!hasSkelSlab &&  hasSkelIdx)              color = float4(0.0, 0.0, 1.0, 1.0); // blue
+        else if (!hasSkinWt)                               color = float4(1.0, 0.5, 0.0, 1.0); // orange
+        else if (!hasSkinMat)                              color = float4(1.0, 1.0, 0.0, 1.0); // yellow
+        else                                               color = float4(0.0, 1.0, 1.0, 1.0); // cyan
+    }
 #endif
 
     VSOut o;
