@@ -92,6 +92,53 @@ static void TransformDir(const float m[16], const float in[3], float out[3])
 	out[0] = x; out[1] = y; out[2] = z;
 }
 
+// Column-major 4x4 multiply: C = A * B.
+// flat layout: m[col*4 + row]
+static void MatMul16CM(const float A[16], const float B[16], float C[16])
+{
+	for (int col = 0; col < 4; ++col)
+		for (int row = 0; row < 4; ++row)
+		{
+			float s = 0.f;
+			for (int k = 0; k < 4; ++k)
+				s += A[k*4+row] * B[col*4+k];
+			C[col*4+row] = s;
+		}
+}
+
+// Invert a column-major 4x4 matrix via Gauss-Jordan. Returns false if singular.
+static bool MatInv16CM(const float m[16], float inv[16])
+{
+	float A[4][8];
+	for (int r = 0; r < 4; ++r)
+		for (int c = 0; c < 4; ++c)
+		{
+			A[r][c]   = m[c*4+r];
+			A[r][c+4] = (r == c) ? 1.f : 0.f;
+		}
+	for (int col = 0; col < 4; ++col)
+	{
+		int pivot = col;
+		for (int r = col+1; r < 4; ++r)
+			if (fabsf(A[r][col]) > fabsf(A[pivot][col])) pivot = r;
+		if (pivot != col)
+			for (int c = 0; c < 8; ++c) std::swap(A[col][c], A[pivot][c]);
+		float dv = A[col][col];
+		if (fabsf(dv) < 1e-12f) return false;
+		for (int c = 0; c < 8; ++c) A[col][c] /= dv;
+		for (int r = 0; r < 4; ++r)
+		{
+			if (r == col) continue;
+			float f = A[r][col];
+			for (int c = 0; c < 8; ++c) A[r][c] -= f * A[col][c];
+		}
+	}
+	for (int r = 0; r < 4; ++r)
+		for (int c = 0; c < 4; ++c)
+			inv[c*4+r] = A[r][c+4];
+	return true;
+}
+
 // -----------------------------------------------------------------------
 // Pass 1 — Mesh geometry + skin weights
 // -----------------------------------------------------------------------
@@ -223,7 +270,8 @@ static bool ImportSkeletalPrimitive(
 // Pass 2 — Skeleton
 // -----------------------------------------------------------------------
 
-static bool ImportSkeleton(const cgltf_skin& skin, const cgltf_data& data, SkeletonAsset& outSkeleton)
+static bool ImportSkeleton(const cgltf_skin& skin, const cgltf_data& data,
+                           const float meshWorldMatrix[16], SkeletonAsset& outSkeleton)
 {
 	const cgltf_size boneCount = skin.joints_count;
 	outSkeleton.boneCount = static_cast<uint32_t>(boneCount);
@@ -234,6 +282,20 @@ static bool ImportSkeleton(const cgltf_skin& skin, const cgltf_data& data, Skele
 	jointIndex.reserve(boneCount);
 	for (cgltf_size i = 0; i < boneCount; ++i)
 		jointIndex[skin.joints[i]] = static_cast<uint32_t>(i);
+
+	// The GLTF IBP transforms vertices from mesh-node-local space to joint-local space.
+	// Our importer bakes the mesh node's world transform into vertex positions
+	// (via cgltf_node_transform_world), so vertices are in GLTF world space, not mesh-local.
+	// Correcting: IBP_stored = IBP_gltf * inv(meshWorldMatrix) makes the GPU formula
+	// worldBone * IBP_stored * v_world produce the correct result.
+	float invMeshWorld[16];
+	const bool meshIsIdentity = !MatInv16CM(meshWorldMatrix, invMeshWorld);
+	if (meshIsIdentity)
+	{
+		// Singular (degenerate) mesh matrix — treat as identity; IBPs are used as-is.
+		std::memset(invMeshWorld, 0, sizeof(invMeshWorld));
+		invMeshWorld[0] = invMeshWorld[5] = invMeshWorld[10] = invMeshWorld[15] = 1.f;
+	}
 
 	for (cgltf_size i = 0; i < boneCount; ++i)
 	{
@@ -248,16 +310,17 @@ static bool ImportSkeleton(const cgltf_skin& skin, const cgltf_data& data, Skele
 			if (it != jointIndex.end()) bone.parentIndex = it->second;
 		}
 
-		// Inverse bind pose
+		// Inverse bind pose — corrected for the mesh node's world transform.
 		if (skin.inverse_bind_matrices && i < skin.inverse_bind_matrices->count)
 		{
-			cgltf_accessor_read_float(skin.inverse_bind_matrices, i, bone.inverseBindPose, 16);
+			float ibp_gltf[16];
+			cgltf_accessor_read_float(skin.inverse_bind_matrices, i, ibp_gltf, 16);
+			MatMul16CM(ibp_gltf, invMeshWorld, bone.inverseBindPose);
 		}
 		else
 		{
-			// Identity matrix
-			std::memset(bone.inverseBindPose, 0, sizeof(bone.inverseBindPose));
-			bone.inverseBindPose[0] = bone.inverseBindPose[5] = bone.inverseBindPose[10] = bone.inverseBindPose[15] = 1.f;
+			// No IBP provided — use inv(meshWorldMatrix) so the formula still cancels correctly.
+			std::memcpy(bone.inverseBindPose, invMeshWorld, sizeof(float) * 16);
 		}
 
 		// Name
@@ -295,7 +358,7 @@ static void ImportAnimation(const cgltf_animation&   anim,
 		jointIndex[skin.joints[i]] = static_cast<uint32_t>(i);
 
 	// Temporary per-bone keyframe accumulation
-	struct BoneKeys { std::vector<AnimKeyframe> keys; };
+	struct BoneKeys { std::vector<AnimKeyframe> keys; bool hasTranslation = false; };
 	std::vector<BoneKeys> perBone(boneCount);
 
 	for (cgltf_size c = 0; c < anim.channels_count; ++c)
@@ -330,6 +393,7 @@ static void ImportAnimation(const cgltf_animation&   anim,
 				float v[3] = {};
 				cgltf_accessor_read_float(sampler.output, k, v, 3);
 				boneKf[k].tx = v[0]; boneKf[k].ty = v[1]; boneKf[k].tz = v[2];
+				perBone[boneIdx].hasTranslation = true;
 			}
 			else // rotation
 			{
@@ -340,16 +404,45 @@ static void ImportAnimation(const cgltf_animation&   anim,
 		}
 	}
 
-	// Flatten into contiguous keyframes array; fill missing rotation/translation with identity
+	// Flatten into contiguous keyframes array.
+	// GLTF spec: a joint without a translation channel holds its bind-pose local translation
+	// for the entire animation. Bones without any channel get a single static keyframe so the
+	// shader never collapses them to origin (keyframeCount==0 path returns (0,0,0)).
 	uint32_t nextOffset = 0;
 	for (uint32_t b = 0; b < boneCount; ++b)
 	{
 		std::vector<AnimKeyframe>& keys = perBone[b].keys;
-		// Fill identity defaults for any keys that weren't written by both channels
-		for (auto& k : keys)
+
+		const cgltf_node* joint = skin.joints[b];
+		float bindT[3] = {0.f, 0.f, 0.f};
+		if (joint->has_translation)
 		{
-			if (k.rw == 0.f) k.rw = 1.f; // no rotation channel → identity quat
+			bindT[0] = joint->translation[0];
+			bindT[1] = joint->translation[1];
+			bindT[2] = joint->translation[2];
 		}
+
+		if (keys.empty())
+		{
+			// No animation channels — emit one static keyframe at the bind-pose local TRS.
+			AnimKeyframe kf{};
+			kf.time = 0.f;
+			kf.tx = bindT[0]; kf.ty = bindT[1]; kf.tz = bindT[2];
+			kf.rw = 1.f; // identity quaternion
+			keys.push_back(kf);
+		}
+		else
+		{
+			for (auto& k : keys)
+			{
+				if (k.rw == 0.f) k.rw = 1.f; // no rotation channel → identity quat
+				if (!perBone[b].hasTranslation)
+				{
+					k.tx = bindT[0]; k.ty = bindT[1]; k.tz = bindT[2];
+				}
+			}
+		}
+
 		outAnim.boneTracks[b] = {nextOffset, static_cast<uint32_t>(keys.size())};
 		for (const AnimKeyframe& k : keys) outAnim.keyframes.push_back(k);
 		nextOffset += static_cast<uint32_t>(keys.size());
@@ -397,13 +490,16 @@ bool ImportSkeletalGLTF(const std::string& srcPath, SkeletalImportResult& outRes
 	// Pass 1 — Mesh geometry + skin weights
 	// -----------------------------------------------------------------------
 
-	const float identity[16] = {1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1};
-
 	std::vector<Vertex>      rawVerts;
 	std::vector<SkinWeights> rawWeights;
 	std::vector<uint32_t>    rawIndices;
 	float aabbMin[3] = { 1e30f,  1e30f,  1e30f};
 	float aabbMax[3] = {-1e30f, -1e30f, -1e30f};
+
+	// Capture the mesh node's world matrix — used in Pass 2 to correct IBPs.
+	// All skin mesh nodes should share the same skin, so any one of them gives the right matrix.
+	float meshWorldMatrix[16] = {1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1};
+	bool  meshWorldMatrixSet  = false;
 
 	for (cgltf_size ni = 0; ni < data->nodes_count; ++ni)
 	{
@@ -412,6 +508,12 @@ bool ImportSkeletalGLTF(const std::string& srcPath, SkeletalImportResult& outRes
 
 		float worldMatrix[16];
 		cgltf_node_transform_world(node, worldMatrix);
+
+		if (!meshWorldMatrixSet)
+		{
+			std::memcpy(meshWorldMatrix, worldMatrix, sizeof(meshWorldMatrix));
+			meshWorldMatrixSet = true;
+		}
 
 		for (cgltf_size pi = 0; pi < node->mesh->primitives_count; ++pi)
 		{
@@ -467,7 +569,7 @@ bool ImportSkeletalGLTF(const std::string& srcPath, SkeletalImportResult& outRes
 	// Pass 2 — Skeleton
 	// -----------------------------------------------------------------------
 
-	if (!ImportSkeleton(skin, *data, outResult.skeleton))
+	if (!ImportSkeleton(skin, *data, meshWorldMatrix, outResult.skeleton))
 	{
 		LOG_ENG_ERROR_F("[SkeletonImporter] Skeleton import failed for '%s'", srcPath.c_str());
 		cgltf_free(data);

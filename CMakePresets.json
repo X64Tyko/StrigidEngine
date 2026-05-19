@@ -102,6 +102,17 @@
       }
     },
     {
+      "name": "debug-engine-det-opt-windows",
+      "displayName": "DebugGame | Engine Optimized | Windows",
+      "inherits": "windows",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "TNX_ENGINE_OPTIMIZED": "ON",
+        "TNX_DETERMINISM": "ON",
+        "TNX_ENABLE_EDITOR": "ON"
+      }
+    },
+    {
       "name": "determinism-test",
       "displayName": "DeterminismTest | Rollback Harness | Linux",
       "inherits": "linux",
@@ -172,6 +183,15 @@
       "name": "debug-playground-opt-windows",
       "displayName": "DebugEditor | Playground (Engine Optimized) | Windows",
       "configurePreset": "debug-engine-opt-windows",
+      "configuration": "Debug",
+      "targets": [
+        "Playground"
+      ]
+    },
+    {
+      "name": "debug-playground-det-opt-windows",
+      "displayName": "DebugEditor | Playground (Deterministic - Engine Optimized) | Windows",
+      "configurePreset": "debug-engine-det-opt-windows",
       "configuration": "Debug",
       "targets": [
         "Playground"
