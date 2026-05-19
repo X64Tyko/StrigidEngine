@@ -105,25 +105,26 @@ void RendererCore<Derived>::Initialize(Registry* registry,
 		{GpuSlabTier::Volatile, GpuSlabKind::SimFloat,  static_cast<uint32_t>(CColor<>::StaticTemporalIndex()),           2, SemColorB},
 		{GpuSlabTier::Volatile, GpuSlabKind::SimFloat,  static_cast<uint32_t>(CColor<>::StaticTemporalIndex()),           3, SemColorA},
 		{GpuSlabTier::Volatile, GpuSlabKind::RawU32,    static_cast<uint32_t>(CMeshRef<>::StaticTemporalIndex()),         0, SemMeshID},
-		// Animation slab fields (f=16..33, scatter skips sem > GpuOutFieldCount)
-		{GpuSlabTier::Volatile, GpuSlabKind::RawU32,    static_cast<uint32_t>(CSkeletonRef<>::StaticTemporalIndex()),     0, SemSkeletonID},
-		{GpuSlabTier::Temporal, GpuSlabKind::RawU32,    static_cast<uint32_t>(CAnimBase<>::StaticTemporalIndex()),        0, SemAnimBaseAnimID},
-		{GpuSlabTier::Temporal, GpuSlabKind::RawU32,    static_cast<uint32_t>(CAnimBase<>::StaticTemporalIndex()),        1, SemAnimBlendspaceID},
-		{GpuSlabTier::Temporal, GpuSlabKind::SimFloat,  static_cast<uint32_t>(CAnimBase<>::StaticTemporalIndex()),        2, SemAnimBaseTimestamp},
-		{GpuSlabTier::Temporal, GpuSlabKind::SimFloat,  static_cast<uint32_t>(CAnimBase<>::StaticTemporalIndex()),        3, SemAnimBlendCoordX},
-		{GpuSlabTier::Temporal, GpuSlabKind::SimFloat,  static_cast<uint32_t>(CAnimBase<>::StaticTemporalIndex()),        4, SemAnimBlendCoordY},
-		{GpuSlabTier::Temporal, GpuSlabKind::RawU32,    static_cast<uint32_t>(CAnimBase<>::StaticTemporalIndex()),        5, SemAnimFadeAnimID},
-		{GpuSlabTier::Temporal, GpuSlabKind::SimFloat,  static_cast<uint32_t>(CAnimBase<>::StaticTemporalIndex()),        6, SemAnimFadeTimestamp},
-		{GpuSlabTier::Temporal, GpuSlabKind::SimFloat,  static_cast<uint32_t>(CAnimBase<>::StaticTemporalIndex()),        7, SemAnimFadeAlpha},
-		{GpuSlabTier::Temporal, GpuSlabKind::RawU32,    static_cast<uint32_t>(CAnimBase<>::StaticTemporalIndex()),        9, SemAnimFlags},
-		{GpuSlabTier::Temporal, GpuSlabKind::RawU32,    static_cast<uint32_t>(CAnimLayer<>::StaticTemporalIndex()),       0, SemAnimLayer0AnimID},
-		{GpuSlabTier::Temporal, GpuSlabKind::RawU32,    static_cast<uint32_t>(CAnimLayer<>::StaticTemporalIndex()),       1, SemAnimLayer1AnimID},
-		{GpuSlabTier::Temporal, GpuSlabKind::SimFloat,  static_cast<uint32_t>(CAnimLayer<>::StaticTemporalIndex()),       2, SemAnimLayer0Timestamp},
-		{GpuSlabTier::Temporal, GpuSlabKind::SimFloat,  static_cast<uint32_t>(CAnimLayer<>::StaticTemporalIndex()),       3, SemAnimLayer1Timestamp},
-		{GpuSlabTier::Temporal, GpuSlabKind::SimFloat,  static_cast<uint32_t>(CAnimLayer<>::StaticTemporalIndex()),       4, SemAnimLayer0Alpha},
-		{GpuSlabTier::Temporal, GpuSlabKind::SimFloat,  static_cast<uint32_t>(CAnimLayer<>::StaticTemporalIndex()),       5, SemAnimLayer1Alpha},
-		{GpuSlabTier::Temporal, GpuSlabKind::RawU32,    static_cast<uint32_t>(CAnimLayer<>::StaticTemporalIndex()),       6, SemAnimLayer0Config},
-		{GpuSlabTier::Temporal, GpuSlabKind::RawU32,    static_cast<uint32_t>(CAnimLayer<>::StaticTemporalIndex()),       7, SemAnimLayer1Config},
+		// Animation slab fields (f=16..33). Scatter skips these — SemGeneric routes to
+		// the early-out in scatter.slang. Shaders access via SlabIdx_XXX constants.
+		{GpuSlabTier::Volatile, GpuSlabKind::RawU32,    static_cast<uint32_t>(CSkeletonRef<>::StaticTemporalIndex()),     0, SemGeneric}, // f=16 SlabIdx_SkeletonID
+		{GpuSlabTier::Temporal, GpuSlabKind::RawU32,    static_cast<uint32_t>(CAnimBase<>::StaticTemporalIndex()),        0, SemGeneric}, // f=17 SlabIdx_BaseAnimID
+		{GpuSlabTier::Temporal, GpuSlabKind::RawU32,    static_cast<uint32_t>(CAnimBase<>::StaticTemporalIndex()),        1, SemGeneric}, // f=18 SlabIdx_BlendspaceID
+		{GpuSlabTier::Temporal, GpuSlabKind::SimFloat,  static_cast<uint32_t>(CAnimBase<>::StaticTemporalIndex()),        2, SemGeneric}, // f=19 SlabIdx_BaseTimestamp
+		{GpuSlabTier::Temporal, GpuSlabKind::SimFloat,  static_cast<uint32_t>(CAnimBase<>::StaticTemporalIndex()),        3, SemGeneric}, // f=20 SlabIdx_BlendCoordX
+		{GpuSlabTier::Temporal, GpuSlabKind::SimFloat,  static_cast<uint32_t>(CAnimBase<>::StaticTemporalIndex()),        4, SemGeneric}, // f=21 SlabIdx_BlendCoordY
+		{GpuSlabTier::Temporal, GpuSlabKind::RawU32,    static_cast<uint32_t>(CAnimBase<>::StaticTemporalIndex()),        5, SemGeneric}, // f=22 SlabIdx_FadeAnimID
+		{GpuSlabTier::Temporal, GpuSlabKind::SimFloat,  static_cast<uint32_t>(CAnimBase<>::StaticTemporalIndex()),        6, SemGeneric}, // f=23 SlabIdx_FadeTimestamp
+		{GpuSlabTier::Temporal, GpuSlabKind::SimFloat,  static_cast<uint32_t>(CAnimBase<>::StaticTemporalIndex()),        7, SemGeneric}, // f=24 SlabIdx_FadeAlpha
+		{GpuSlabTier::Temporal, GpuSlabKind::RawU32,    static_cast<uint32_t>(CAnimBase<>::StaticTemporalIndex()),        9, SemGeneric}, // f=25 SlabIdx_AnimFlags (fi=9, skips StateNodeID at fi=8)
+		{GpuSlabTier::Temporal, GpuSlabKind::RawU32,    static_cast<uint32_t>(CAnimLayer<>::StaticTemporalIndex()),       0, SemGeneric}, // f=26 SlabIdx_Layer0AnimID
+		{GpuSlabTier::Temporal, GpuSlabKind::RawU32,    static_cast<uint32_t>(CAnimLayer<>::StaticTemporalIndex()),       1, SemGeneric}, // f=27 SlabIdx_Layer1AnimID
+		{GpuSlabTier::Temporal, GpuSlabKind::SimFloat,  static_cast<uint32_t>(CAnimLayer<>::StaticTemporalIndex()),       2, SemGeneric}, // f=28 SlabIdx_Layer0Timestamp
+		{GpuSlabTier::Temporal, GpuSlabKind::SimFloat,  static_cast<uint32_t>(CAnimLayer<>::StaticTemporalIndex()),       3, SemGeneric}, // f=29 SlabIdx_Layer1Timestamp
+		{GpuSlabTier::Temporal, GpuSlabKind::SimFloat,  static_cast<uint32_t>(CAnimLayer<>::StaticTemporalIndex()),       4, SemGeneric}, // f=30 SlabIdx_Layer0Alpha
+		{GpuSlabTier::Temporal, GpuSlabKind::SimFloat,  static_cast<uint32_t>(CAnimLayer<>::StaticTemporalIndex()),       5, SemGeneric}, // f=31 SlabIdx_Layer1Alpha
+		{GpuSlabTier::Temporal, GpuSlabKind::RawU32,    static_cast<uint32_t>(CAnimLayer<>::StaticTemporalIndex()),       6, SemGeneric}, // f=32 SlabIdx_Layer0Config
+		{GpuSlabTier::Temporal, GpuSlabKind::RawU32,    static_cast<uint32_t>(CAnimLayer<>::StaticTemporalIndex()),       7, SemGeneric}, // f=33 SlabIdx_Layer1Config
 		// Always-on entity cache index — no slab backing; scatter writes entity loop index directly.
 		// Needed for skinning (LBS reverse LUT) and GPU picking (fragment shader entity ID).
 		{GpuSlabTier::Volatile, GpuSlabKind::EntityIndex, 0, 0, SemEntityCacheIdx},

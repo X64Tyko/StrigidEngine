@@ -45,25 +45,8 @@ constexpr uint32_t SemColorA  = 15;
 constexpr uint32_t SemMeshID  = 16;
 // Always-on: scatter writes this to instance slot 16 from entity loop index i.
 constexpr uint32_t SemEntityCacheIdx = 17;
-// Animation slab fields — slab slot = f index in FieldDescriptions (16..34).
-constexpr uint32_t SemSkeletonID          = 18;
-constexpr uint32_t SemAnimBaseAnimID      = 19;
-constexpr uint32_t SemAnimBlendspaceID    = 21;
-constexpr uint32_t SemAnimBaseTimestamp   = 22;
-constexpr uint32_t SemAnimBlendCoordX     = 23;
-constexpr uint32_t SemAnimBlendCoordY     = 24;
-constexpr uint32_t SemAnimFadeAnimID      = 25;
-constexpr uint32_t SemAnimFadeTimestamp   = 26;
-constexpr uint32_t SemAnimFadeAlpha       = 27;
-constexpr uint32_t SemAnimFlags           = 28;
-constexpr uint32_t SemAnimLayer0AnimID    = 29;
-constexpr uint32_t SemAnimLayer1AnimID    = 30;
-constexpr uint32_t SemAnimLayer0Timestamp = 31;
-constexpr uint32_t SemAnimLayer1Timestamp = 32;
-constexpr uint32_t SemAnimLayer0Alpha     = 33;
-constexpr uint32_t SemAnimLayer1Alpha     = 34;
-constexpr uint32_t SemAnimLayer0Config    = 35;
-constexpr uint32_t SemAnimLayer1Config    = 36;
+// Animation slab fields use SemGeneric (0) — scatter skips them via the SemGeneric
+// early-out. GPU access goes through SlabIdx_XXX constants in GpuFrameData.slang.
 
 // GpuFrameData::DebugDrawMode values — only written by CPU when TNX_DEBUG_RENDERING.
 // The field is always present in the struct (it was _pad0); the shader branch is

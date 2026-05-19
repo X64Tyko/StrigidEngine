@@ -25,27 +25,12 @@ static const uint SemScaleX  = 9;  static const uint SemScaleY  = 10; static con
 static const uint SemColorR  = 12; static const uint SemColorG  = 13; static const uint SemColorB  = 14; static const uint SemColorA = 15;
 static const uint SemMeshID          = 16;
 static const uint SemEntityCacheIdx  = 17; // always-on: scatter → instance slot 16
-static const uint SemSkeletonID          = 18;
-static const uint SemAnimBaseAnimID      = 19;
-static const uint SemAnimBlendspaceID    = 20;
-static const uint SemAnimBaseTimestamp   = 21;
-static const uint SemAnimBlendCoordX     = 22;
-static const uint SemAnimBlendCoordY     = 23;
-static const uint SemAnimFadeAnimID      = 24;
-static const uint SemAnimFadeTimestamp   = 25;
-static const uint SemAnimFadeAlpha       = 26;
-static const uint SemAnimFlags           = 27;
-static const uint SemAnimLayer0AnimID    = 28;
-static const uint SemAnimLayer1AnimID    = 29;
-static const uint SemAnimLayer0Timestamp = 30;
-static const uint SemAnimLayer1Timestamp = 31;
-static const uint SemAnimLayer0Alpha     = 32;
-static const uint SemAnimLayer1Alpha     = 33;
-static const uint SemAnimLayer0Config    = 34;
-static const uint SemAnimLayer1Config    = 35;
+// Animation slab fields use SemGeneric — scatter skips them via the SemGeneric early-out.
+// GPU access goes through SlabIdx_XXX constants below.
 
 // Slab slot indices for skinning compute: CurrFieldAddrs[SlabIdx_XXX].
-// Formula: SlabIdx = sem - 2 for anim sems (18..35 → slab indices 16..33).
+// f-index matches the C++ SlabFieldDescs array order: output fields (0..15) then
+// anim fields (16..33 = SkeletonID + CAnimBase×9 + CAnimLayer×8).
 static const uint SlabIdx_SkeletonID      = 16;
 static const uint SlabIdx_BaseAnimID      = 17;
 static const uint SlabIdx_BlendspaceID    = 18;

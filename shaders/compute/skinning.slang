@@ -148,6 +148,7 @@ void main(uint3 tid : SV_DispatchThreadID)
     float posX  = ((float*)fd->CurrFieldAddrs[SemPosX  - 1u])[cacheIdx];
     float posY  = ((float*)fd->CurrFieldAddrs[SemPosY  - 1u])[cacheIdx];
     float posZ  = ((float*)fd->CurrFieldAddrs[SemPosZ  - 1u])[cacheIdx];
+    
     float rotQx = ((float*)fd->CurrFieldAddrs[SemRotQx - 1u])[cacheIdx];
     float rotQy = ((float*)fd->CurrFieldAddrs[SemRotQy - 1u])[cacheIdx];
     float rotQz = ((float*)fd->CurrFieldAddrs[SemRotQz - 1u])[cacheIdx];
