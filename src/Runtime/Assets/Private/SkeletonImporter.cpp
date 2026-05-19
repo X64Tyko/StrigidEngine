@@ -145,7 +145,7 @@ static bool MatInv16CM(const float m[16], float inv[16])
 
 static bool ImportSkeletalPrimitive(
 	const cgltf_primitive& prim,
-	const cgltf_skin*      skin,
+	[[maybe_unused]] const cgltf_skin*      skin,
 	const float            worldMatrix[16],
 	std::vector<Vertex>&       rawVerts,
 	std::vector<SkinWeights>&  rawWeights,
