@@ -80,7 +80,7 @@ struct GpuMeshInfo
     uint FirstIndex;
     uint IndexCount;
     int  VertexOffset;
-    uint _pad;
+    uint _pad;  // 4 bytes available
 };
 
 // Persistently-mapped per-frame GPU struct.
@@ -94,7 +94,7 @@ struct GpuFrameData
     float FoV;
     float OldFoV;
     float    AspectRatio;              // viewport width / height
-    float    _pad1;
+    float    _pad1;                    // 4 bytes available before InstancesAddr
     uint64_t InstancesAddr;            // sorted SoA — vertex shader reads from here
     uint64_t DrawArgsAddr;             // VkDrawIndexedIndirectCommand[MeshCount]
     uint64_t VerticesAddr;             // mesh vertex buffer (BDA)
@@ -109,7 +109,10 @@ struct GpuFrameData
     uint64_t MeshWriteIdxAddr;         // uint[256] atomic write indices for sort
     uint64_t MeshTableAddr;            // GpuMeshInfo[MeshCount]
     uint     MeshCount;                // number of registered mesh types
-    uint     _pad0;
+    uint8_t  DebugDrawMode;           // 0 = off; non-zero only when TNX_DEBUG_RENDERING shader variant
+    uint8_t  _pad0_a;                 // available for future debug flags
+    uint8_t  _pad0_b;
+    uint8_t  _pad0_c;
     // Skinning / animation GPU addresses
     uint64_t SkinMatrixAddr;            // float4x4[MAX_SKELETAL_INSTANCES × MAX_BONES_PER_ENTITY]
     uint64_t SkeletalListAddr;          // uint[MAX_SKELETAL_INSTANCES] compact entity cache indices (GPU-written by scatter)

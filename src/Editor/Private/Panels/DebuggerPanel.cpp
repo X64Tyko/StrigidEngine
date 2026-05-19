@@ -168,6 +168,27 @@ void DebuggerPanel::Draw(EditorState& state)
 			ImGui::EndTabItem();
 		}
 
+		// -----------------------------------------------------------------------
+		// Render Debug tab
+		// -----------------------------------------------------------------------
+#ifdef TNX_DEBUG_RENDERING
+		if (ImGui::BeginTabItem("Render Debug"))
+		{
+			static const char* ModeNames[] = { "Off", "Skin Path" };
+			int current = static_cast<int>(state.DebugDrawMode);
+			if (ImGui::Combo("Debug Mode", &current, ModeNames, IM_ARRAYSIZE(ModeNames)))
+				state.DebugDrawMode = static_cast<uint8_t>(current);
+
+			if (state.DebugDrawMode == 1)
+			{
+				ImGui::Spacing();
+				ImGui::TextColored(ImVec4(0.f, 1.f, 1.f, 1.f), "  Cyan  = skeletal (LBS path)");
+				ImGui::TextColored(ImVec4(0.f, 1.f, 0.f, 1.f), "  Green = static   (TRS path)");
+			}
+			ImGui::EndTabItem();
+		}
+#endif
+
 		ImGui::EndTabBar();
 	}
 

@@ -277,6 +277,13 @@ VSOut main(uint vertIdx : SV_VertexID, uint baseVert : SV_StartVertexLocation,
 
     float4 clipPos = mul(vp, worldPos);
 
+#ifdef TNX_DEBUG_RENDERING
+    if (fd->DebugDrawMode == 1u) // skin path
+        color = (skelIdx != 0xFFFFFFFFu && fd->SkinWeightAddr != 0)
+                    ? float4(0.0, 1.0, 1.0, 1.0)  // cyan  = skeletal
+                    : float4(0.0, 1.0, 0.0, 1.0); // green = static
+#endif
+
     VSOut o;
     o.pos      = clipPos;
     o.color    = color;

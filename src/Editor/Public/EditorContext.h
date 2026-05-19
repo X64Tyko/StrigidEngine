@@ -91,6 +91,7 @@ public:
 	void Redo();
 	bool CanUndo() const { return UndoIndex > 0; }
 	bool CanRedo() const { return UndoIndex < UndoStack.size(); }
+	EditorState& GetState() { return State; }
 
 private:
 	void BuildDockspace();

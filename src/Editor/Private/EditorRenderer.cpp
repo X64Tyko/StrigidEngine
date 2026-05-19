@@ -861,6 +861,10 @@ void EditorRenderer::FillGpuFrameDataForViewport(WorldViewport* vp, FrameSync& f
 
 	vp->GPUActiveFrame = vp->CurrentFieldSlab;
 	vp->GPUPrevFrame   = vp->PrevFieldSlab;
+
+#ifdef TNX_DEBUG_RENDERING
+	data->DebugDrawMode = Editor ? Editor->GetState().DebugDrawMode : 0u;
+#endif
 }
 
 // -----------------------------------------------------------------------

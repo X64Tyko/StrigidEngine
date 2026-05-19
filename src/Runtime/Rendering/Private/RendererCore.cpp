@@ -1160,7 +1160,11 @@ bool RendererCore<Derived>::CreateFrameSync()
 template <typename Derived>
 bool RendererCore<Derived>::LoadShaders()
 {
+#ifdef TNX_DEBUG_RENDERING
+	auto vert = ReadSPIRV(TNX_SHADER_DIR "/graphics/cube.vert_dbgrender.spv");
+#else
 	auto vert = ReadSPIRV(TNX_SHADER_DIR "/graphics/cube.vert.spv");
+#endif
 	auto frag = ReadSPIRV(TNX_SHADER_DIR "/graphics/cube.frag.spv");
 
 	if (vert.empty() || frag.empty())

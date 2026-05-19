@@ -65,6 +65,14 @@ constexpr uint32_t SemAnimLayer1Alpha     = 34;
 constexpr uint32_t SemAnimLayer0Config    = 35;
 constexpr uint32_t SemAnimLayer1Config    = 36;
 
+// GpuFrameData::DebugDrawMode values — only written by CPU when TNX_DEBUG_RENDERING.
+// The field is always present in the struct (it was _pad0); the shader branch is
+// compiled out entirely in shipping builds (no TNX_DEBUG_RENDERING define).
+#ifdef TNX_DEBUG_RENDERING
+constexpr uint8_t GpuDebugMode_Off      = 0;
+constexpr uint8_t GpuDebugMode_SkinPath = 1; // cyan = skeletal, green = static
+#endif
+
 // GPU-side mesh slot — mirrors MeshManager::MeshSlot for GPU read.
 // 16 bytes, tightly packed for storage buffer access.
 struct GpuMeshInfo
@@ -72,7 +80,7 @@ struct GpuMeshInfo
 	uint32_t FirstIndex;
 	uint32_t IndexCount;
 	int32_t VertexOffset;
-	uint32_t _pad;
+	uint32_t _pad;  // 4 bytes available
 };
 
 static_assert(sizeof(GpuMeshInfo) == 16, "GpuMeshInfo must be 16 bytes");
@@ -86,7 +94,7 @@ struct GpuFrameData
 	float FoV;
 	float OldFoV;
 	float AspectRatio;                        // offset  64
-	float _pad1;                              // offset  68
+	float _pad1;                              // offset  68 — 4 bytes available before InstancesAddr
 	uint64_t InstancesAddr;                   // offset  72 — sorted SoA (draw reads from here)
 	uint64_t DrawArgsAddr;                    // offset  80
 	uint64_t VerticesAddr;                    // offset  88
@@ -101,7 +109,8 @@ struct GpuFrameData
 	uint64_t MeshWriteIdxAddr;                // offset 144
 	uint64_t MeshTableAddr;                   // offset 152
 	uint32_t MeshCount;                       // offset 160
-	uint32_t _pad0;                           // offset 164
+	uint8_t  DebugDrawMode;                   // offset 164 — 0=off; non-zero only when TNX_DEBUG_RENDERING
+	uint8_t  _pad0[3];                        // offset 165 — available for future debug flags
 	// --- Skinning / animation GPU addresses ---
 	uint64_t SkinMatrixAddr;                  // offset 168 — float4x4[MAX_SKELETAL_INSTANCES × MAX_BONES_PER_ENTITY]
 	uint64_t SkeletalListAddr;                // offset 176 — uint[MAX_SKELETAL_INSTANCES] compact entity cache indices (GPU-written by scatter)

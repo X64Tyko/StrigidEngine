@@ -310,7 +310,7 @@ uint32_t MeshManager::LoadMesh(AssetID id)
 {
 	// If already loaded, return existing slot.
 	uint32_t slot = FindSlotByID(id);
-	if (slot != UINT32_MAX) return slot;
+	if (slot != UINT32_MAX && slot != 0) return slot;
 
 	const AssetEntry* entry = AssetRegistry::Get().Find(id);
 	if (!entry || entry->Type != AssetType::Mesh)

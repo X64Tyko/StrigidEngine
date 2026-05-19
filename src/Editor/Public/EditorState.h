@@ -85,4 +85,9 @@ struct EditorState
 	// --- Asset database (editor only, set by EditorContext) ---
 	AssetDatabase* AssetDB   = nullptr;
 	EditorContext* EditorCtx = nullptr;
+
+#ifdef TNX_DEBUG_RENDERING
+	// Active debug draw mode — written by DebuggerPanel, consumed by FillGpuFrameDataForViewport.
+	uint8_t DebugDrawMode = 0;
+#endif
 };

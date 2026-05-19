@@ -351,11 +351,13 @@ function(compile_slang SLANG_SRC EXTRA_DEFINES SPV_OUTPUT_LIST)
     get_filename_component(SHADER_DIR "${SLANG_SRC}" DIRECTORY)   # e.g. .../shaders/compute
     get_filename_component(SUBDIR "${SHADER_DIR}" NAME)       # e.g. compute, graphics
 
-    # Suffix for picking variants
+    # Suffix derived from the define set so multiple variants can coexist.
     set(VARIANT_SUFFIX "")
-    if (EXTRA_DEFINES)
+    if("${EXTRA_DEFINES}" MATCHES "TNX_GPU_PICKING")
         set(VARIANT_SUFFIX "_pick")
-    endif ()
+    elseif("${EXTRA_DEFINES}" MATCHES "TNX_DEBUG_RENDERING")
+        set(VARIANT_SUFFIX "_dbgrender")
+    endif()
 
     set(SPV_OUT "${CMAKE_SOURCE_DIR}/shaders/${SUBDIR}/${FINAL_NAME}${VARIANT_SUFFIX}.spv")
 
@@ -412,6 +414,16 @@ if (TNX_GPU_PICKING)
     foreach (SLANG_SRC ${PICK_SHADER_SOURCES})
         compile_slang("${SLANG_SRC}" "TNX_GPU_PICKING" SLANG_SPIRV_OUTPUTS)
     endforeach ()
+endif ()
+
+# --- TNX_DEBUG_RENDERING variant (vertex shader with runtime debug draw modes) ---
+if (TNX_DEBUG_RENDERING)
+    compile_slang(
+        "${CMAKE_SOURCE_DIR}/shaders/graphics/cube.vert.slang"
+        "TNX_DEBUG_RENDERING"
+        SLANG_SPIRV_OUTPUTS
+    )
+    target_compile_definitions(${PROJECT_NAME} PUBLIC TNX_DEBUG_RENDERING)
 endif ()
 
 add_custom_target(TrinyxShaders ALL DEPENDS ${SLANG_SPIRV_OUTPUTS})

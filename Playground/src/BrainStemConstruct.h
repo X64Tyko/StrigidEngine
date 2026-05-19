@@ -29,7 +29,7 @@ public:
 		AssetRegistry& reg = AssetRegistry::Get();
 		reg.TriggerLoad<AssetType::Mesh>(TNX_NAME("BrainStem"));
 		reg.TriggerLoad<AssetType::Skeleton>(TNX_NAME("BrainStem"));
-		reg.TriggerLoad<AssetType::Animation>(TNX_NAME("BrainStem"));
+		reg.TriggerLoad<AssetType::Animation>(TNX_NAME("BrainStem_anim"));
 	}
 
 	void InitializeViews()
@@ -43,7 +43,7 @@ public:
 
 		Body.Mesh.SetMesh(TNX_NAME("BrainStem"));
 		Body.SkeletonRef.SetSkeleton(TNX_NAME("BrainStem"));
-		Body.AnimBase.SetAnim(TNX_NAME("BrainStem"), SimFloat(0.f), true);
+		Body.AnimBase.SetAnim(TNX_NAME("BrainStem_anim"), SimFloat(0.f), true);
 
 		if (auto skelRef = AssetRegistry::Get().GetAssetData<SkeletonAsset>(TNX_NAME("BrainStem"))) RegisterSockets(skelRef);
 		else

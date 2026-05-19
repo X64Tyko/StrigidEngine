@@ -13,7 +13,7 @@ struct alignas(16) SnapshotEntry
 	float PositionX, PositionY, PositionZ;
 	float RotQx, RotQy, RotQz, RotQw;
 	float ScaleX, ScaleY, ScaleZ;
-	float _pad0; // Padding to 64 bytes
+	float _pad0; // 4 bytes available (rounds transform block to 64 bytes)
 
 	// ColorData (16 bytes)
 	float ColorR, ColorG, ColorB, ColorA = 0.f;

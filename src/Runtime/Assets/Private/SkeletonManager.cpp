@@ -114,38 +114,33 @@ uint32_t SkeletonManager::CommitToSlot(const SkeletonAsset& asset, AssetID id)
 
 	CpuCopies[slotID] = asset; // full copy — bones + sockets retained for chain walks
 
-	// Expose CPU copy immediately via CPUData so GetAssetData<SkeletonAsset> works
-	// before the Render-queue GPU job completes (which sets Data + fires OnLoaded).
 	if (id.IsValid())
 	{
 		if (AssetEntry* entry = AssetRegistry::Get().FindMutable(id))
 			entry->CPUData = &CpuCopies[slotID];
 	}
 
-	// Push inverse bind poses and parent indices to GPU on the Render queue.
-	// CpuCopies[slotID] is persistent so the lambda capture is safe.
-	GpuBoneData* gpuBones    = static_cast<GpuBoneData*>(BoneDataBuffer.MappedPtr) + NextBoneOffset;
-	uint32_t*    gpuParents  = static_cast<uint32_t*>(BoneParentBuffer.MappedPtr) + NextBoneOffset;
-	const SkeletonAsset* cpu = &CpuCopies[slotID];
-	TrinyxJobs::DispatchNamed("GpuPush_Skeleton", [gpuBones, gpuParents, cpu, id, slotID](uint32_t)
+	// Fill GPU bone buffers synchronously — PersistentMapped, so writes are immediately
+	// visible to the GPU. Mirrors MeshManager's synchronous approach so that OnLoaded
+	// fires on the calling (Logic) thread with valid FieldProxy cursors.
+	GpuBoneData* gpuBones   = static_cast<GpuBoneData*>(BoneDataBuffer.MappedPtr) + NextBoneOffset;
+	uint32_t*    gpuParents = static_cast<uint32_t*>(BoneParentBuffer.MappedPtr) + NextBoneOffset;
+	for (uint32_t i = 0; i < asset.boneCount; ++i)
 	{
-		for (uint32_t i = 0; i < cpu->boneCount; ++i)
-		{
-			std::memcpy(gpuBones[i].inverseBindPose, cpu->bones[i].inverseBindPose, sizeof(float) * 16);
-			gpuParents[i] = cpu->bones[i].parentIndex;
-		}
+		std::memcpy(gpuBones[i].inverseBindPose, asset.bones[i].inverseBindPose, sizeof(float) * 16);
+		gpuParents[i] = asset.bones[i].parentIndex;
+	}
 
-		if (id.IsValid())
+	if (id.IsValid())
+	{
+		if (AssetEntry* entry = AssetRegistry::Get().FindMutable(id))
 		{
-			if (AssetEntry* entry = AssetRegistry::Get().FindMutable(id))
-			{
-				entry->Data  = reinterpret_cast<void*>(static_cast<uintptr_t>(slotID));
-				entry->State = RuntimeFlags::Loaded;
-				entry->OnLoaded(slotID);
-				entry->OnLoaded.Reset();
-			}
+			entry->Data  = reinterpret_cast<void*>(static_cast<uintptr_t>(slotID));
+			entry->State = RuntimeFlags::Loaded;
+			entry->OnLoaded(slotID);
+			entry->OnLoaded.Reset();
 		}
-	}, &GpuUploadCounter, TrinyxJobs::Queue::Render);
+	}
 
 	NextBoneOffset += asset.boneCount;
 

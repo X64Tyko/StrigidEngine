@@ -578,7 +578,7 @@ struct GameModeManifestPayload : BaseNetPayload<TDerived>
 	uint8_t LevelNameLength; // Length of LevelName (excluding null terminator)
 	char LevelName[62];      // Display name of the active level (null-terminated)
 	uint8_t MaxPlayers;      // Max player count for UI display
-	uint8_t _pad[1];         // alignment
+	uint8_t _pad[1];         // 1 byte available
 };
 
 // ---------------------------------------------------------------------------
@@ -597,7 +597,7 @@ template <typename TDerived>
 struct ClientModeManifestPayload : BaseNetPayload<TDerived>
 {
 	uint8_t ManifestSequenceID; // SequenceID of the GameModeManifest being acknowledged
-	uint8_t _pad[3];            // alignment
+	uint8_t _pad[3];            // 3 bytes available (game preference flags, e.g. PreferredTeam)
 };
 
 // ---------------------------------------------------------------------------

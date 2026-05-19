@@ -1,5 +1,6 @@
 #include "EditorContext.h"
 #include "EditorPanel.h"
+#include "GpuFrameData.h"
 #include "TnxPalette.h"
 #include "TnxStyle.h"
 #include "TnxWidgets.h"
@@ -600,6 +601,10 @@ void EditorContext::BuildFrame()
 		if (ImGui::IsKeyPressed(ImGuiKey_R)) State.CurrentGizmoOp = EditorState::GizmoOp::Scale;
 		if (ImGui::IsKeyPressed(ImGuiKey_Z) && io.KeyCtrl && !io.KeyShift) Undo();
 		if (ImGui::IsKeyPressed(ImGuiKey_Y) && io.KeyCtrl) Redo();
+#ifdef TNX_DEBUG_RENDERING
+		if (ImGui::IsKeyPressed(ImGuiKey_F1) && !io.KeyShift) State.DebugDrawMode = GpuDebugMode_Off;
+		if (ImGui::IsKeyPressed(ImGuiKey_F2))                 State.DebugDrawMode = GpuDebugMode_SkinPath;
+#endif
 	}
 
 	// Modals / overlays
