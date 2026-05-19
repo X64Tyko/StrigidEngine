@@ -26,11 +26,14 @@ if (NOT TNX_ENABLE_NETWORK)
 endif ()
 
 # Exclude Rendering sources in headless builds — no GPU, no window, no Vulkan.
+# Also exclude the three GPU-dependent asset managers (they own Vulkan buffers).
+# CPU-side asset evaluation (AnimationAsset, SkeletonAsset, AssetRegistry, importers)
+# has no Vulkan dependency and stays in so headless builds and unit tests can use it.
 if (TNX_HEADLESS)
     list(FILTER ENGINE_SOURCES EXCLUDE REGEX ".*/Rendering/.*\\.cpp$")
     list(FILTER ENGINE_HEADERS EXCLUDE REGEX ".*/Rendering/.*\\.h$")
-    list(FILTER ENGINE_SOURCES EXCLUDE REGEX ".*/Assets/.*\\.cpp$")
-    list(FILTER ENGINE_HEADERS EXCLUDE REGEX ".*/Assets/.*\\.h$")
+    list(FILTER ENGINE_SOURCES EXCLUDE REGEX ".*/Assets/Private/(AnimationManager|MeshManager|SkeletonManager)\\.cpp$")
+    list(FILTER ENGINE_HEADERS EXCLUDE REGEX ".*/Assets/Private/(AnimationManager|MeshManager|SkeletonManager)\\.h$")
 endif ()
 
 # Remove the old NetThread now that it is replaced by the role-split classes.
