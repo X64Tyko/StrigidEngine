@@ -74,6 +74,7 @@ bool LogicThread::TickPause(const uint64_t perfFrequency, const uint64_t frameSt
 {
 	if (bSimPaused.load(std::memory_order_acquire)) [[unlikely]]
 	{
+		PausedAtFrame.store(FrameNumber, std::memory_order_release);
 		ProcessSimInput(static_cast<SimFloat>(dt));
 		ProcessVizInput(static_cast<SimFloat>(dt));
 		PublishCompletedFrame();

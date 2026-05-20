@@ -106,6 +106,8 @@ public:
 	void SetSimPaused(bool paused) { bSimPaused.store(paused, std::memory_order_release); }
 	/// @brief Returns true while the sim loop is paused.
 	bool IsSimPaused() const { return bSimPaused.load(std::memory_order_acquire); }
+	/// @brief Frame number at which the sim was paused. Valid while IsSimPaused(). Editor scrubber uses this as the rewind target.
+	uint32_t GetPausedAtFrame() const { return PausedAtFrame.load(std::memory_order_acquire); }
 
 	/// @brief Inject the ConstructRegistry so Constructs can self-register at spawn time.
 	void SetConstructRegistry(ConstructRegistry* cr) { ConstructsPtr = cr; }
@@ -186,7 +188,8 @@ protected:
 	// --- Threading ---
 	std::thread       Thread;
 	std::atomic<bool> bIsRunning{false};
-	std::atomic<bool> bSimPaused{false};
+	std::atomic<bool>     bSimPaused{false};
+	std::atomic<uint32_t> PausedAtFrame{0};
 
 	// --- Timing ---
 	std::atomic<double> Accumulator{0.0};

@@ -44,4 +44,7 @@ private:
 
 	/// Write GeneratedCode to OutputPath.
 	bool ExportToFile();
+
+	/// Register (or update) the current schema in ScriptRegistry — no recompile needed.
+	void RegisterAsScript();
 };

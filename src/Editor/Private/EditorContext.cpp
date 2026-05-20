@@ -50,7 +50,6 @@
 #include "Panels/EngineStatsPanel.h"
 #include "Panels/LogPanel.h"
 #include "Panels/ContentBrowserPanel.h"
-#include "Panels/NodeScriptPanel.h"
 #include "Panels/ComponentGeneratorPanel.h"
 #include "Panels/DebuggerPanel.h"
 
@@ -123,7 +122,6 @@ void EditorContext::Initialize(TrinyxEngine* engine, LogicThreadBase* logic)
 	AddPanel<EngineStatsPanel>();
 	AddPanel<LogPanel>();
 	AddPanel<ContentBrowserPanel>();
-	AddPanel<NodeScriptPanel>();
 	AddPanel<ComponentGeneratorPanel>();
 	AddPanel<DebuggerPanel>();
 
@@ -838,7 +836,6 @@ void EditorContext::ApplyWorkspaceLayout(unsigned int dockspaceID, Workspace ws)
 			ImGui::DockBuilderDockWindow("Content Browser",      bottom);
 			ImGui::DockBuilderDockWindow("Log",                  bottom);
 			ImGui::DockBuilderDockWindow("Engine Stats",         bottom);
-			ImGui::DockBuilderDockWindow("Node Script",          bottom);
 			ImGui::DockBuilderDockWindow("Component Generator",  bottom);
 			ImGui::DockBuilderDockWindow("Debugger",             bottom);
 			break;
@@ -851,11 +848,10 @@ void EditorContext::ApplyWorkspaceLayout(unsigned int dockspaceID, Workspace ws)
 			ImGui::DockBuilderSplitNode(mainArea,    ImGuiDir_Down,  0.22f, &mainBottom, &mainArea);
 
 			ImGui::DockBuilderDockWindow("World Outliner",       leftNarrow);
-			ImGui::DockBuilderDockWindow("Node Script",          mainArea);
+			ImGui::DockBuilderDockWindow("Viewport",             mainArea);
 			ImGui::DockBuilderDockWindow("Component Generator",  mainRight);
 			ImGui::DockBuilderDockWindow("Details",              mainRight);
 			ImGui::DockBuilderDockWindow("Log",                  mainBottom);
-			ImGui::DockBuilderDockWindow("Viewport",             mainBottom);
 			ImGui::DockBuilderDockWindow("Content Browser",      mainBottom);
 			ImGui::DockBuilderDockWindow("Engine Stats",         mainBottom);
 			ImGui::DockBuilderDockWindow("Debugger",             mainBottom);
@@ -874,7 +870,6 @@ void EditorContext::ApplyWorkspaceLayout(unsigned int dockspaceID, Workspace ws)
 			ImGui::DockBuilderDockWindow("Engine Stats",         bottomStrip);
 			ImGui::DockBuilderDockWindow("Debugger",             bottomStrip);
 			ImGui::DockBuilderDockWindow("Content Browser",      bottomStrip);
-			ImGui::DockBuilderDockWindow("Node Script",          bottomStrip);
 			ImGui::DockBuilderDockWindow("Component Generator",  bottomStrip);
 			break;
 		}
@@ -891,7 +886,6 @@ void EditorContext::ApplyWorkspaceLayout(unsigned int dockspaceID, Workspace ws)
 			ImGui::DockBuilderDockWindow("Engine Stats",         netBottom);
 			ImGui::DockBuilderDockWindow("World Outliner",       netBottom);
 			ImGui::DockBuilderDockWindow("Content Browser",      netBottom);
-			ImGui::DockBuilderDockWindow("Node Script",          netBottom);
 			ImGui::DockBuilderDockWindow("Component Generator",  netBottom);
 			break;
 		}
@@ -908,7 +902,6 @@ void EditorContext::ApplyWorkspaceLayout(unsigned int dockspaceID, Workspace ws)
 			ImGui::DockBuilderDockWindow("Log",                  profBottom);
 			ImGui::DockBuilderDockWindow("Details",              profBottom);
 			ImGui::DockBuilderDockWindow("Content Browser",      profBottom);
-			ImGui::DockBuilderDockWindow("Node Script",          profBottom);
 			ImGui::DockBuilderDockWindow("Component Generator",  profBottom);
 			break;
 		}
