@@ -47,7 +47,7 @@ static ImVec4 LevelTextColor(LogLevel level)
 
 void LogPanel::Draw(EditorState& /*state*/)
 {
-	if (!ImGui::Begin(Title, &bVisible)) { ImGui::End(); return; }
+	if (!BeginPadded()) { ImGui::End(); return; }
 
 	static bool showTrace = false, showDebug = true, showInfo  = true;
 	static bool showWarn  = true,  showError  = true, showFatal = true;

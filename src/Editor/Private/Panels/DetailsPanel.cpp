@@ -436,7 +436,7 @@ static void DrawComponentList(const ReflectionRegistry& cfr, Archetype* arch,
 
 void DetailsPanel::Draw(EditorState& state)
 {
-	if (!ImGui::Begin(Title, &bVisible)) { ImGui::End(); return; }
+	if (!BeginPadded()) { ImGui::End(); return; }
 	TnxWidgets::PanelHeader(nullptr, "Details");
 
 	// --- None ---

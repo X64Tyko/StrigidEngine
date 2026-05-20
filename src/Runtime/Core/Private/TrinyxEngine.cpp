@@ -642,7 +642,9 @@ void TrinyxEngine::PumpEvents()
 				break;
 
 			case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:
-			case SDL_EVENT_WINDOW_RESIZED: if (Render) Render->NotifyResize();
+			case SDL_EVENT_WINDOW_RESIZED:
+				if (e.window.windowID == SDL_GetWindowID(EngineWindow))
+					if (Render) Render->NotifyResize();
 				break;
 
 			default: break;

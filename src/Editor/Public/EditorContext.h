@@ -15,7 +15,9 @@
 #include "UndoCommand.h"
 #include "imgui.h"
 
+class ConstructEditorWindow;
 class EditorPanel;
+class EntityEditorWindow;
 class FlowManagerBase;
 class LogicThreadBase;
 class ReplicationSystem;
@@ -42,6 +44,11 @@ public:
 	/// Load a scene file: reset registry, spawn entities, update editor state.
 	/// If bReset is false, skips ResetRegistry (used for initial load into an empty world).
 	void LoadScene(const std::string& path, bool bReset = true);
+
+	/// Open the Construct editor and create/focus a tab for the given type name.
+	void OpenConstructEditor(const char* typeName);
+	/// Open the Entity editor and create/focus a tab for the given type name.
+	void OpenEntityEditor(const char* typeName);
 
 	/// Show the mesh import dialog (called from ContentBrowserPanel).
 	void ShowImportDialog()
@@ -100,6 +107,10 @@ private:
 
 	TrinyxEngine* EnginePtr = nullptr;
 	LogicThreadBase* LogicPtr   = nullptr;
+	ConstructEditorWindow* ConstructEditorPtr = nullptr;
+	EntityEditorWindow*    EntityEditorPtr    = nullptr;
+	EditorPanel*           OutlinerPanelPtr   = nullptr;
+	EditorPanel*           DetailsPanelPtr    = nullptr;
 
 	EditorState State;
 	AssetDatabase AssetDB;

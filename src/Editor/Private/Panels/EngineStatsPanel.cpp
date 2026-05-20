@@ -9,7 +9,7 @@
 
 void EngineStatsPanel::Draw(EditorState& state)
 {
-	if (!ImGui::Begin(Title, &bVisible)) { ImGui::End(); return; }
+	if (!BeginPadded()) { ImGui::End(); return; }
 
 	TnxWidgets::PanelHeader(nullptr, "Engine Stats");
 

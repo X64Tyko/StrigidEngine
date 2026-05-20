@@ -160,19 +160,20 @@ void TnxWidgets::PanelHeader(const char* icon, const char* title,
 {
     using namespace TnxStyle::Color;
 
-    const float H     = 36.0f;
-    const ImVec2 start = ImGui::GetCursorScreenPos();
-    const float wid   = ImGui::GetContentRegionAvail().x;
-    ImDrawList* dl    = ImGui::GetWindowDrawList();
+    const float  H      = 36.0f;
+    const ImVec2 cursor = ImGui::GetCursorScreenPos();
+    const ImVec2 winP   = ImGui::GetWindowPos();
+    const float  winW   = ImGui::GetWindowSize().x;
+    ImDrawList* dl      = ImGui::GetWindowDrawList();
 
-    dl->AddRectFilled(start, ImVec2(start.x + wid, start.y + H),
+    // Background rect spans the full window width regardless of WindowPadding.
+    dl->AddRectFilled({winP.x, cursor.y}, {winP.x + winW, cursor.y + H},
                       ImGui::ColorConvertFloat4ToU32(BgElev));
-    dl->AddLine(ImVec2(start.x, start.y + H),
-                ImVec2(start.x + wid, start.y + H),
+    dl->AddLine({winP.x, cursor.y + H}, {winP.x + winW, cursor.y + H},
                 ImGui::ColorConvertFloat4ToU32(BorderSoft), 1.0f);
 
-    const float textY = start.y + (H - ImGui::GetTextLineHeight()) * 0.5f;
-    ImGui::SetCursorScreenPos(ImVec2(start.x + 10, textY));
+    const float textY = cursor.y + (H - ImGui::GetTextLineHeight()) * 0.5f;
+    ImGui::SetCursorScreenPos(ImVec2(winP.x + 10, textY));
 
     ImGui::PushStyleColor(ImGuiCol_Text, FgMuted);
 
@@ -199,15 +200,13 @@ void TnxWidgets::PanelHeader(const char* icon, const char* title,
     if (right)
     {
         ImGui::SameLine();
-        // Move the cursor to the right side of the header so the callback
-        // can draw right-aligned chips / buttons.
-        float rightX = start.x + wid - 6.0f;
+        float rightX = winP.x + winW - 6.0f;
         ImGui::SetCursorScreenPos(ImVec2(rightX, textY));
         right();
     }
 
-    // Advance past the header bar
-    ImGui::SetCursorScreenPos(ImVec2(start.x, start.y + H + 1));
+    // Advance past the header bar; cursor.x is already at the padded content left.
+    ImGui::SetCursorScreenPos(ImVec2(cursor.x, cursor.y + H + 1));
 }
 
 // ---------------------------------------------------------------------------

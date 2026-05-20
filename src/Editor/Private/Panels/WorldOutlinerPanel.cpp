@@ -22,7 +22,7 @@ static const char* StripTypePrefix(const char* name)
 
 void WorldOutlinerPanel::Draw(EditorState& state)
 {
-	if (!ImGui::Begin(Title, &bVisible)) { ImGui::End(); return; }
+	if (!BeginPadded()) { ImGui::End(); return; }
 
 	ConstructRegistry* cr = state.LogicPtr ? state.LogicPtr->GetConstructRegistry() : nullptr;
 

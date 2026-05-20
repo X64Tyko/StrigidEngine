@@ -1,4 +1,5 @@
 #pragma once
+#include "imgui.h"
 
 struct EditorState;
 
@@ -21,6 +22,17 @@ public:
 	}
 
 	virtual void Draw(EditorState& state) = 0;
+
+	/// Begin() with horizontal WindowPadding=8 so content doesn't touch panel edges.
+	/// PanelHeader draws edge-to-edge by using GetWindowPos() directly — padding
+	/// only affects the content cursor below the header bar.
+	bool BeginPadded(ImGuiWindowFlags flags = 0)
+	{
+		ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8.0f, 0.0f));
+		bool open = ImGui::Begin(Title, &bVisible, flags);
+		ImGui::PopStyleVar();
+		return open;
+	}
 
 	const char* Title;
 	bool bVisible = true;

@@ -13,6 +13,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <string_view>
 
 namespace fs = std::filesystem;
 
@@ -69,11 +70,17 @@ bool ContentBrowserPanel::MatchesFilter(const AssetDatabaseEntry& entry) const
 
 void ContentBrowserPanel::Draw(EditorState& state)
 {
-    if (!ImGui::Begin(Title, &bVisible)) { ImGui::End(); return; }
+    if (!BeginPadded()) { ImGui::End(); return; }
     if (state.ConfigPtr && state.ConfigPtr->ProjectDir[0])
+    {
         ContentRoot = std::string(state.ConfigPtr->ProjectDir) + "/content";
+        SourceRoot  = std::string(state.ConfigPtr->ProjectDir) + "/src";
+    }
     else
+    {
         ContentRoot.clear();
+        SourceRoot.clear();
+    }
 
     if (!state.AssetDB || ContentRoot.empty())
     {
@@ -93,7 +100,9 @@ void ContentBrowserPanel::Draw(EditorState& state)
     ImGui::SameLine(0, 4.0f);
 
     ImGui::BeginChild("##AssetArea", {0, 0}, ImGuiChildFlags_None);
-    if (CurrentViewMode == ViewMode::Icons)
+    if (ActiveSection == BrowserSection::Source && !SourceRoot.empty())
+        DrawSourcePane(state);
+    else if (CurrentViewMode == ViewMode::Icons)
         DrawAssetPane(state);
     else
         DrawAssetList(state);
@@ -101,6 +110,7 @@ void ContentBrowserPanel::Draw(EditorState& state)
 
     // Modals live at the top level (outside child windows)
     DrawCreatePopup(state);
+    DrawSourceCreatePopup(state);
 
     if (bShowRename) { ImGui::OpenPopup("##CBRename"); bShowRename = false; }
     ImGui::SetNextWindowSize({280, 0}, ImGuiCond_Always);
@@ -145,12 +155,14 @@ void ContentBrowserPanel::DrawToolbar(EditorState& state)
     // --- Integrated header bar ---
     const float  H    = 40.0f;
     const ImVec2 barP = ImGui::GetCursorScreenPos();
-    const float  barW = ImGui::GetContentRegionAvail().x;
+    const ImVec2 winP = ImGui::GetWindowPos();
+    const float  winW = ImGui::GetWindowSize().x;
     ImDrawList*  dl   = ImGui::GetWindowDrawList();
 
-    dl->AddRectFilled(barP, {barP.x + barW, barP.y + H},
+    // Rect spans the full window width so the bar is edge-to-edge regardless of padding.
+    dl->AddRectFilled({winP.x, barP.y}, {winP.x + winW, barP.y + H},
                       ImGui::ColorConvertFloat4ToU32(TnxStyle::Color::BgElev));
-    dl->AddLine({barP.x, barP.y + H}, {barP.x + barW, barP.y + H},
+    dl->AddLine({winP.x, barP.y + H}, {winP.x + winW, barP.y + H},
                 ImGui::ColorConvertFloat4ToU32(TnxStyle::Color::BorderSoft), 1.0f);
 
     // Reduced FramePadding so controls sit neatly inside H=40
@@ -159,7 +171,7 @@ void ContentBrowserPanel::DrawToolbar(EditorState& state)
     const float ctrlY = barP.y + (H - itemH) * 0.5f;      // vertically centred
 
     // Compute right-side total width so we can anchor controls to the right
-    static const char* kTypeNames[] = {
+    static const char* TypeNames[] = {
         "All", "Data", "Mesh", "Skeleton", "Material",
         "Texture", "Audio", "Animation", "Level", "Prefab"
     };
@@ -174,8 +186,8 @@ void ContentBrowserPanel::DrawToolbar(EditorState& state)
     float rightW = searchW + gap + filterW + gap + gridW + 2.0f + listW;
     if (CurrentViewMode == ViewMode::Icons) rightW += gap + sliderW;
 
-    // Title — left side
-    ImGui::SetCursorScreenPos({barP.x + 10.0f,
+    // Title — anchored to window left
+    ImGui::SetCursorScreenPos({winP.x + 10.0f,
                                barP.y + (H - ImGui::GetTextLineHeight()) * 0.5f});
     ImGui::PushFont(TnxStyle::Font::UiSemibold);
     ImGui::PushStyleColor(ImGuiCol_Text, TnxStyle::Color::FgMuted);
@@ -183,15 +195,15 @@ void ContentBrowserPanel::DrawToolbar(EditorState& state)
     ImGui::PopStyleColor();
     ImGui::PopFont();
 
-    // Right-side controls
-    ImGui::SetCursorScreenPos({barP.x + barW - rightW - 10.0f, ctrlY});
+    // Right-side controls — anchored to window right
+    ImGui::SetCursorScreenPos({winP.x + winW - rightW - 10.0f, ctrlY});
 
     ImGui::SetNextItemWidth(searchW);
     ImGui::InputTextWithHint("##CBSearch", "Search...", SearchBuf, sizeof(SearchBuf));
     ImGui::SameLine(0, gap);
 
     ImGui::SetNextItemWidth(filterW);
-    ImGui::Combo("##CBTypeFilter", &TypeFilter, kTypeNames, 10);
+    ImGui::Combo("##CBTypeFilter", &TypeFilter, TypeNames, 10);
     ImGui::SameLine(0, gap);
 
     // Grid / List toggle
@@ -222,41 +234,53 @@ void ContentBrowserPanel::DrawToolbar(EditorState& state)
     // Advance cursor past the bar
     ImGui::SetCursorScreenPos({barP.x, barP.y + H + 1.0f});
 
-    // --- Secondary row: Import + breadcrumb ---
+    // --- Secondary row: breadcrumb + section-specific actions ---
     ImGui::Spacing();
 
-    if (TnxWidgets::ButtonPrimary("Import...") && state.EditorCtx)
-        state.EditorCtx->ShowImportDialog();
-    ImGui::SameLine(0, 12.0f);
-
     ImGui::PushStyleColor(ImGuiCol_Text, TnxStyle::Color::FgMuted);
-    ImGui::PushFont(TnxStyle::Font::UiSemibold);
-    if (ImGui::SmallButton("Content")) CurrentFolder.clear();
-    ImGui::PopFont();
 
-    if (!CurrentFolder.empty())
+    auto DrawBreadcrumb = [&](const std::string& rootLabel, std::string& folder)
     {
-        std::string accum;
-        size_t      pos = 0;
-        while (pos < CurrentFolder.size())
+        ImGui::PushFont(TnxStyle::Font::UiSemibold);
+        if (ImGui::SmallButton(rootLabel.c_str())) folder.clear();
+        ImGui::PopFont();
+
+        if (!folder.empty())
         {
-            size_t end = CurrentFolder.find('/', pos);
-            if (end == std::string::npos) end = CurrentFolder.size();
+            std::string accum;
+            size_t pos = 0;
+            while (pos < folder.size())
+            {
+                size_t end = folder.find('/', pos);
+                if (end == std::string::npos) end = folder.size();
 
-            std::string seg = CurrentFolder.substr(pos, end - pos);
-            if (!accum.empty()) accum += '/';
-            accum += seg;
+                std::string seg = folder.substr(pos, end - pos);
+                if (!accum.empty()) accum += '/';
+                accum += seg;
 
-            ImGui::SameLine(0, 2); ImGui::TextUnformatted(">");
-            ImGui::SameLine(0, 2);
+                ImGui::SameLine(0, 2); ImGui::TextUnformatted(">");
+                ImGui::SameLine(0, 2);
 
-            std::string nav = accum;
-            ImGui::PushFont(TnxStyle::Font::UiSemibold);
-            if (ImGui::SmallButton(seg.c_str())) CurrentFolder = nav;
-            ImGui::PopFont();
+                std::string nav = accum;
+                ImGui::PushFont(TnxStyle::Font::UiSemibold);
+                if (ImGui::SmallButton(seg.c_str())) folder = nav;
+                ImGui::PopFont();
 
-            pos = end + 1;
+                pos = end + 1;
+            }
         }
+    };
+
+    if (ActiveSection == BrowserSection::Content)
+    {
+        if (TnxWidgets::ButtonPrimary("Import...") && state.EditorCtx)
+            state.EditorCtx->ShowImportDialog();
+        ImGui::SameLine(0, 12.0f);
+        DrawBreadcrumb("Content", CurrentFolder);
+    }
+    else
+    {
+        DrawBreadcrumb("Source", SourceCurrentFolder);
     }
 
     ImGui::PopStyleColor();
@@ -269,46 +293,111 @@ void ContentBrowserPanel::DrawToolbar(EditorState& state)
 
 void ContentBrowserPanel::DrawFolderPane(EditorState& state)
 {
-    ImGuiTreeNodeFlags rootFlags =
-        ImGuiTreeNodeFlags_OpenOnArrow   |
-        ImGuiTreeNodeFlags_DefaultOpen   |
-        ImGuiTreeNodeFlags_SpanFullWidth |
-        (CurrentFolder.empty() ? ImGuiTreeNodeFlags_Selected : 0);
-
-    ImGui::PushStyleColor(ImGuiCol_Header,        TnxStyle::Color::PurpleFaint);
-    ImGui::PushStyleColor(ImGuiCol_HeaderHovered, TnxStyle::Color::BgElev);
-    ImGui::PushStyleColor(ImGuiCol_HeaderActive,  TnxStyle::Color::PurpleSoft);
-    bool rootOpen = ImGui::TreeNodeEx("##cbroot", rootFlags, "Content");
-    ImGui::PopStyleColor(3);
-
-    if (ImGui::IsItemClicked(0) && !ImGui::IsItemToggledOpen())
-        CurrentFolder.clear();
-
-    if (ImGui::BeginPopupContextItem("##rootFolderCtx"))
+    // --- Content root ---
     {
-        if (ImGui::MenuItem("New Folder..."))
+        const bool contentRootSelected = (ActiveSection == BrowserSection::Content && CurrentFolder.empty());
+        ImGuiTreeNodeFlags rootFlags =
+            ImGuiTreeNodeFlags_OpenOnArrow   |
+            ImGuiTreeNodeFlags_DefaultOpen   |
+            ImGuiTreeNodeFlags_SpanFullWidth |
+            (contentRootSelected ? ImGuiTreeNodeFlags_Selected : 0);
+
+        ImGui::PushStyleColor(ImGuiCol_Header,        TnxStyle::Color::PurpleFaint);
+        ImGui::PushStyleColor(ImGuiCol_HeaderHovered, TnxStyle::Color::BgElev);
+        ImGui::PushStyleColor(ImGuiCol_HeaderActive,  TnxStyle::Color::PurpleSoft);
+        bool rootOpen = ImGui::TreeNodeEx("##cbroot", rootFlags, "Content");
+        ImGui::PopStyleColor(3);
+
+        if (ImGui::IsItemClicked(0) && !ImGui::IsItemToggledOpen())
         {
+            ActiveSection = BrowserSection::Content;
             CurrentFolder.clear();
-            OpenCreatePopup(true);
         }
-        if (ImGui::MenuItem("Refresh"))
-            state.AssetDB->Reconcile();
-        ImGui::EndPopup();
+
+        if (ImGui::BeginPopupContextItem("##rootFolderCtx"))
+        {
+            if (ImGui::MenuItem("New Folder..."))
+            {
+                ActiveSection = BrowserSection::Content;
+                CurrentFolder.clear();
+                OpenCreatePopup(true);
+            }
+            if (ImGui::MenuItem("Refresh"))
+                state.AssetDB->Reconcile();
+            ImGui::EndPopup();
+        }
+
+        if (rootOpen)
+        {
+            try
+            {
+                std::vector<fs::path> subdirs;
+                for (const auto& e : fs::directory_iterator(ContentRoot))
+                    if (e.is_directory()) subdirs.push_back(e.path());
+                std::sort(subdirs.begin(), subdirs.end());
+                for (const auto& d : subdirs)
+                    DrawFolderNode(d, 0);
+            }
+            catch (...) {}
+            ImGui::TreePop();
+        }
     }
 
-    if (rootOpen)
+    ImGui::Spacing();
+
+    // --- Source root ---
+    if (!SourceRoot.empty())
     {
-        try
+        const bool sourceRootSelected = (ActiveSection == BrowserSection::Source && SourceCurrentFolder.empty());
+        ImGuiTreeNodeFlags srcRootFlags =
+            ImGuiTreeNodeFlags_OpenOnArrow   |
+            ImGuiTreeNodeFlags_DefaultOpen   |
+            ImGuiTreeNodeFlags_SpanFullWidth |
+            (sourceRootSelected ? ImGuiTreeNodeFlags_Selected : 0);
+
+        ImGui::PushStyleColor(ImGuiCol_Header,        TnxStyle::Color::PurpleFaint);
+        ImGui::PushStyleColor(ImGuiCol_HeaderHovered, TnxStyle::Color::BgElev);
+        ImGui::PushStyleColor(ImGuiCol_HeaderActive,  TnxStyle::Color::PurpleSoft);
+        bool srcOpen = ImGui::TreeNodeEx("##srcroot", srcRootFlags, "Source");
+        ImGui::PopStyleColor(3);
+
+        if (ImGui::IsItemClicked(0) && !ImGui::IsItemToggledOpen())
         {
-            std::vector<fs::path> subdirs;
-            for (const auto& e : fs::directory_iterator(ContentRoot))
-                if (e.is_directory()) subdirs.push_back(e.path());
-            std::sort(subdirs.begin(), subdirs.end());
-            for (const auto& d : subdirs)
-                DrawFolderNode(d, 0);
+            ActiveSection = BrowserSection::Source;
+            SourceCurrentFolder.clear();
         }
-        catch (...) {}
-        ImGui::TreePop();
+
+        if (ImGui::BeginPopupContextItem("##srcRootCtx"))
+        {
+            if (ImGui::MenuItem("New Construct..."))
+            {
+                ActiveSection = BrowserSection::Source;
+                SourceCurrentFolder.clear();
+                OpenSourceCreatePopup(true);
+            }
+            if (ImGui::MenuItem("New Entity..."))
+            {
+                ActiveSection = BrowserSection::Source;
+                SourceCurrentFolder.clear();
+                OpenSourceCreatePopup(false);
+            }
+            ImGui::EndPopup();
+        }
+
+        if (srcOpen)
+        {
+            try
+            {
+                std::vector<fs::path> subdirs;
+                for (const auto& e : fs::directory_iterator(SourceRoot))
+                    if (e.is_directory()) subdirs.push_back(e.path());
+                std::sort(subdirs.begin(), subdirs.end());
+                for (const auto& d : subdirs)
+                    DrawSourceFolderNode(d, 0);
+            }
+            catch (...) {}
+            ImGui::TreePop();
+        }
     }
 }
 
@@ -319,7 +408,7 @@ void ContentBrowserPanel::DrawFolderNode(const fs::path& dir, int depth)
     catch (...) { return; }
 
     const std::string name = dir.filename().generic_string();
-    const bool selected = (CurrentFolder == rel);
+    const bool selected = (ActiveSection == BrowserSection::Content && CurrentFolder == rel);
 
     bool hasChildren = false;
     try {
@@ -341,7 +430,10 @@ void ContentBrowserPanel::DrawFolderNode(const fs::path& dir, int depth)
     ImGui::PopStyleColor(3);
 
     if (ImGui::IsItemClicked(0) && !ImGui::IsItemToggledOpen())
+    {
+        ActiveSection = BrowserSection::Content;
         CurrentFolder = rel;
+    }
 
     if (ImGui::BeginPopupContextItem("##folderCtx"))
     {
@@ -377,6 +469,317 @@ void ContentBrowserPanel::DrawFolderNode(const fs::path& dir, int depth)
     }
 
     ImGui::PopID();
+}
+
+// ---------------------------------------------------------------------------
+// Source section — folder tree + file pane
+// ---------------------------------------------------------------------------
+
+void ContentBrowserPanel::DrawSourceFolderNode(const fs::path& dir, int depth)
+{
+    std::string rel;
+    try { rel = fs::relative(dir, SourceRoot).generic_string(); }
+    catch (...) { return; }
+
+    const std::string name     = dir.filename().generic_string();
+    const bool        selected = (ActiveSection == BrowserSection::Source && SourceCurrentFolder == rel);
+
+    bool hasChildren = false;
+    try {
+        for (const auto& e : fs::directory_iterator(dir))
+            if (e.is_directory()) { hasChildren = true; break; }
+    } catch (...) {}
+
+    ImGuiTreeNodeFlags flags =
+        ImGuiTreeNodeFlags_OpenOnArrow   |
+        ImGuiTreeNodeFlags_SpanFullWidth |
+        (selected     ? ImGuiTreeNodeFlags_Selected : 0) |
+        (!hasChildren ? ImGuiTreeNodeFlags_Leaf     : 0);
+
+    ImGui::PushID(rel.c_str());
+    ImGui::PushStyleColor(ImGuiCol_Header,        TnxStyle::Color::PurpleFaint);
+    ImGui::PushStyleColor(ImGuiCol_HeaderHovered, TnxStyle::Color::BgElev);
+    ImGui::PushStyleColor(ImGuiCol_HeaderActive,  TnxStyle::Color::PurpleSoft);
+    bool open = ImGui::TreeNodeEx("##srcNode", flags, "%s", name.c_str());
+    ImGui::PopStyleColor(3);
+
+    if (ImGui::IsItemClicked(0) && !ImGui::IsItemToggledOpen())
+    {
+        ActiveSection       = BrowserSection::Source;
+        SourceCurrentFolder = rel;
+    }
+
+    if (ImGui::BeginPopupContextItem("##srcFolderCtx"))
+    {
+        if (ImGui::MenuItem("New Construct..."))
+        {
+            ActiveSection = BrowserSection::Source;
+            SourceCurrentFolder = rel;
+            OpenSourceCreatePopup(true);
+        }
+        if (ImGui::MenuItem("New Entity..."))
+        {
+            ActiveSection = BrowserSection::Source;
+            SourceCurrentFolder = rel;
+            OpenSourceCreatePopup(false);
+        }
+        ImGui::EndPopup();
+    }
+
+    if (open)
+    {
+        try
+        {
+            std::vector<fs::path> subdirs;
+            for (const auto& e : fs::directory_iterator(dir))
+                if (e.is_directory()) subdirs.push_back(e.path());
+            std::sort(subdirs.begin(), subdirs.end());
+            for (const auto& d : subdirs)
+                DrawSourceFolderNode(d, depth + 1);
+        }
+        catch (...) {}
+        ImGui::TreePop();
+    }
+
+    ImGui::PopID();
+}
+
+ContentBrowserPanel::SourceFileKind
+ContentBrowserPanel::DetectSourceKind(const fs::path& filePath)
+{
+    std::ifstream f(filePath, std::ios::binary);
+    if (!f.is_open()) return SourceFileKind::Unknown;
+
+    // Read up to 4 KB — enough to find any registration macro at the top of the file.
+    char buf[4096] = {};
+    f.read(buf, sizeof(buf) - 1);
+    const std::string_view src(buf);
+
+    if (src.find("TNX_REGISTER_SCHEMA") != std::string_view::npos)
+        return SourceFileKind::Entity;
+
+    if (src.find("public Construct<") != std::string_view::npos)
+        return SourceFileKind::Construct;
+
+    if (src.find("TNX_TEMPORAL_FIELDS") != std::string_view::npos ||
+        src.find("TNX_VOLATILE_FIELDS") != std::string_view::npos ||
+        src.find("TNX_REGISTER_FIELDS") != std::string_view::npos)
+        return SourceFileKind::Component;
+
+    return SourceFileKind::Unknown;
+}
+
+static ImVec4 SourceKindColor(ContentBrowserPanel::SourceFileKind k)
+{
+    switch (k)
+    {
+        case ContentBrowserPanel::SourceFileKind::Construct: return {0.35f, 1.0f, 0.55f, 1.0f};
+        case ContentBrowserPanel::SourceFileKind::Entity:    return {0.35f, 0.70f, 1.0f, 1.0f};
+        case ContentBrowserPanel::SourceFileKind::Component: return {1.0f,  0.72f, 0.30f, 1.0f};
+        default:                                             return TnxStyle::Color::FgGhost;
+    }
+}
+
+static const char* SourceKindLabel(ContentBrowserPanel::SourceFileKind k)
+{
+    switch (k)
+    {
+        case ContentBrowserPanel::SourceFileKind::Construct: return "CONSTRUCT";
+        case ContentBrowserPanel::SourceFileKind::Entity:    return "ENTITY";
+        case ContentBrowserPanel::SourceFileKind::Component: return "COMPONENT";
+        default:                                             return "HEADER";
+    }
+}
+
+void ContentBrowserPanel::DrawSourcePane(EditorState& state)
+{
+    // Invalidate cache when the folder changes.
+    if (SourceKindCacheFolder != SourceCurrentFolder)
+    {
+        SourceKindCache.clear();
+        SourceKindCacheFolder = SourceCurrentFolder;
+    }
+
+    fs::path dir = fs::path(SourceRoot);
+    if (!SourceCurrentFolder.empty()) dir /= SourceCurrentFolder;
+
+    // Collect .h files in the current source folder.
+    std::vector<fs::path> headers;
+    try {
+        for (const auto& e : fs::directory_iterator(dir))
+            if (e.is_regular_file() && e.path().extension() == ".h")
+                headers.push_back(e.path());
+    } catch (...) {}
+    std::sort(headers.begin(), headers.end());
+
+    if (ImGui::BeginPopupContextWindow("##SrcPaneCtx",
+            ImGuiPopupFlags_MouseButtonRight | ImGuiPopupFlags_NoOpenOverItems))
+    {
+        DrawSourceBlankContextMenu(state);
+        ImGui::EndPopup();
+    }
+
+    if (headers.empty())
+    {
+        ImGui::Spacing();
+        ImGui::TextDisabled("  No headers in this folder.");
+        ImGui::Spacing();
+        ImGui::TextDisabled("  Right-click to create a Construct or Entity.");
+        return;
+    }
+
+    // List header
+    ImGui::PushStyleColor(ImGuiCol_Text, TnxStyle::Color::FgDim);
+    ImGui::Columns(2, "##srccols", false);
+    ImGui::SetColumnWidth(0, 240.0f);
+    ImGui::Text("Name");  ImGui::NextColumn();
+    ImGui::Text("Type");  ImGui::NextColumn();
+    ImGui::PopStyleColor();
+    ImGui::Separator();
+
+    for (const auto& path : headers)
+    {
+        const std::string key  = path.generic_string();
+        const std::string stem = path.stem().generic_string();
+
+        // Detect kind, using cache.
+        auto it = SourceKindCache.find(key);
+        if (it == SourceKindCache.end())
+        {
+            it = SourceKindCache.emplace(key, DetectSourceKind(path)).first;
+        }
+        const SourceFileKind kind = it->second;
+
+        ImGui::PushID(key.c_str());
+
+        ImGui::PushStyleColor(ImGuiCol_Header,        TnxStyle::Color::PurpleFaint);
+        ImGui::PushStyleColor(ImGuiCol_HeaderHovered, TnxStyle::Color::BgElev);
+        ImGui::PushStyleColor(ImGuiCol_HeaderActive,  TnxStyle::Color::PurpleSoft);
+        bool clicked = ImGui::Selectable(stem.c_str(), false,
+                                         ImGuiSelectableFlags_SpanAllColumns |
+                                         ImGuiSelectableFlags_AllowDoubleClick);
+        ImGui::PopStyleColor(3);
+
+        if (clicked && ImGui::IsMouseDoubleClicked(0) && state.EditorCtx)
+        {
+            if (kind == SourceFileKind::Construct)
+                state.EditorCtx->OpenConstructEditor(stem.c_str());
+            else if (kind == SourceFileKind::Entity)
+                state.EditorCtx->OpenEntityEditor(stem.c_str());
+        }
+
+        ImGui::NextColumn();
+
+        ImGui::PushStyleColor(ImGuiCol_Text, SourceKindColor(kind));
+        ImGui::TextUnformatted(SourceKindLabel(kind));
+        ImGui::PopStyleColor();
+        ImGui::NextColumn();
+
+        ImGui::PopID();
+    }
+
+    ImGui::Columns(1);
+}
+
+void ContentBrowserPanel::DrawSourceBlankContextMenu(EditorState& state)
+{
+    if (ImGui::MenuItem("New Construct..."))
+        OpenSourceCreatePopup(true);
+    if (ImGui::MenuItem("New Entity..."))
+        OpenSourceCreatePopup(false);
+}
+
+void ContentBrowserPanel::OpenSourceCreatePopup(bool forConstruct)
+{
+    bShowSourceCreate      = true;
+    bSourceCreateConstruct = forConstruct;
+    SourceCreateBuf[0]     = '\0';
+}
+
+void ContentBrowserPanel::DrawSourceCreatePopup(EditorState& state)
+{
+    if (bShowSourceCreate) { ImGui::OpenPopup("##SrcCreate"); bShowSourceCreate = false; }
+
+    ImGui::SetNextWindowSize({300, 0}, ImGuiCond_Always);
+    if (!ImGui::BeginPopupModal("##SrcCreate", nullptr,
+                                ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize))
+        return;
+
+    const char* heading = bSourceCreateConstruct ? "New Construct" : "New Entity";
+    const char* hint    = bSourceCreateConstruct ? "CMyConstruct"  : "EMyEntity";
+
+    ImGui::PushFont(TnxStyle::Font::UiSemibold);
+    ImGui::TextUnformatted(heading);
+    ImGui::PopFont();
+    ImGui::Spacing();
+
+    if (ImGui::IsWindowAppearing()) ImGui::SetKeyboardFocusHere();
+    ImGui::SetNextItemWidth(-1);
+    bool enter = ImGui::InputTextWithHint("##SrcCreateName", hint,
+                                          SourceCreateBuf, sizeof(SourceCreateBuf),
+                                          ImGuiInputTextFlags_EnterReturnsTrue);
+    ImGui::Spacing();
+
+    bool ok     = TnxWidgets::ButtonPrimary("Create") || enter;
+    ImGui::SameLine();
+    bool cancel = TnxWidgets::ButtonGhost("Cancel");
+
+    if (ok && SourceCreateBuf[0])
+    {
+        CommitSourceCreate(state);
+        ImGui::CloseCurrentPopup();
+    }
+    if (cancel) ImGui::CloseCurrentPopup();
+
+    ImGui::EndPopup();
+}
+
+void ContentBrowserPanel::CommitSourceCreate(EditorState& state)
+{
+    fs::path dir = fs::path(SourceRoot);
+    if (!SourceCurrentFolder.empty()) dir /= SourceCurrentFolder;
+
+    const std::string name     = SourceCreateBuf;
+    const fs::path    filePath = dir / (name + ".h");
+
+    // Write stub header.
+    std::ofstream f(filePath);
+    if (f.is_open())
+    {
+        if (bSourceCreateConstruct)
+        {
+            f << "#pragma once\n"
+              << "#include \"Construct.h\"\n"
+              << "#include \"ConstructView.h\"\n"
+              << "\n"
+              << "class " << name << " : public Construct<" << name << ">\n"
+              << "{\n"
+              << "public:\n"
+              << "    // Add ConstructView<TEntity> and Owned<T> members here.\n"
+              << "};\n";
+        }
+        else
+        {
+            f << "#pragma once\n"
+              << "// Entity type stub — add component includes and register below.\n"
+              << "// Example:\n"
+              << "// #include \"CTransform.h\"\n"
+              << "// TNX_REGISTER_ENTITY(" << name << ", CTransform);\n";
+        }
+    }
+
+    // Invalidate kind cache so the pane rescans.
+    SourceKindCache.clear();
+    SourceKindCacheFolder.clear();
+
+    // Open the appropriate editor.
+    if (state.EditorCtx)
+    {
+        if (bSourceCreateConstruct)
+            state.EditorCtx->OpenConstructEditor(name.c_str());
+        else
+            state.EditorCtx->OpenEntityEditor(name.c_str());
+    }
 }
 
 // ---------------------------------------------------------------------------

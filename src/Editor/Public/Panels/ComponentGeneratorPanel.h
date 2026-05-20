@@ -4,6 +4,7 @@
 #endif
 
 #include "EditorPanel.h"
+#include "TnxName.h"
 #include <string>
 #include <vector>
 
@@ -24,20 +25,27 @@ public:
 private:
 	struct FieldDef
 	{
-		char Name[64]  = {};
-		int TypeIndex  = 0; // index into kFieldTypeNames[]
+		char Name[64] = {};
+		int TypeIndex = 0;
 	};
 
-	char CompName[64]    = "CMyComponent";
-	int TierIndex        = 0; // 0=Temporal, 1=Volatile, 2=Cold
-	int GroupIndex       = 0; // 0=Render, 1=Physics, 2=Logic, 3=Dual
-	bool bReplicated     = false;
+	// ImGui needs a mutable char buffer; CompName is the resolved TnxName derived from it.
+	char    CompNameBuf[TNX_NAME_MAX_LEN] = "CMyComponent";
+	TnxName CompName                      = TNX_NAME("CMyComponent");
+	bool    bNameTaken                    = false;
+
+	int  TierIndex    = 0; // 0=Temporal, 1=Volatile, 2=Cold
+	int  GroupIndex   = 0; // 0=Render, 1=Physics, 2=Logic, 3=Dual
+	bool bReplicated  = false;
 	std::vector<FieldDef> Fields;
 
 	std::string GeneratedCode;
-	char OutputPath[512]    = {};
+	char OutputPath[512]     = {};
 	char StatusMessage[1024] = {};
-	bool bStatusError      = false;
+	bool bStatusError        = false;
+
+	/// Re-hash CompNameBuf into CompName and check ReflectionRegistry + ScriptRegistry for collisions.
+	void ValidateName();
 
 	/// Rebuild GeneratedCode from current form state.
 	void RegenerateCode();

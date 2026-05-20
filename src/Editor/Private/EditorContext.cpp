@@ -51,6 +51,8 @@
 #include "Panels/LogPanel.h"
 #include "Panels/ContentBrowserPanel.h"
 #include "Panels/ComponentGeneratorPanel.h"
+#include "Panels/ConstructEditorWindow.h"
+#include "Panels/EntityEditorWindow.h"
 #include "Panels/DebuggerPanel.h"
 
 EditorContext::EditorContext() = default;
@@ -117,12 +119,14 @@ void EditorContext::Initialize(TrinyxEngine* engine, LogicThreadBase* logic)
 	}
 
 	// Register all panels
-	AddPanel<WorldOutlinerPanel>();
-	AddPanel<DetailsPanel>();
+	OutlinerPanelPtr = AddPanel<WorldOutlinerPanel>();
+	DetailsPanelPtr  = AddPanel<DetailsPanel>();
 	AddPanel<EngineStatsPanel>();
 	AddPanel<LogPanel>();
 	AddPanel<ContentBrowserPanel>();
 	AddPanel<ComponentGeneratorPanel>();
+	ConstructEditorPtr = AddPanel<ConstructEditorWindow>();
+	EntityEditorPtr    = AddPanel<EntityEditorWindow>();
 	AddPanel<DebuggerPanel>();
 
 	LOG_ENG_INFO_F("[Editor] Initialized with %zu panels", Panels.size());
@@ -849,6 +853,8 @@ void EditorContext::ApplyWorkspaceLayout(unsigned int dockspaceID, Workspace ws)
 
 			ImGui::DockBuilderDockWindow("World Outliner",       leftNarrow);
 			ImGui::DockBuilderDockWindow("Viewport",             mainArea);
+			ImGui::DockBuilderDockWindow("Construct Editor",     mainArea);
+			ImGui::DockBuilderDockWindow("Entity Editor",        mainArea);
 			ImGui::DockBuilderDockWindow("Component Generator",  mainRight);
 			ImGui::DockBuilderDockWindow("Details",              mainRight);
 			ImGui::DockBuilderDockWindow("Log",                  mainBottom);
@@ -1831,6 +1837,18 @@ uint32_t EditorContext::ImportMeshAsset(const std::string& gltfPath)
 	return slot;
 }
 
+
+void EditorContext::OpenConstructEditor(const char* typeName)
+{
+	if (CurrentWorkspace != Workspace::Logic) CurrentWorkspace = Workspace::Logic;
+	if (ConstructEditorPtr) ConstructEditorPtr->OpenConstruct(typeName);
+}
+
+void EditorContext::OpenEntityEditor(const char* typeName)
+{
+	if (CurrentWorkspace != Workspace::Logic) CurrentWorkspace = Workspace::Logic;
+	if (EntityEditorPtr) EntityEditorPtr->OpenEntity(typeName);
+}
 
 void EditorContext::HandleDroppedFile(const std::string& path)
 {
