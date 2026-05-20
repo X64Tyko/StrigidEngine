@@ -220,6 +220,7 @@ if (TNX_ENABLE_EDITOR)
     set(FT_DISABLE_BROTLI  ON CACHE BOOL "" FORCE)
     set(SKIP_INSTALL_ALL   ON CACHE BOOL "" FORCE)
     add_subdirectory("${CMAKE_SOURCE_DIR}/libs/freetype" freetype EXCLUDE_FROM_ALL)
+    _tnx_set_folder("${CMAKE_SOURCE_DIR}/libs/freetype" "ThirdParty/FreeType")
     target_link_libraries(${PROJECT_NAME} PUBLIC freetype)
 endif ()
 if (NOT TNX_HEADLESS)
@@ -430,6 +431,7 @@ if (TNX_DEBUG_RENDERING)
 endif ()
 
 add_custom_target(TrinyxShaders ALL DEPENDS ${SLANG_SPIRV_OUTPUTS})
+set_property(TARGET TrinyxShaders PROPERTY FOLDER "Engine")
 add_dependencies(${PROJECT_NAME} TrinyxShaders)
 
 # E. Tracy — target-scoped includes, definitions, and platform link libraries.

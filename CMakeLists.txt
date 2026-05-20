@@ -9,6 +9,11 @@ endif()
 # Solution/Workspace level project
 project(TrinyxSolution VERSION 0.1 LANGUAGES C CXX)
 
+# Group targets into folders in the IDE solution/workspace.
+set_property(GLOBAL PROPERTY USE_FOLDERS ON)
+# Collect CMake's own generated targets (ALL_BUILD, ZERO_CHECK, etc.) in one folder.
+set_property(GLOBAL PROPERTY PREDEFINED_TARGETS_FOLDER "CMake Targets")
+
 # -----------------------------------------------------------------------------
 # 1. STANDARDS & COMPILER SETTINGS
 # -----------------------------------------------------------------------------
@@ -224,6 +229,29 @@ set(JOLT_PATH "${CMAKE_SOURCE_DIR}/libs/jolt")
 set(IMGUI_PATH "${CMAKE_SOURCE_DIR}/libs/imgui")
 set(GNS_PATH "${CMAKE_SOURCE_DIR}/libs/gns")
 
+# -----------------------------------------------------------------------------
+# 3.1 SOLUTION FOLDER HELPERS
+# -----------------------------------------------------------------------------
+# Recursively collects every non-imported CMake target rooted at _dir.
+function(_tnx_collect_targets _result _dir)
+    get_property(_tgts DIRECTORY "${_dir}" PROPERTY BUILDSYSTEM_TARGETS)
+    get_property(_subs DIRECTORY "${_dir}" PROPERTY SUBDIRECTORIES)
+    foreach(_sub IN LISTS _subs)
+        _tnx_collect_targets(_sub_tgts "${_sub}")
+        list(APPEND _tgts ${_sub_tgts})
+    endforeach()
+    set(${_result} ${_tgts} PARENT_SCOPE)
+endfunction()
+
+# Assigns a FOLDER property to every target produced by a subdirectory tree.
+# Call this immediately after the matching add_subdirectory().
+function(_tnx_set_folder _dir _folder)
+    _tnx_collect_targets(_tgts "${_dir}")
+    foreach(_t IN LISTS _tgts)
+        set_property(TARGET ${_t} PROPERTY FOLDER "${_folder}")
+    endforeach()
+endfunction()
+
 # Slang runtime API — headers + importable library target.
 # Nothing in the engine links it yet; the target exists so rendering code can
 # do: target_link_libraries(MyTarget PRIVATE Slang::Compiler)
@@ -406,6 +434,8 @@ else ()
     else ()
         target_compile_options(Jolt PRIVATE -w)
     endif ()
+
+    _tnx_set_folder("${JOLT_PATH}/Build" "ThirdParty/Jolt")
 endif ()
 
 # -----------------------------------------------------------------------------
@@ -427,6 +457,8 @@ if (UNIX)
             target_compile_options(${_sdl3_target} PRIVATE -w)
         endif ()
     endforeach ()
+
+    _tnx_set_folder("${SDL3_SRC_PATH}" "ThirdParty/SDL3")
 endif ()
 
 # -----------------------------------------------------------------------------
@@ -456,6 +488,7 @@ get_directory_property(_saved_compile_opts COMPILE_OPTIONS)
 set_directory_properties(PROPERTIES COMPILE_OPTIONS "")
 
 add_subdirectory("${CMAKE_SOURCE_DIR}/libs/protobuf" protobuf-build)
+_tnx_set_folder("${CMAKE_SOURCE_DIR}/libs/protobuf" "ThirdParty/Protobuf")
 
 # Restore project-level compile options.
 set_directory_properties(PROPERTIES COMPILE_OPTIONS "${_saved_compile_opts}")
@@ -541,18 +574,22 @@ if (TARGET GameNetworkingSockets_s)
     endif ()
 endif ()
 
+_tnx_set_folder("${GNS_PATH}" "ThirdParty/GNS")
+
 endif () # TNX_ENABLE_NETWORK
 
 # -----------------------------------------------------------------------------
 # 9. SUBDIRECTORIES (Projects in Solution)
 # -----------------------------------------------------------------------------
 add_subdirectory(Trinyx)
+set_property(TARGET Trinyx PROPERTY FOLDER "Engine")
 # Propagate the TNX_FIXED_IMPLICIT_FLOAT define to the engine library
 if (TARGET Trinyx)
     target_compile_definitions(Trinyx PRIVATE
             $<IF:$<BOOL:${TNX_FIXED_IMPLICIT_FLOAT}>,TNX_FIXED_IMPLICIT_FLOAT,>
     )
 endif ()
+
 add_subdirectory(Testbed)
 add_subdirectory(Playground)
 add_subdirectory(DeterminismTest)
@@ -571,6 +608,7 @@ if (DOXYGEN_FOUND)
         COMMENT "Generating API and wiki documentation (output: docs/doxygen/html/index.html)"
         VERBATIM
     )
+    set_property(TARGET docs PROPERTY FOLDER "Tools")
     message(STATUS "Doxygen found — 'docs' target available (run: cmake --build <dir> --target docs)")
 else ()
     message(STATUS "Doxygen not found — 'docs' target unavailable")
