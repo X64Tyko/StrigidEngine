@@ -80,6 +80,16 @@ add_library(${PROJECT_NAME} STATIC
         ../src/Runtime/Threading/Public/TrinyxJobs.h
 )
 
+# -----------------------------------------------------------------------------
+# PRECOMPILED HEADER
+# -----------------------------------------------------------------------------
+# TrinyxMinimal.h covers stdlib (cstdint, vector, string, algorithm, atomic, …)
+# plus Logger.h and Types.h — the three tiers that appear in 14–79 TUs each.
+# PRIVATE: only Trinyx TUs use it; downstream targets can opt in via REUSE_FROM.
+target_precompile_headers(${PROJECT_NAME} PRIVATE
+    "${CMAKE_SOURCE_DIR}/src/Runtime/Core/Public/TrinyxMinimal.h"
+)
+
 # Suppress all warnings from Tracy (third-party, not our code)
 if(TRACY_SOURCES AND NOT MSVC)
     set_source_files_properties(${TRACY_SOURCES} PROPERTIES
