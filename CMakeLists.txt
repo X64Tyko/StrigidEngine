@@ -591,8 +591,13 @@ if (TARGET Trinyx)
 endif ()
 
 add_subdirectory(Testbed)
+set_property(TARGET Testbed PROPERTY FOLDER "Examples")
+
 add_subdirectory(Playground)
+set_property(TARGET Playground PROPERTY FOLDER "Examples")
+
 add_subdirectory(DeterminismTest)
+set_property(TARGET DeterminismTest PROPERTY FOLDER "Examples")
 
 # -----------------------------------------------------------------------------
 # 10. DOCUMENTATION (optional — requires Doxygen)
