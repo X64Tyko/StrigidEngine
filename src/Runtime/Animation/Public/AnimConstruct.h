@@ -9,41 +9,12 @@
 #include "SimFloat.h"
 #include "SkeletonAsset.h"
 
-// -----------------------------------------------------------------------
-// AnimConstruct — base for animation state machine Constructs (AnimBP equivalent).
-//
-// One AnimConstruct type per character type; entities of that type carry the
-// node position (StateNodeID, blend fields) in their slab. The AnimConstruct
-// is a Construct<T> companion owned by the character Construct via Owned<T>.
-//
-// Tick registration follows the standard Construct auto-registration pattern:
-//   PrePhysics  — apply root motion delta from the previous frame into CTransform
-//   PostPhysics — run state machine, write CAnimBase/CAnimLayer, handle loop wrap
-//
-// Derive from AnimConstruct and Construct<T>:
-//
-//   class PlayerAnimBP : public AnimConstruct, public Construct<PlayerAnimBP>
-//   {
-//       void PrePhysics(SimFloat dt)  { ApplyRootMotion(dt); }
-//       void PostPhysics(SimFloat dt) { RunLocomotionStateMachine(dt); }
-//   private:
-//       ConstructView<EPlayerCharacter>* Body; // wired up by owning Construct
-//       SimFloat RootMotionDeltaX{}, RootMotionDeltaY{}, RootMotionDeltaZ{};
-//   };
-//
-// CPU socket queries are available via GetSocketTransform() using the BoneCache.
-// Call RegisterSockets() once after the skeleton is bound (e.g., in Initialize()).
-// -----------------------------------------------------------------------
-
+/// Mixin base for animation state machine Constructs.
+/// PrePhysics applies root motion; PostPhysics runs the state machine and writes CAnimBase/CAnimLayer.
 class AnimConstruct
 {
 public:
-    // -----------------------------------------------------------------------
-    // CPU socket query — lazily evaluates the bone chain via BoneCache.
-    // Call RegisterSockets() first to populate SocketTransforms from the skeleton.
-    // Must only be called from scalar (PostPhysics) context.
-    // -----------------------------------------------------------------------
-
+    /// Lazily evaluates the FK chain via BoneCache. Call RegisterSockets() first. PostPhysics only.
     BoneTransform GetSocketTransform(SocketID socket,
                                      const CAnimBase<FieldWidth::Scalar>&   animBase,
                                      const CAnimLayer<FieldWidth::Scalar>&  animLayer,
@@ -73,13 +44,13 @@ public:
         return entry->worldTransform;
     }
 
-    // Slot-based overload — used when only a slot index is available.
+    /// Register sockets from a skeleton asset slot ID; no-op if the asset is not yet loaded.
     void RegisterSockets(uint32_t skeletonSlot)
     {
         RegisterSockets(AssetRegistry::Get().GetAssetData<SkeletonAsset>(AssetType::Skeleton, skeletonSlot));
     }
 
-    // Ref-based overload — preferred during init when you already have a ref.
+    /// Register sockets from a pre-resolved asset reference; populates SocketTransforms from SocketDef entries.
     void RegisterSockets(const AssetDataRef<SkeletonAsset>& skelRef)
     {
         const SkeletonAsset* skel = skelRef.Get();
@@ -100,12 +71,14 @@ protected:
     SimFloat RootMotionDeltaY{};
     SimFloat RootMotionDeltaZ{};
 
+    /// Clear bone and socket caches at the start of each PostPhysics tick.
     void BeginAnimTick()
     {
         BoneCache.Clear();
         SocketTransforms.Clear();
     }
 
+    /// Sample the root motion delta for @p animID over [fromT, toT] and store it in RootMotionDelta{X,Y,Z}.
     void StoreRootMotionDelta(uint32_t animID, SimFloat fromT, SimFloat toT)
     {
         RootMotionDeltaX = SimFloat{};
@@ -122,6 +95,7 @@ protected:
         RootMotionDeltaZ   = delta.tz;
     }
 
+    /// Accumulate the stored root motion delta into the entity's world position fields.
     void ApplyRootMotion(FieldProxy<SimFloat, FieldWidth::Scalar>& posX,
                          FieldProxy<SimFloat, FieldWidth::Scalar>& posY,
                          FieldProxy<SimFloat, FieldWidth::Scalar>& posZ)
@@ -131,6 +105,7 @@ protected:
         posZ += RootMotionDeltaZ;
     }
 
+    /// Clamp or wrap @p inOutT to [0, duration] according to @p loops. Returns true if a loop occurred.
     static bool WrapTimestamp(SimFloat& inOutT, float duration, bool loops)
     {
         if (duration <= 0.f) return false;
@@ -145,6 +120,8 @@ protected:
         return false;
     }
 
+    /// Fire any notifies in @p animID whose trigger times fall within [fromT, toT], skipping duplicates.
+    /// Calls `self->OnAnimNotify(NotifyFireEvent)` for each qualifying notify.
     template <typename Derived>
     void FireNotifies(Derived* self, uint32_t animID, uint32_t slot,
                       SimFloat fromT, SimFloat toT, SimFloat weight)
@@ -161,6 +138,8 @@ protected:
         }
     }
 
+    /// Evaluate the fully blended local-space transform for a single bone on the CPU.
+    /// Applies base/fade replace blend first, then additive overlay layers on top of the normalized result.
     static BoneTransform EvaluateBlendedBone(uint32_t boneIndex,
                                               const CAnimBase<FieldWidth::Scalar>&  animBase,
                                               const CAnimLayer<FieldWidth::Scalar>& animLayer)
@@ -210,6 +189,23 @@ protected:
         }
 
         if (!any) return BoneTransform::Identity();
-        return BoneTransform::Normalize(acc, totalW);
+        BoneTransform result = BoneTransform::Normalize(acc, totalW);
+
+        // Additive layers are applied after the replace blend is normalized
+        for (uint32_t s = 0; s < CAnimLayer<FieldWidth::Scalar>::Slots; ++s)
+        {
+            const uint32_t id = animLayer.GetAnimID(s);
+            if (id == 0) continue;
+            const uint32_t cfg = animLayer.GetConfig(s);
+            if (!CAnimLayer<FieldWidth::Scalar>::IsAdditive(cfg)) continue;
+            const SimFloat alpha = animLayer.GetAlpha(s);
+            if (alpha <= SimFloat(0)) continue;
+            auto ref = AssetRegistry::Get().GetAssetData<AnimationAsset>(AssetType::Animation, id);
+            const AnimationAsset* anim = ref.Get();
+            if (!anim) continue;
+            BoneTransform addSample = anim->EvaluateBone(boneIndex, animLayer.GetTimestamp(s).ToFloat());
+            result = BoneTransform::ApplyAdditive(result, addSample, alpha);
+        }
+        return result;
     }
 };

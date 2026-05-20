@@ -7,10 +7,6 @@
 #include <cstring>
 
 
-// -----------------------------------------------------------------------
-// Initialize
-// -----------------------------------------------------------------------
-
 bool AnimationManager::Initialize(VulkanMemory* vkMem)
 {
 	TrackBuffer = vkMem->AllocateBuffer(
@@ -65,21 +61,12 @@ bool AnimationManager::Initialize(VulkanMemory* vkMem)
 	return true;
 }
 
-// -----------------------------------------------------------------------
-// Shutdown
-// -----------------------------------------------------------------------
-
 void AnimationManager::Shutdown()
 {
 	TrackBuffer.Free();
 	KeyframeBuffer.Free();
 	AnimSlotBuffer.Free();
 }
-
-// -----------------------------------------------------------------------
-// CommitToSlot — internal; packs tracks + keyframes, mirrors to GPU.
-// Does NOT call Register() — caller owns that.
-// -----------------------------------------------------------------------
 
 uint32_t AnimationManager::CommitToSlot(const AnimationAsset& asset, AssetID id)
 {
@@ -125,9 +112,7 @@ uint32_t AnimationManager::CommitToSlot(const AnimationAsset& asset, AssetID id)
 			entry->CPUData = &CpuCopies[slotID];
 	}
 
-	// Fill GPU track and keyframe buffers synchronously — PersistentMapped, so writes are
-	// immediately visible to the GPU. Mirrors MeshManager's synchronous approach so that
-	// OnLoaded fires on the calling (Logic) thread with valid FieldProxy cursors.
+	// PersistentMapped — GPU sees writes before OnLoaded fires on the calling thread.
 	GpuAnimBoneTrack* gpuTracks = static_cast<GpuAnimBoneTrack*>(TrackBuffer.MappedPtr) + NextTrack;
 	GpuAnimKeyframe*  gpuKfs    = static_cast<GpuAnimKeyframe*>(KeyframeBuffer.MappedPtr) + NextKeyframe;
 	const uint32_t kfBase       = NextKeyframe;
@@ -160,10 +145,6 @@ uint32_t AnimationManager::CommitToSlot(const AnimationAsset& asset, AssetID id)
 				   slotID, asset.duration, asset.boneCount, keyframeCount);
 	return slotID;
 }
-
-// -----------------------------------------------------------------------
-// LoadAnimation
-// -----------------------------------------------------------------------
 
 uint32_t AnimationManager::LoadAnimation(const AnimationAsset& asset, TnxName name, AssetID id)
 {
@@ -212,18 +193,10 @@ uint32_t AnimationManager::LoadAnimation(TnxName name)
 	return LoadAnimation(entry->ID);
 }
 
-// -----------------------------------------------------------------------
-// FlushPendingUploads
-// -----------------------------------------------------------------------
-
 void AnimationManager::FlushPendingUploads()
 {
 	TrinyxJobs::WaitForCounter(&GpuUploadCounter, TrinyxJobs::Queue::Render);
 }
-
-// -----------------------------------------------------------------------
-// GetAnimCPU
-// -----------------------------------------------------------------------
 
 const AnimationAsset* AnimationManager::GetAnimCPU(uint32_t slot) const
 {

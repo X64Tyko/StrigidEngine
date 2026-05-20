@@ -5,19 +5,12 @@
 #include "NetDelta.h"
 #include "SimFloat.h"
 
-// CAnimBase — base animation layer for skeletal entities.
-// Temporal: rollback-capable, network-replicated.
-//
-// Two modes, discriminated by whether BaseAnimID == 0:
-//   Explicit   — BaseAnimID > 0: single clip, BaseTimestamp advanced by wide sweep.
-//   Blendspace — BaseAnimID == 0, BlendspaceID > 0: GPU evaluates at (BlendCoordX, BlendCoordY).
-//
-// Cross-fade: FadeAnimID > 0 while a transition is in progress.
-//   FadeTimestamp advances in the wide sweep alongside BaseTimestamp.
-//   AnimConstruct drives FadeAlpha each PostPhysics and clears Fade fields on completion.
-//
-// StateNodeID records the AnimConstruct's state machine position for rollback.
-// On rollback, AnimConstruct re-derives transition progress from FadeAlpha.
+/// Temporal (rollback + net-replicated) base animation layer.
+///
+/// Mode is discriminated by BaseAnimID: >0 = explicit clip (timestamp advanced by wide sweep),
+/// 0 = blendspace mode (GPU evaluates at BlendCoordX/Y). Cross-fade uses FadeAnimID/FadeAlpha;
+/// AnimConstruct drives FadeAlpha and clears it on completion.
+/// StateNodeID preserves state machine position for rollback re-derivation.
 
 template <FieldWidth WIDTH = FieldWidth::Scalar>
 struct CAnimBase : ComponentView<CAnimBase, WIDTH>
@@ -40,10 +33,6 @@ struct CAnimBase : ComponentView<CAnimBase, WIDTH>
     UIntProxy<WIDTH>  Flags{};         // bit 0 = base loop, bit 1 = base rootMotion
                                        // bit 2 = fade loop, bit 3 = fade rootMotion
 
-    // -----------------------------------------------------------------------
-    // Scalar SimFloat accessors — AnimConstruct reads these for simulation logic.
-    // -----------------------------------------------------------------------
-
     SimFloat GetBaseTimestamp()  const requires (WIDTH == FieldWidth::Scalar) { return BaseTimestamp; }
     SimFloat GetFadeTimestamp()  const requires (WIDTH == FieldWidth::Scalar) { return FadeTimestamp; }
     SimFloat GetFadeAlpha()      const requires (WIDTH == FieldWidth::Scalar) { return FadeAlpha; }
@@ -65,13 +54,7 @@ struct CAnimBase : ComponentView<CAnimBase, WIDTH>
     bool GetFadeLoop()       const requires (WIDTH == FieldWidth::Scalar) { return (Flags.Value() >> 2) & 1u; }
     bool GetFadeRootMotion() const requires (WIDTH == FieldWidth::Scalar) { return (Flags.Value() >> 3) & 1u; }
 
-    // -----------------------------------------------------------------------
-    // Scalar write helpers — called by AnimConstruct PostPhysics.
-    // -----------------------------------------------------------------------
-
-    // Checkout-based setter — queues an OnLoaded callback that writes BaseAnimID when
-    // the asset arrives. Call from an entity init lambda; DrainPendingCheckouts fires
-    // the callback after the lambda returns. Resets BlendspaceID and sets loop flag.
+    /// Queues an asset checkout; BaseAnimID is written when the asset arrives via OnLoaded.
     void SetAnim(TnxName name, SimFloat startTime = {}, bool loops = true, bool rootMotion = false)
         requires (WIDTH == FieldWidth::Scalar)
     {
@@ -86,6 +69,7 @@ struct CAnimBase : ComponentView<CAnimBase, WIDTH>
         Flags = f;
     }
 
+    /// Set an already-resolved animation slot directly (bypasses asset checkout).
     void SetExplicitAnim(uint32_t animID, SimFloat startTime, bool loops, bool rootMotion = false)
         requires (WIDTH == FieldWidth::Scalar)
     {
@@ -98,6 +82,7 @@ struct CAnimBase : ComponentView<CAnimBase, WIDTH>
         Flags = f;
     }
 
+    /// Switch to blendspace mode; the GPU evaluates the pose at (coordX, coordY) each tick.
     void SetBlendspace(uint32_t bsID, SimFloat coordX, SimFloat coordY)
         requires (WIDTH == FieldWidth::Scalar)
     {
@@ -112,6 +97,7 @@ struct CAnimBase : ComponentView<CAnimBase, WIDTH>
         BaseTimestamp = t;
     }
 
+    /// Begin a cross-fade: stores the outgoing clip as the fade source; AnimConstruct drives FadeAlpha to 1.
     void BeginFade(uint32_t fromAnimID, SimFloat fromTimestamp, bool fromLoops, bool fromRootMotion = false)
         requires (WIDTH == FieldWidth::Scalar)
     {

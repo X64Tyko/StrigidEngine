@@ -4,22 +4,16 @@
 #include "NetDelta.h"
 #include "SimFloat.h"
 
-// CAnimLayer — overlay animation layers with bone masking.
-// Temporal: rollback-capable.
-//
-// Provides two slots for masked overlays (replace or additive) applied on top of CAnimBase.
-// Typical usage:
-//   Slot 0 — upper body weapon animation (replace, LayerID = "UpperBody" index in skeleton)
-//   Slot 1 — aim offset (additive, LayerID = "Spine" index)
-//
-// LayerConfig packing per slot:
-//   bits 0-7  : skeleton named layer ID — indexes SkeletonAsset::layers[] for the bone mask.
-//               Bone masks are authored in the skeleton asset, not stored here.
-//   bit 8     : blend mode (0 = replace masked bones, 1 = additive)
-//   bit 9     : loop
-//
-// LayerTimestamp for each slot is advanced unconditionally by the wide sweep.
-// AnimConstruct handles loop wrapping in its scalar PostPhysics pass.
+/// Temporal overlay layers applied on top of CAnimBase (2 slots).
+///
+/// LayerConfig packing per slot:
+/// @code
+///   bits 0-7  : skeleton layer ID — indexes SkeletonAsset::layers[] for the bone mask
+///   bit 8     : blend mode (0 = replace masked bones, 1 = additive)
+///   bit 9     : loop
+/// @endcode
+///
+/// Timestamps advance unconditionally via the wide sweep; AnimConstruct handles loop wrapping.
 
 template <FieldWidth WIDTH = FieldWidth::Scalar>
 struct CAnimLayer : ComponentView<CAnimLayer, WIDTH>
@@ -37,10 +31,7 @@ struct CAnimLayer : ComponentView<CAnimLayer, WIDTH>
 
     static constexpr uint32_t Slots = 2;
 
-    // -----------------------------------------------------------------------
-    // LayerConfig packing helpers
-    // -----------------------------------------------------------------------
-
+    /// Pack a LayerConfig word from its constituent fields.
     static uint32_t MakeConfig(uint8_t layerID, bool additive, bool loops)
     {
         return uint32_t(layerID) | (additive ? (1u << 8) : 0u) | (loops ? (1u << 9) : 0u);
@@ -48,10 +39,6 @@ struct CAnimLayer : ComponentView<CAnimLayer, WIDTH>
     static uint8_t GetLayerID  (uint32_t cfg) { return uint8_t(cfg & 0xFF); }
     static bool    IsAdditive  (uint32_t cfg) { return (cfg >> 8) & 1u; }
     static bool    GetLoop     (uint32_t cfg) { return (cfg >> 9) & 1u; }
-
-    // -----------------------------------------------------------------------
-    // Scalar SimFloat accessors
-    // -----------------------------------------------------------------------
 
     SimFloat GetTimestamp(uint32_t slot) const requires (WIDTH == FieldWidth::Scalar)
     {
@@ -73,10 +60,7 @@ struct CAnimLayer : ComponentView<CAnimLayer, WIDTH>
         return slot == 0 ? LayerConfig0.Value() : LayerConfig1.Value();
     }
 
-    // -----------------------------------------------------------------------
-    // Scalar write helpers
-    // -----------------------------------------------------------------------
-
+    /// Write all fields for @p slot atomically; use ClearSlot() to deactivate.
     void SetLayer(uint32_t slot, uint32_t animID, SimFloat startTime,
                   SimFloat alpha, uint8_t layerID, bool additive, bool loops)
         requires (WIDTH == FieldWidth::Scalar)

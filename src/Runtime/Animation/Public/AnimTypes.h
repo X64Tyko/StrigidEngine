@@ -4,23 +4,21 @@
 #include "TnxName.h"
 #include "SimFloat.h"
 
-// SocketID and NotifyID are TnxName hash values (FNV1a).
-// Construct via TNX_NAME("LeftFoot") or TnxName("LeftFoot").Value at runtime.
-// Comparison is a single uint32_t compare — same as TnxName::operator==.
+/// Compact bone/socket identifier — FNV1a hash of the bone or socket name string.
 using SocketID = uint32_t;
+/// Compact animation notify identifier — FNV1a hash of the notify name string.
 using NotifyID = uint32_t;
 
 constexpr SocketID InvalidSocketID = 0;
 constexpr NotifyID InvalidNotifyID = 0;
 
-// Helper: create a SocketID from a compile-time string literal.
-// Usage: GetSocketTransform(TNX_SOCKET("LeftFoot"))
+/// Produce a compile-time SocketID from a string literal.
 #define TNX_SOCKET(str) (TnxName::Fnv1a(str))
+/// Produce a compile-time NotifyID from a string literal.
 #define TNX_NOTIFY(str) (TnxName::Fnv1a(str))
 
-// Value-type bone transform — not SoA, used for chain evaluation results.
-// All fields are SimFloat so that evaluated world transforms are deterministic
-// under TNX_DETERMINISM and can feed collision/socket queries bit-identically.
+/// Value-type local or world-space bone transform evaluated by the animation system.
+/// All fields are SimFloat to keep socket and collision queries bit-identical under TNX_DETERMINISM.
 struct BoneTransform
 {
 	SimFloat tx{}, ty{}, tz{};
@@ -30,41 +28,41 @@ struct BoneTransform
 
 	static BoneTransform Identity() { return {}; }
 
-	// Compose: apply 'child' in the local space of 'parent'.
+	/// Apply child transform in the local space of parent (full TRS composition).
 	static BoneTransform Compose(const BoneTransform& parent, const BoneTransform& child);
 
-	// Normalized linear blend of two bone transforms by weight [0,1].
+	/// Normalized linear blend between two transforms by weight [0, 1].
 	static BoneTransform NLerp(const BoneTransform& a, const BoneTransform& b, SimFloat t);
 
-	// Weighted accumulate for multi-slot blend.  Call Normalize() after all slots added.
+	/// Accumulate a weighted sample into an existing accumulator. Call Normalize() after all slots.
 	static BoneTransform WeightedAdd(const BoneTransform& acc, const BoneTransform& sample, SimFloat w);
+	/// Normalize an accumulated result produced by one or more WeightedAdd calls.
 	static BoneTransform Normalize(const BoneTransform& acc, SimFloat totalWeight);
+
+	/// Apply an additive delta authored from identity: translation adds, rotation composes base * nlerp(id, delta, alpha).
+	static BoneTransform ApplyAdditive(const BoneTransform& base, const BoneTransform& delta, SimFloat alpha);
 };
 
-// (SocketID and NotifyID defined at top of file)
-
-// -----------------------------------------------------------------------
-// BoneCacheLocal — PostPhysics-scoped bone transform cache.
-// Allocated inline on ESkeletalEntity; not persistent across ticks.
-// Each tick begins with Clear().  Subsequent socket queries accumulate
-// evaluated ancestors so shared chain segments are not re-evaluated.
-// -----------------------------------------------------------------------
-
+/// Single entry in a per-tick bone cache; stores a resolved world-space transform.
 struct BoneCacheEntry
 {
 	uint32_t    boneIndex = 0xFFFFFFFF;
 	BoneTransform worldTransform;
 };
 
+/// Result of FindNearestCachedAncestor: the ancestor's world transform plus the
+/// uncached chain that still needs FK evaluation (exclusive ancestor, inclusive target).
 struct ChainWalkResult
 {
-	BoneTransform ancestorTransform; // nearest cached ancestor (or identity for root)
-	uint32_t      chain[64];         // bone indices from ancestor toward target (exclusive ancestor, inclusive target)
+	BoneTransform ancestorTransform; ///< Nearest cached ancestor (identity for root).
+	uint32_t      chain[64];         ///< Bone indices from ancestor toward target.
 	uint32_t      remainingBones = 0;
 };
 
 struct SkeletonAsset; // forward — resolved via SkeletonManager
 
+/// PostPhysics-scoped bone cache; amortizes FK chain walks across multiple socket queries per tick.
+/// Capacity is intentionally small — most Constructs query ≤16 unique bones per frame.
 struct BoneCacheLocal
 {
 	static constexpr uint32_t MaxCachedBones = 16;
@@ -72,8 +70,10 @@ struct BoneCacheLocal
 	BoneCacheEntry entries[MaxCachedBones];
 	uint32_t       count = 0;
 
+	/// Reset the cache at the start of each PostPhysics tick.
 	void Clear() { count = 0; }
 
+	/// Returns the cached world transform for @p boneIndex, or nullptr if not yet evaluated.
 	const BoneTransform* Find(uint32_t boneIndex) const
 	{
 		for (uint32_t i = 0; i < count; ++i)
@@ -81,6 +81,7 @@ struct BoneCacheLocal
 		return nullptr;
 	}
 
+	/// Store a resolved world transform; silently drops the entry if the cache is full.
 	void Insert(uint32_t boneIndex, const BoneTransform& t)
 	{
 		if (count < MaxCachedBones)
@@ -91,26 +92,25 @@ struct BoneCacheLocal
 		}
 	}
 
-	// Walk up the skeleton hierarchy from targetBone to find the nearest cached ancestor.
-	// Returns the cached ancestor's world transform and the chain of bone indices from
-	// (exclusive) ancestor down to (inclusive) targetBone that still need evaluation.
+	/// Walk up the skeleton hierarchy from @p targetBoneIndex to find the nearest cached ancestor.
+	/// Returns the ancestor's world transform and the chain of bone indices
+	/// (exclusive ancestor, inclusive target) that still need FK evaluation.
 	ChainWalkResult FindNearestCachedAncestor(uint32_t targetBoneIndex,
 	                                          const SkeletonAsset& skeleton) const;
 };
 
-// -----------------------------------------------------------------------
-// SocketTransformLocal — per-tick socket result cache.
-// -----------------------------------------------------------------------
-
+/// Per-socket evaluation state: resolved world transform plus validity flag.
 struct SocketEntry
 {
 	SocketID      id           = InvalidSocketID;
 	uint32_t      boneIndex    = 0xFFFFFFFF;
-	BoneTransform localOffset;   // socket offset in bone space (from SocketDef)
+	BoneTransform localOffset;   ///< Offset in bone space from SocketDef.
 	BoneTransform worldTransform;
-	bool          valid        = false;
+	bool          valid        = false; ///< True once the world transform has been evaluated this tick.
 };
 
+/// PostPhysics-scoped socket cache; holds resolved world transforms for all registered sockets.
+/// Validity flags are cleared at the start of each tick; entries are computed lazily on first query.
 struct SocketTransformLocal
 {
 	static constexpr uint32_t MaxSockets = 12;
@@ -118,11 +118,13 @@ struct SocketTransformLocal
 	SocketEntry sockets[MaxSockets];
 	uint32_t    count = 0;
 
+	/// Invalidate all entries at the start of a PostPhysics tick without removing registrations.
 	void Clear()
 	{
 		for (uint32_t i = 0; i < count; ++i) sockets[i].valid = false;
 	}
 
+	/// Register a socket so it can be queried via GetSocketTransform. Call once after skeleton bind.
 	void RegisterSocket(SocketID id, uint32_t boneIndex, const BoneTransform& localOffset)
 	{
 		if (count >= MaxSockets) return;
@@ -133,6 +135,7 @@ struct SocketTransformLocal
 		++count;
 	}
 
+	/// Returns the SocketEntry for @p id, or nullptr if the socket was not registered.
 	SocketEntry* FindSocket(SocketID id)
 	{
 		for (uint32_t i = 0; i < count; ++i)
@@ -141,23 +144,15 @@ struct SocketTransformLocal
 	}
 };
 
-// -----------------------------------------------------------------------
-// NotifyFireEvent — payload delivered to OnAnimNotify.
-// -----------------------------------------------------------------------
-
+/// Payload delivered to AnimConstruct::OnAnimNotify when a notify crosses its trigger time.
 struct NotifyFireEvent
 {
 	NotifyID  id;
-	SimFloat  blendWeight;  // weight of the blend slot that fired this notify
+	SimFloat  blendWeight;  ///< Weight of the blend slot that fired this notify.
 	float     triggerTime;
 };
 
-// -----------------------------------------------------------------------
-// AnimNotifyState — inert inline member on ESkeletalEntity.
-// Tracks which notifies have fired this loop to prevent double-fire.
-// Not persistent across ticks for M1; persistent storage is M3.
-// -----------------------------------------------------------------------
-
+/// Record of a single notify fire; used by AnimNotifyState to prevent double-fire within a loop.
 struct NotifyFireRecord
 {
 	NotifyID id;
@@ -165,6 +160,8 @@ struct NotifyFireRecord
 	SimFloat firedAtTime;
 };
 
+/// Per-tick deduplication state for animation notifies; prevents double-fire within a loop iteration.
+/// Not persistent across ticks — Clear() is called by AnimConstruct::BeginAnimTick each frame.
 struct AnimNotifyState
 {
 	static constexpr uint32_t MaxFireRecords = 32;
@@ -172,8 +169,10 @@ struct AnimNotifyState
 	NotifyFireRecord fired[MaxFireRecords];
 	uint32_t         firedCount = 0;
 
+	/// Reset all fire records at the start of a tick.
 	void Clear() { firedCount = 0; }
 
+	/// Returns true if @p id has already been fired for @p slot at or after @p loopStart this tick.
 	bool HasFiredThisLoop(NotifyID id, uint32_t slot, SimFloat loopStart) const
 	{
 		for (uint32_t i = 0; i < firedCount; ++i)
@@ -182,12 +181,14 @@ struct AnimNotifyState
 		return false;
 	}
 
+	/// Record that @p id was fired for @p slot at @p time; silently drops if the buffer is full.
 	void RecordFire(NotifyID id, uint32_t slot, SimFloat time)
 	{
 		if (firedCount >= MaxFireRecords) return;
 		fired[firedCount++] = {id, slot, time};
 	}
 
+	/// Remove all records for @p slot whose fire time predates @p newLoopStart (loop wrap occurred).
 	void ClearLoopedRecords(uint32_t slot, SimFloat newLoopStart)
 	{
 		uint32_t write = 0;

@@ -8,18 +8,7 @@
 #include "TrinyxJobs.h"
 #include "VulkanMemory.h"
 
-// -----------------------------------------------------------------------
-// GPU-side animation data structures — mirrors of CPU AnimBoneTrack and
-// AnimKeyframe, with absolute global keyframe offsets for direct indexing
-// in the skinning compute shader.
-// -----------------------------------------------------------------------
-
-// -----------------------------------------------------------------------
-// GpuAnimSlotInfo — per-animation slot table entry.
-// skinning.slang reads this to locate an animation's bone tracks in the
-// global track mega-buffer. Indexed by animID (slot index in AnimationManager).
-// -----------------------------------------------------------------------
-
+/// Per-animation slot read by skinning.slang to locate bone tracks in the global mega-buffer.
 struct GpuAnimSlotInfo
 {
 	uint32_t trackOffset = 0; // first GpuAnimBoneTrack entry for this animation
@@ -28,38 +17,28 @@ struct GpuAnimSlotInfo
 
 static_assert(sizeof(GpuAnimSlotInfo) == 8, "GpuAnimSlotInfo must be 8 bytes");
 
+/// Per-bone keyframe range within the global GpuAnimKeyframe mega-buffer.
+/// keyframeOffset is an absolute index; the skinning shader indexes directly.
 struct GpuAnimBoneTrack
 {
-	uint32_t keyframeOffset; // absolute index into global GpuAnimKeyframe array
+	uint32_t keyframeOffset; ///< Absolute index into the global GpuAnimKeyframe array.
 	uint32_t keyframeCount;
 };
 
 static_assert(sizeof(GpuAnimBoneTrack) == 8, "GpuAnimBoneTrack must be 8 bytes");
 
+/// Single keyframe in the global mega-buffer: translation + rotation quaternion (no scale in M1).
 struct GpuAnimKeyframe
 {
 	float time;
-	float tx, ty, tz;      // translation
-	float rx, ry, rz, rw;  // rotation quaternion (normalized)
+	float tx, ty, tz;      ///< Translation.
+	float rx, ry, rz, rw;  ///< Rotation quaternion (normalized).
 };
 
 static_assert(sizeof(GpuAnimKeyframe) == 32, "GpuAnimKeyframe must be 32 bytes");
 
-// -----------------------------------------------------------------------
-// AnimationManager — flat keyframe storage for all loaded animations.
-//
-// All animation tracks and keyframes are packed into two mega-buffers
-// (tracks + keyframes), each with a persistent-mapped GPU mirror for the
-// skinning compute pass. CPU copies of AnimationAsset are retained for
-// EvaluateBlendedBone lookups in ESkeletalEntity::PostPhysics.
-//
-// GpuAnimBoneTrack.keyframeOffset is an absolute global index, so the
-// skinning shader can index directly without per-slot base adjustment.
-//
-// AssetRegistry is the authority for name/ID lookup.
-// Slot 0 is reserved as the invalid/error sentinel.
-// -----------------------------------------------------------------------
-
+/// Manages GPU mega-buffers for animation tracks, keyframes, and slot tables.
+/// Slot 0 is reserved as the invalid sentinel; valid slot IDs start at 1.
 class AnimationManager
 {
 public:
@@ -81,23 +60,18 @@ public:
 		return instance;
 	}
 
+	/// Allocate GPU mega-buffers (PersistentMapped + BDA). Must be called before any LoadAnimation.
 	bool Initialize(VulkanMemory* vkMem);
 
-	/// Free GPU buffers. Must be called before VulkanMemory::Shutdown().
+	/// Must be called before VulkanMemory::Shutdown().
 	void Shutdown();
 
-	/// Load an AnimationAsset — packs tracks + keyframes into the mega-buffers and
-	/// mirrors them to the GPU. Records name/ID in AssetRegistry.
 	/// Returns the slot ID, or UINT32_MAX on failure.
 	uint32_t LoadAnimation(const AnimationAsset& asset, TnxName name, AssetID id = {});
-
-	/// Resolve by AssetID from AssetRegistry, decode from disk, and load.
 	uint32_t LoadAnimation(AssetID id);
-
-	/// Resolve by TnxName from AssetRegistry, decode from disk, and load.
 	uint32_t LoadAnimation(TnxName name);
 
-	/// CPU animation for EvaluateBone() lookups.
+	/// Returns the CPU-side AnimationAsset for @p slot, or nullptr if the slot is invalid.
 	const AnimationAsset* GetAnimCPU(uint32_t slot) const;
 
 	float GetDuration(uint32_t slot) const
@@ -111,12 +85,12 @@ public:
 	const AnimSlot& GetSlot(uint32_t slot)  const { return Slots[slot]; }
 	uint32_t        GetAnimCount()          const { return AnimCount; }
 
-	/// Block until all pending GPU track/keyframe upload jobs have completed.
+	/// Submit all pending PersistentMapped writes to the GPU; called once per render frame.
 	void FlushPendingUploads();
-
-	/// Non-blocking poll — true when all GPU upload jobs have completed.
+	/// Returns true when all in-flight GPU upload jobs have completed.
 	bool IsUploadComplete() const { return GpuUploadCounter.Value.load(std::memory_order_acquire) == 0; }
 
+	/// Resolve an animation slot from a TnxName; returns UINT32_MAX if not loaded.
 	uint32_t FindSlotByTName(TnxName name) const
 	{
 		const AssetEntry* e = AssetRegistry::Get().FindByTNameAndType(name, AssetType::Animation);
@@ -124,6 +98,7 @@ public:
 		return static_cast<uint32_t>(reinterpret_cast<uintptr_t>(e->Data));
 	}
 
+	/// Resolve an animation slot from an AssetID; returns UINT32_MAX if not loaded.
 	uint32_t FindSlotByID(AssetID id) const
 	{
 		const AssetEntry* e = AssetRegistry::Get().Find(id);
@@ -134,7 +109,6 @@ public:
 	AssetID GetSlotID(uint32_t slot) const { return SlotIDs[slot]; }
 
 private:
-	/// Pack asset data into flat buffers, mirror to GPU, update AssetRegistry.
 	/// Does NOT call Register() — caller owns that.
 	uint32_t CommitToSlot(const AnimationAsset& asset, AssetID id);
 

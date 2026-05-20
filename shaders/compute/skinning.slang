@@ -16,9 +16,25 @@ struct GpuBoneData       { float inverseBindPose[16]; }; // column-major float4x
 [[vk::push_constant]]
 cbuffer PushConstants { uint64_t gFrameDataAddr; }
 
-// -----------------------------------------------------------------------
-// Quaternion + matrix helpers
-// -----------------------------------------------------------------------
+float4 quatMul(float4 a, float4 b)
+{
+    return float4(
+        a.w*b.x + a.x*b.w + a.y*b.z - a.z*b.y,
+        a.w*b.y - a.x*b.z + a.y*b.w + a.z*b.x,
+        a.w*b.z + a.x*b.y - a.y*b.x + a.z*b.w,
+        a.w*b.w - a.x*b.x - a.y*b.y - a.z*b.z
+    );
+}
+
+// Compose base rotation with an additive delta weighted by alpha.
+// Delta is authored from identity, so: weighted = nlerp(identity, delta, alpha); result = base * weighted.
+float4 applyAdditiveRot(float4 baseQ, float4 addQ, float alpha)
+{
+    float4 identQ = float4(0.0, 0.0, 0.0, 1.0);
+    if (dot(identQ, addQ) < 0.0) addQ = -addQ;
+    float4 weighted = normalize(lerp(identQ, addQ, alpha));
+    return normalize(quatMul(baseQ, weighted));
+}
 
 float4x4 quatToMat(float4 q)
 {
@@ -56,10 +72,6 @@ float4x4 loadMat(float* data)
     m[3] = float4(data[3], data[7], data[11], data[15]);
     return m;
 }
-
-// -----------------------------------------------------------------------
-// Keyframe evaluation — finds the two surrounding keyframes and lerps.
-// -----------------------------------------------------------------------
 
 void evalBoneAtTime(GpuAnimBoneTrack track, GpuAnimKeyframe* kfBuf, float t,
                     out float3 outT, out float4 outQ)
@@ -110,10 +122,6 @@ void evalBoneAtTime(GpuAnimBoneTrack track, GpuAnimKeyframe* kfBuf, float t,
     outQ = normalize(lerp(qa, qb, alpha));
 }
 
-// -----------------------------------------------------------------------
-// Main
-// -----------------------------------------------------------------------
-
 [shader("compute")]
 [numthreads(1, 1, 1)]
 void main(uint3 tid : SV_DispatchThreadID)
@@ -121,20 +129,55 @@ void main(uint3 tid : SV_DispatchThreadID)
     GpuFrameData* fd = (GpuFrameData*)gFrameDataAddr;
 
     uint compactIdx = tid.x;
-    // Bounds are enforced by vkCmdDispatchIndirect — x = scatter-written skeletalCount.
-
-    // Resolve entity cache index from the GPU-written compact list.
+    // Bounds enforced by vkCmdDispatchIndirect — x is scatter-written skeletalCount.
     uint cacheIdx = ((uint*)fd->SkeletalListAddr)[compactIdx];
 
-    // Read SkeletonID and anim state from slab (CurrFieldAddrs[SlabIdx_XXX]).
     uint  skelID    = ((uint*)fd->CurrFieldAddrs[SlabIdx_SkeletonID])[cacheIdx];
     uint  animID    = ((uint*)fd->CurrFieldAddrs[SlabIdx_BaseAnimID])[cacheIdx];
     float timestamp = ((float*)fd->CurrFieldAddrs[SlabIdx_BaseTimestamp])[cacheIdx];
 
     if (skelID == 0 || animID == 0) return;
 
+    // Cross-fade fields
+    uint  fadeAnimID    = ((uint*)fd->CurrFieldAddrs[SlabIdx_FadeAnimID])[cacheIdx];
+    float fadeTimestamp = ((float*)fd->CurrFieldAddrs[SlabIdx_FadeTimestamp])[cacheIdx];
+    float fadeAlpha     = ((float*)fd->CurrFieldAddrs[SlabIdx_FadeAlpha])[cacheIdx];
+    bool  hasFade       = (fadeAnimID != 0 && fadeAlpha > 0.0);
+
+    // Additive overlay layer fields
+    uint  l0AnimID    = ((uint*)fd->CurrFieldAddrs[SlabIdx_Layer0AnimID])[cacheIdx];
+    float l0Timestamp = ((float*)fd->CurrFieldAddrs[SlabIdx_Layer0Timestamp])[cacheIdx];
+    float l0Alpha     = ((float*)fd->CurrFieldAddrs[SlabIdx_Layer0Alpha])[cacheIdx];
+    uint  l0Config    = ((uint*)fd->CurrFieldAddrs[SlabIdx_Layer0Config])[cacheIdx];
+    bool  hasL0       = (l0AnimID != 0 && l0Alpha > 0.0 && ((l0Config >> 8) & 1u) != 0);
+
+    uint  l1AnimID    = ((uint*)fd->CurrFieldAddrs[SlabIdx_Layer1AnimID])[cacheIdx];
+    float l1Timestamp = ((float*)fd->CurrFieldAddrs[SlabIdx_Layer1Timestamp])[cacheIdx];
+    float l1Alpha     = ((float*)fd->CurrFieldAddrs[SlabIdx_Layer1Alpha])[cacheIdx];
+    uint  l1Config    = ((uint*)fd->CurrFieldAddrs[SlabIdx_Layer1Config])[cacheIdx];
+    bool  hasL1       = (l1AnimID != 0 && l1Alpha > 0.0 && ((l1Config >> 8) & 1u) != 0);
+
     GpuSkeletonSlotInfo skelSlot = ((GpuSkeletonSlotInfo*)fd->GpuSkeletonSlotAddr)[skelID];
     GpuAnimSlotInfo     animSlot = ((GpuAnimSlotInfo*)fd->GpuAnimSlotAddr)[animID];
+
+    // Optional slots: trackOffset/boneCount default to 0 when the feature is inactive.
+    uint fadeTrackOffset = 0; uint fadeBoneCount = 0;
+    if (hasFade) {
+        GpuAnimSlotInfo s = ((GpuAnimSlotInfo*)fd->GpuAnimSlotAddr)[fadeAnimID];
+        fadeTrackOffset = s.trackOffset; fadeBoneCount = s.boneCount;
+    }
+
+    uint l0TrackOffset = 0; uint l0BoneCount = 0;
+    if (hasL0) {
+        GpuAnimSlotInfo s = ((GpuAnimSlotInfo*)fd->GpuAnimSlotAddr)[l0AnimID];
+        l0TrackOffset = s.trackOffset; l0BoneCount = s.boneCount;
+    }
+
+    uint l1TrackOffset = 0; uint l1BoneCount = 0;
+    if (hasL1) {
+        GpuAnimSlotInfo s = ((GpuAnimSlotInfo*)fd->GpuAnimSlotAddr)[l1AnimID];
+        l1TrackOffset = s.trackOffset; l1BoneCount = s.boneCount;
+    }
 
     uint boneCount = min(min(skelSlot.boneCount, animSlot.boneCount), MAX_BONES_PER_ENTITY);
     if (boneCount == 0) return;
@@ -148,7 +191,6 @@ void main(uint3 tid : SV_DispatchThreadID)
     float posX  = ((float*)fd->CurrFieldAddrs[SemPosX  - 1u])[cacheIdx];
     float posY  = ((float*)fd->CurrFieldAddrs[SemPosY  - 1u])[cacheIdx];
     float posZ  = ((float*)fd->CurrFieldAddrs[SemPosZ  - 1u])[cacheIdx];
-    
     float rotQx = ((float*)fd->CurrFieldAddrs[SemRotQx - 1u])[cacheIdx];
     float rotQy = ((float*)fd->CurrFieldAddrs[SemRotQy - 1u])[cacheIdx];
     float rotQz = ((float*)fd->CurrFieldAddrs[SemRotQz - 1u])[cacheIdx];
@@ -161,18 +203,43 @@ void main(uint3 tid : SV_DispatchThreadID)
                                    float4(rotQx, rotQy, rotQz, rotQw),
                                    float3(scaX, scaY, scaZ));
 
-    // Per-bone world transforms for FK chain. Parent-before-child order is guaranteed
-    // by the asset importer — bones[i].parentIndex < i for all non-root bones.
+    // Importer guarantees parentIndex < boneIndex for all non-root bones.
     float4x4 worldBone[MAX_BONES_PER_ENTITY];
 
     for (uint b = 0; b < boneCount; ++b)
     {
         uint globalBone = skelSlot.boneOffset + b;
-        uint parentIdx  = parents[globalBone]; // local (per-skeleton) index, 0xFFFFFFFF = root
+        uint parentIdx  = parents[globalBone]; // 0xFFFFFFFF = root
 
-        GpuAnimBoneTrack track = tracks[animSlot.trackOffset + b];
         float3 localT; float4 localQ;
-        evalBoneAtTime(track, kfs, timestamp, localT, localQ);
+        evalBoneAtTime(tracks[animSlot.trackOffset + b], kfs, timestamp, localT, localQ);
+
+        // Cross-fade: lerp base → fade by fadeAlpha
+        if (hasFade && b < fadeBoneCount)
+        {
+            float3 fadeT; float4 fadeQ;
+            evalBoneAtTime(tracks[fadeTrackOffset + b], kfs, fadeTimestamp, fadeT, fadeQ);
+            localT = lerp(localT, fadeT, fadeAlpha);
+            if (dot(localQ, fadeQ) < 0.0) fadeQ = -fadeQ;
+            localQ = normalize(lerp(localQ, fadeQ, fadeAlpha));
+        }
+
+        if (hasL0 && b < l0BoneCount)
+        {
+            float3 addT; float4 addQ;
+            evalBoneAtTime(tracks[l0TrackOffset + b], kfs, l0Timestamp, addT, addQ);
+            localT += addT * l0Alpha;
+            localQ  = applyAdditiveRot(localQ, addQ, l0Alpha);
+        }
+
+        if (hasL1 && b < l1BoneCount)
+        {
+            float3 addT; float4 addQ;
+            evalBoneAtTime(tracks[l1TrackOffset + b], kfs, l1Timestamp, addT, addQ);
+            localT += addT * l1Alpha;
+            localQ  = applyAdditiveRot(localQ, addQ, l1Alpha);
+        }
+
         float4x4 localMat = makeTRS(localT, localQ, float3(1, 1, 1));
 
         if (parentIdx == 0xFFFFFFFFu || parentIdx >= boneCount)

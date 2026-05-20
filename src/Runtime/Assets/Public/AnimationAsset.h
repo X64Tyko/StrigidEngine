@@ -19,7 +19,7 @@
 //   24      1     HasRootMotion (M2: populated; M1: 0)
 //   25      39    Reserved (pad to 64)
 //   64      T     AnimBoneTrackDisk[BoneCount]  (8 bytes each)
-//   64+T    K     AnimKeyframeDisk[KeyframeCount]  (44 bytes each)
+//   64+T    K     AnimKeyframeDisk[KeyframeCount]  (32 bytes each)
 //   64+T+K  N     AnimNotifyDisk[NotifyCount]  (M2+, 48 bytes each)
 // -----------------------------------------------------------------------
 
@@ -40,17 +40,15 @@ struct TnxAnimHeader
 
 static_assert(sizeof(TnxAnimHeader) == 64, "TnxAnimHeader must be exactly 64 bytes");
 
-// On-disk bone track — indexes into the flat keyframe array.
 struct AnimBoneTrackDisk
 {
-	uint32_t keyframeOffset; // first keyframe index for this bone
+	uint32_t keyframeOffset;
 	uint32_t keyframeCount;
 };
 
 static_assert(sizeof(AnimBoneTrackDisk) == 8);
 
-// On-disk keyframe — translation + rotation, scale omitted (M1).
-struct AnimKeyframeDisk
+struct AnimKeyframeDisk // scale stored as identity (M1)
 {
 	float time;
 	float tx, ty, tz;
@@ -59,21 +57,16 @@ struct AnimKeyframeDisk
 
 static_assert(sizeof(AnimKeyframeDisk) == 32);
 
-// On-disk notify — M2+.
-struct AnimNotifyDisk
+struct AnimNotifyDisk // M2+
 {
-	uint32_t idHash;       // NotifyID (TnxName::Value)
+	uint32_t idHash;
 	float    triggerTime;
 	float    duration;     // 0 = instant, >0 = state notify
-	uint32_t nameHash;     // TnxName::Value for editor display
-	char     nameStr[32];  // editor-only string
+	uint32_t nameHash;
+	char     nameStr[32];  // editor only
 };
 
 static_assert(sizeof(AnimNotifyDisk) == 48);
-
-// -----------------------------------------------------------------------
-// In-memory animation clip.  Loaded from .tnxanim, kept by AnimationManager.
-// -----------------------------------------------------------------------
 
 struct AnimBoneTrack
 {
@@ -90,31 +83,30 @@ struct AnimKeyframe
 
 struct AnimNotifyDef
 {
-	NotifyID id;          // TnxName hash
+	NotifyID id;
 	float    triggerTime;
-	float    duration;    // 0 = instant
+	float    duration;    // 0 = instant, >0 = state notify
 	TnxName  name;
 };
 
+/// Runtime animation clip loaded from a .tnxanim file.
+/// Holds per-bone keyframe tracks plus optional notify and root-motion data (M2+).
 struct AnimationAsset
 {
 	float    duration  = 0.f;
 	uint32_t boneCount = 0;
 
-	std::vector<AnimBoneTrack> boneTracks; // one per bone
-	std::vector<AnimKeyframe>  keyframes;  // flat array, all bones
+	std::vector<AnimBoneTrack> boneTracks;
+	std::vector<AnimKeyframe>  keyframes;
 
-	// M2+
-	std::vector<AnimNotifyDef> notifies;
-	bool hasRootMotion = false;
-	std::vector<AnimKeyframe> rootMotionTrack; // bone-0 extracted separately for root motion
+	std::vector<AnimNotifyDef> notifies;         // M2+
+	bool                       hasRootMotion = false; // M2+
+	std::vector<AnimKeyframe>  rootMotionTrack;  // M2+; bone-0 extracted from main tracks
 
-	// Evaluate bone transform at the given timestamp.
-	// M1: linear interpolation between nearest keyframes.
-	// M3: replaced by CurveHandle evaluation.
+	/// M1: linear keyframe interp. M3: replaced by CurveHandle evaluation.
 	BoneTransform EvaluateBone(uint32_t boneIndex, float timestamp) const;
 
-	// M2+
+	/// Returns the root-motion translation delta over [fromTime, toTime]. M2+.
 	BoneTransform EvaluateRootMotionDelta(float fromTime, float toTime) const;
 };
 

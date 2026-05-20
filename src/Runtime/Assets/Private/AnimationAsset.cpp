@@ -6,23 +6,17 @@
 #include <cstring>
 #include <fstream>
 
-// -----------------------------------------------------------------------
-// Quaternion helpers
-// -----------------------------------------------------------------------
-
 static SimFloat QDot(SimFloat ax, SimFloat ay, SimFloat az, SimFloat aw,
                      SimFloat bx, SimFloat by, SimFloat bz, SimFloat bw)
 {
 	return ax * bx + ay * by + az * bz + aw * bw;
 }
 
-// Normalized linear interpolation for quaternions (sufficient for M1).
 static void QNLerp(SimFloat ax, SimFloat ay, SimFloat az, SimFloat aw,
                    SimFloat bx, SimFloat by, SimFloat bz, SimFloat bw,
                    SimFloat t,
                    SimFloat& ox, SimFloat& oy, SimFloat& oz, SimFloat& ow)
 {
-	// Ensure shortest-arc
 	if (QDot(ax, ay, az, aw, bx, by, bz, bw) < SimFloat(0))
 	{
 		bx = -bx; by = -by; bz = -bz; bw = -bw;
@@ -36,15 +30,8 @@ static void QNLerp(SimFloat ax, SimFloat ay, SimFloat az, SimFloat aw,
 	if (len > SimFloat(1e-6f)) { ox /= len; oy /= len; oz /= len; ow /= len; }
 }
 
-// -----------------------------------------------------------------------
-// BoneTransform composition and blending
-// -----------------------------------------------------------------------
-
 BoneTransform BoneTransform::Compose(const BoneTransform& parent, const BoneTransform& child)
 {
-	// Rotate child translation by parent rotation then add parent translation.
-	// Simplified version — full quaternion rotation of a vector.
-	// quat * vec * quat_conj
 	SimFloat qx = parent.rx, qy = parent.ry, qz = parent.rz, qw = parent.rw;
 	SimFloat vx  = child.tx * parent.sx;
 	SimFloat vy  = child.ty * parent.sy;
@@ -60,6 +47,7 @@ BoneTransform BoneTransform::Compose(const BoneTransform& parent, const BoneTran
 	r.tz = parent.tz + vz + qw * tz_ + qx * ty_ - qy * tx_;
 
 	// Multiply quaternions: parent.r * child.r
+	// quatMul(parent.r, child.r)
 	r.rx = qw * child.rx + qx * child.rw + qy * child.rz - qz * child.ry;
 	r.ry = qw * child.ry - qx * child.rz + qy * child.rw + qz * child.rx;
 	r.rz = qw * child.rz + qx * child.ry - qy * child.rx + qz * child.rw;
@@ -92,7 +80,7 @@ BoneTransform BoneTransform::WeightedAdd(const BoneTransform& acc, const BoneTra
 	r.tx = acc.tx + sample.tx * w;
 	r.ty = acc.ty + sample.ty * w;
 	r.tz = acc.tz + sample.tz * w;
-	// Accumulate quaternion — normalized after all slots added
+	// Flip sign for shortest-arc before accumulating; Normalize() re-normalizes after all slots.
 	SimFloat flip = QDot(acc.rx, acc.ry, acc.rz, acc.rw,
 	                     sample.rx, sample.ry, sample.rz, sample.rw) < SimFloat(0) ? -w : w;
 	r.rx = acc.rx + sample.rx * flip;
@@ -123,9 +111,42 @@ BoneTransform BoneTransform::Normalize(const BoneTransform& acc, SimFloat totalW
 	return r;
 }
 
-// -----------------------------------------------------------------------
-// EvaluateBone — M1: linear keyframe interpolation
-// -----------------------------------------------------------------------
+BoneTransform BoneTransform::ApplyAdditive(const BoneTransform& base, const BoneTransform& delta, SimFloat alpha)
+{
+	BoneTransform r = base;
+
+	// Translation: offset added directly
+	r.tx = base.tx + delta.tx * alpha;
+	r.ty = base.ty + delta.ty * alpha;
+	r.tz = base.tz + delta.tz * alpha;
+
+	// Rotation: compose base * nlerp(identity, delta, alpha)
+	SimFloat dx = delta.rx * alpha;
+	SimFloat dy = delta.ry * alpha;
+	SimFloat dz = delta.rz * alpha;
+	SimFloat dw = SimFloat(1) + (delta.rw - SimFloat(1)) * alpha;
+	// Ensure shortest-arc from identity
+	if (dw < SimFloat(0)) { dx = -dx; dy = -dy; dz = -dz; dw = -dw; }
+	SimFloat len = Sqrt(dx*dx + dy*dy + dz*dz + dw*dw);
+	if (len > SimFloat(1e-6f)) { dx /= len; dy /= len; dz /= len; dw /= len; }
+	else { dx = SimFloat{}; dy = SimFloat{}; dz = SimFloat{}; dw = SimFloat(1); }
+	// quatMul(base.r, weighted_delta)
+	SimFloat bx = base.rx, by = base.ry, bz = base.rz, bw = base.rw;
+	r.rx = bw*dx + bx*dw + by*dz - bz*dy;
+	r.ry = bw*dy - bx*dz + by*dw + bz*dx;
+	r.rz = bw*dz + bx*dy - by*dx + bz*dw;
+	r.rw = bw*dw - bx*dx - by*dy - bz*dz;
+	SimFloat rlen = Sqrt(r.rx*r.rx + r.ry*r.ry + r.rz*r.rz + r.rw*r.rw);
+	if (rlen > SimFloat(1e-6f)) { r.rx /= rlen; r.ry /= rlen; r.rz /= rlen; r.rw /= rlen; }
+
+	// Scale: offset from identity (delta.s - 1) added
+	r.sx = base.sx + (delta.sx - SimFloat(1)) * alpha;
+	r.sy = base.sy + (delta.sy - SimFloat(1)) * alpha;
+	r.sz = base.sz + (delta.sz - SimFloat(1)) * alpha;
+
+	return r;
+}
+
 
 static BoneTransform EvaluateTrack(const std::vector<AnimKeyframe>& keyframes,
                                    const AnimBoneTrack& track, float timestamp)
@@ -198,10 +219,7 @@ BoneTransform AnimationAsset::EvaluateRootMotionDelta(float fromTime, float toTi
 	return delta;
 }
 
-// -----------------------------------------------------------------------
-// BoneCacheLocal — FindNearestCachedAncestor
-// (defined here to resolve forward declaration of SkeletonAsset)
-// -----------------------------------------------------------------------
+// Defined here to resolve the forward declaration of SkeletonAsset in AnimTypes.h.
 
 #include "SkeletonAsset.h"
 
@@ -239,10 +257,6 @@ ChainWalkResult BoneCacheLocal::FindNearestCachedAncestor(uint32_t targetBoneInd
 
 	return result;
 }
-
-// -----------------------------------------------------------------------
-// Save / Load
-// -----------------------------------------------------------------------
 
 bool SaveAnimationAsset(const AnimationAsset& asset, const std::string& path)
 {
