@@ -270,7 +270,7 @@ static bool ImportSkeletalPrimitive(
 // Pass 2 — Skeleton
 // -----------------------------------------------------------------------
 
-static bool ImportSkeleton(const cgltf_skin& skin, const cgltf_data& data,
+static bool ImportSkeleton(const cgltf_skin& skin, [[maybe_unused]] const cgltf_data& data,
                            const float meshWorldMatrix[16], SkeletonAsset& outSkeleton)
 {
 	const cgltf_size boneCount = skin.joints_count;
