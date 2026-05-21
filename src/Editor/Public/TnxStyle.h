@@ -4,8 +4,15 @@
 #endif
 
 #include "imgui.h"
+#include <cmath>
 
 namespace TnxStyle {
+
+/// Per-channel sRGB → linear conversion (IEC 61966-2-1).
+inline float SrgbChan(float c) noexcept 
+{
+    return c <= 0.04045f ? c / 12.92f : powf((c + 0.055f) / 1.055f, 2.4f);
+}
 
 namespace Color {
     constexpr ImVec4 BgViewport     {0.027f, 0.027f, 0.040f, 1.0f};
@@ -21,6 +28,9 @@ namespace Color {
     constexpr ImVec4 FgMuted        {0.595f, 0.593f, 0.625f, 1.0f};
     constexpr ImVec4 FgDim          {0.387f, 0.384f, 0.419f, 1.0f};
     constexpr ImVec4 FgGhost        {0.259f, 0.256f, 0.284f, 1.0f};
+	
+	constexpr ImVec4 ViewportInner = {0.231f, 0.184f, 0.306f, 1.0f};  // #3B2F4E  oklch(0.22 0.04 295)
+	constexpr ImVec4 ViewportOuter = {0.106f, 0.102f, 0.122f, 1.0f};  // #1B1A1F  oklch(0.12 0.008 285)
 
     constexpr ImVec4 Purple         {0.565f, 0.415f, 0.898f, 1.0f};
     constexpr ImVec4 PurpleHot      {0.666f, 0.495f, 1.000f, 1.0f};
@@ -70,3 +80,9 @@ void Apply();
 void LoadFonts(const char* projectDir, const char* engineRoot, float dpiScale = 1.0f);
 
 } // namespace TnxStyle
+
+/// Convert a Color:: constant (authored in sRGB) to linear space for ImGui.
+/// Alpha is passed through unchanged.  Use this wherever a TnxStyle::Color
+/// value is passed to an ImGui style slot or draw call on an sRGB swapchain.
+#define LINEAR_FROM_SRGB(c) \
+    ImVec4(TnxStyle::SrgbChan((c).x), TnxStyle::SrgbChan((c).y), TnxStyle::SrgbChan((c).z), (c).w)

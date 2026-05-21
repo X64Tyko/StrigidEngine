@@ -12,6 +12,7 @@
 struct EntityDoc
 {
     std::string TypeName;
+    std::string FilePath;
 
     struct ComponentEntry
     {
@@ -28,7 +29,7 @@ struct EntityDoc
     char StatusMsg[256]  = {};
     bool bStatusError    = false;
 
-    explicit EntityDoc(const char* typeName);
+    explicit EntityDoc(const char* typeName, const char* filePath = nullptr);
 };
 
 /// Dockable editor window for Entity types.
@@ -42,8 +43,8 @@ public:
 
     void Draw(EditorState& state) override;
 
-    /// Open (or focus) an Entity type by name.
-    void OpenEntity(const char* typeName);
+    /// Open (or focus) an Entity type by name. Parses filePath when provided.
+    void OpenEntity(const char* typeName, const char* filePath = nullptr);
 
 private:
     std::vector<EntityDoc> Docs;

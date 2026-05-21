@@ -46,9 +46,11 @@ public:
 	void LoadScene(const std::string& path, bool bReset = true);
 
 	/// Open the Construct editor and create/focus a tab for the given type name.
-	void OpenConstructEditor(const char* typeName);
+	/// filePath is the absolute path to the header — when provided the doc is parsed from disk.
+	void OpenConstructEditor(const char* typeName, const char* filePath = nullptr);
 	/// Open the Entity editor and create/focus a tab for the given type name.
-	void OpenEntityEditor(const char* typeName);
+	/// filePath is the absolute path to the header — when provided the doc is parsed from disk.
+	void OpenEntityEditor(const char* typeName, const char* filePath = nullptr);
 
 	/// Show the mesh import dialog (called from ContentBrowserPanel).
 	void ShowImportDialog()

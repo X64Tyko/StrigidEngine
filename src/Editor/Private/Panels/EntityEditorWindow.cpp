@@ -10,18 +10,85 @@
 #include "imgui.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cstdio>
 #include <cstring>
+#include <fstream>
+#include <string>
+
+// ---------------------------------------------------------------------------
+// File parser — populates Components and seeds the spawn graph from an existing header
+// ---------------------------------------------------------------------------
+
+static void ParseEntityFile(const char* filePath, EntityDoc& doc)
+{
+    std::ifstream f(filePath, std::ios::binary);
+    if (!f.is_open()) return;
+    std::string src((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+
+    // Find all C-prefixed component member declarations: CXxx<WIDTH> MemberName
+    // We search for the literal "<WIDTH>" which only appears as a single-arg template
+    // instantiation on component types (CScale<WIDTH>, CColor<WIDTH>, etc.).
+    const std::string widthToken = "<WIDTH>";
+    size_t pos = 0;
+    while ((pos = src.find(widthToken, pos)) != std::string::npos)
+    {
+        // Walk backward from pos to extract the type name immediately before <WIDTH>
+        size_t wordEnd = pos;
+        size_t wordStart = wordEnd;
+        while (wordStart > 0 &&
+               (std::isalnum((unsigned char)src[wordStart - 1]) || src[wordStart - 1] == '_'))
+            --wordStart;
+
+        const std::string typeName = src.substr(wordStart, wordEnd - wordStart);
+
+        // Only count it if it follows the CXxx component naming convention
+        if (!typeName.empty() && typeName[0] == 'C' && std::isupper((unsigned char)typeName[1]))
+        {
+            // Confirm there is a member name after the closing >
+            size_t afterClose = pos + widthToken.size();
+            while (afterClose < src.size() && std::isspace((unsigned char)src[afterClose]))
+                ++afterClose;
+            size_t nameStart = afterClose;
+            size_t nameEnd   = nameStart;
+            while (nameEnd < src.size() &&
+                   (std::isalnum((unsigned char)src[nameEnd]) || src[nameEnd] == '_'))
+                ++nameEnd;
+
+            if (nameEnd > nameStart)
+            {
+                EntityDoc::ComponentEntry entry = {};
+                strncpy(entry.TypeName, typeName.c_str(), sizeof(entry.TypeName) - 1);
+                doc.Components.push_back(entry);
+            }
+        }
+
+        pos += widthToken.size();
+    }
+
+    doc.SpawnGraph.Clear();
+    doc.SpawnGraph.AddEventNode(NodeGraphCanvas::NodeKind::Event_OnSpawn, 80.0f, 120.0f);
+}
 
 // ---------------------------------------------------------------------------
 // EntityDoc
 // ---------------------------------------------------------------------------
 
-EntityDoc::EntityDoc(const char* typeName)
+EntityDoc::EntityDoc(const char* typeName, const char* filePath)
     : TypeName(typeName)
 {
     SpawnGraph.Clear();
-    SpawnGraph.AddEventNode(NodeGraphCanvas::NodeKind::Event_OnSpawn, 80.0f, 120.0f);
+
+    if (filePath && filePath[0])
+    {
+        FilePath = filePath;
+        strncpy(OutputPath, filePath, sizeof(OutputPath) - 1);
+        ParseEntityFile(filePath, *this);
+    }
+    else
+    {
+        SpawnGraph.AddEventNode(NodeGraphCanvas::NodeKind::Event_OnSpawn, 80.0f, 120.0f);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -33,13 +100,13 @@ EntityEditorWindow::EntityEditorWindow()
 {
 }
 
-void EntityEditorWindow::OpenEntity(const char* typeName)
+void EntityEditorWindow::OpenEntity(const char* typeName, const char* filePath)
 {
     for (int i = 0; i < static_cast<int>(Docs.size()); ++i)
     {
         if (Docs[i].TypeName == typeName) { ActiveTab = i; bVisible = true; return; }
     }
-    Docs.emplace_back(typeName);
+    Docs.emplace_back(typeName, filePath);
     ActiveTab = static_cast<int>(Docs.size()) - 1;
     bVisible  = true;
 }

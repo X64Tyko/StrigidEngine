@@ -12,11 +12,22 @@
 struct ConstructDoc
 {
     std::string TypeName;
+    std::string FilePath;
 
     /// One graph per tick slot. Index matches TickSlot enum.
     enum class TickSlot : int { PrePhysics = 0, PhysicsStep, PostPhysics, ScalarUpdate, Count };
     NodeGraphCanvas Graphs[static_cast<int>(TickSlot::Count)];
     int ActiveSlot = static_cast<int>(TickSlot::ScalarUpdate);
+
+    struct UserFuncTab
+    {
+        std::string    Name;
+        std::string    DisplayName;
+        std::string    Signature;
+        NodeGraphCanvas Graph;
+    };
+    std::vector<UserFuncTab> UserFuncs;
+    int ActiveUserFunc = -1;
 
     struct ViewEntry  { char TypeName[64] = "EMyEntity";  char MemberName[64] = "Body"; };
     struct OwnedEntry { char TypeName[64] = "MySubObject"; char MemberName[64] = "Sub";  };
@@ -28,7 +39,7 @@ struct ConstructDoc
     char StatusMsg[256]  = {};
     bool bStatusError    = false;
 
-    explicit ConstructDoc(const char* typeName);
+    explicit ConstructDoc(const char* typeName, const char* filePath = nullptr);
 };
 
 /// Dockable editor window for Construct types.
@@ -42,8 +53,8 @@ public:
 
     void Draw(EditorState& state) override;
 
-    /// Open (or focus) a Construct type by name.
-    void OpenConstruct(const char* typeName);
+    /// Open (or focus) a Construct type by name. Parses filePath when provided.
+    void OpenConstruct(const char* typeName, const char* filePath = nullptr);
 
 private:
     std::vector<ConstructDoc> Docs;

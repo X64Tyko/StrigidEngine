@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
 #include <mutex>
 #include <string>
 #include <SDL3/SDL.h>
@@ -82,12 +83,150 @@ struct ImGuiEventQueue
 // CRTP hooks
 // -----------------------------------------------------------------------
 
+// -----------------------------------------------------------------------
+// Viewport gradient pre-pass
+// -----------------------------------------------------------------------
+
+static std::vector<uint32_t> ReadGradientSPIRV(const char* path)
+{
+	std::ifstream f(path, std::ios::binary | std::ios::ate);
+	if (!f.is_open()) return {};
+	const auto sz = static_cast<size_t>(f.tellg());
+	f.seekg(0);
+	std::vector<uint32_t> buf(sz / sizeof(uint32_t));
+	f.read(reinterpret_cast<char*>(buf.data()), static_cast<std::streamsize>(sz));
+	return buf;
+}
+
+bool EditorRenderer::LoadGradientShaders()
+{
+	auto vert = ReadGradientSPIRV(TNX_SHADER_DIR "/graphics/viewport_gradient.vert.spv");
+	auto frag = ReadGradientSPIRV(TNX_SHADER_DIR "/graphics/viewport_gradient.frag.spv");
+	if (vert.empty() || frag.empty())
+	{
+		LOG_ENG_ERROR("[EditorRenderer] Failed to read gradient shader SPIR-V");
+		return false;
+	}
+
+	auto makeModule = [&](const std::vector<uint32_t>& code, VkShaderModule& out) -> bool
+	{
+		VkShaderModuleCreateInfo ci{};
+		ci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+		ci.codeSize = code.size() * sizeof(uint32_t);
+		ci.pCode    = code.data();
+		return vkCreateShaderModule(Device, &ci, nullptr, &out) == VK_SUCCESS;
+	};
+
+	if (!makeModule(vert, GradientVertShader) || !makeModule(frag, GradientFragShader))
+	{
+		LOG_ENG_ERROR("[EditorRenderer] Failed to create gradient shader modules");
+		return false;
+	}
+	return true;
+}
+
+bool EditorRenderer::CreateGradientPipeline()
+{
+	VkPipelineShaderStageCreateInfo stages[2]{};
+	stages[0].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+	stages[0].stage  = VK_SHADER_STAGE_VERTEX_BIT;
+	stages[0].module = GradientVertShader;
+	stages[0].pName  = "main";
+	stages[1].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+	stages[1].stage  = VK_SHADER_STAGE_FRAGMENT_BIT;
+	stages[1].module = GradientFragShader;
+	stages[1].pName  = "main";
+
+	VkPipelineVertexInputStateCreateInfo vertexInput{};
+	vertexInput.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+
+	VkPipelineInputAssemblyStateCreateInfo inputAssembly{};
+	inputAssembly.sType    = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+	inputAssembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+
+	VkPipelineViewportStateCreateInfo viewportState{};
+	viewportState.sType         = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+	viewportState.viewportCount = 1;
+	viewportState.scissorCount  = 1;
+
+	VkPipelineRasterizationStateCreateInfo raster{};
+	raster.sType     = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+	raster.polygonMode = VK_POLYGON_MODE_FILL;
+	raster.cullMode  = VK_CULL_MODE_NONE;
+	raster.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+	raster.lineWidth = 1.0f;
+
+	VkPipelineMultisampleStateCreateInfo multisample{};
+	multisample.sType                = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+	multisample.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+
+	VkPipelineDepthStencilStateCreateInfo depthStencil{};
+	depthStencil.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+
+	VkPipelineColorBlendAttachmentState blendAttach{};
+	blendAttach.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+	                             VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+
+	VkPipelineColorBlendStateCreateInfo colorBlend{};
+	colorBlend.sType           = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+	colorBlend.attachmentCount = 1;
+	colorBlend.pAttachments    = &blendAttach;
+
+	VkDynamicState dynStates[] = { VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR };
+	VkPipelineDynamicStateCreateInfo dynState{};
+	dynState.sType             = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+	dynState.dynamicStateCount = 2;
+	dynState.pDynamicStates    = dynStates;
+
+	VkFormat colorFmt = static_cast<VkFormat>(VkCtx->GetSwapchain().Format);
+	VkPipelineRenderingCreateInfo renderingCI{};
+	renderingCI.sType                   = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO;
+	renderingCI.colorAttachmentCount    = 1;
+	renderingCI.pColorAttachmentFormats = &colorFmt;
+	renderingCI.depthAttachmentFormat   = VK_FORMAT_UNDEFINED;
+
+	VkGraphicsPipelineCreateInfo pipelineCI{};
+	pipelineCI.sType               = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+	pipelineCI.pNext               = &renderingCI;
+	pipelineCI.stageCount          = 2;
+	pipelineCI.pStages             = stages;
+	pipelineCI.pVertexInputState   = &vertexInput;
+	pipelineCI.pInputAssemblyState = &inputAssembly;
+	pipelineCI.pViewportState      = &viewportState;
+	pipelineCI.pRasterizationState = &raster;
+	pipelineCI.pMultisampleState   = &multisample;
+	pipelineCI.pDepthStencilState  = &depthStencil;
+	pipelineCI.pColorBlendState    = &colorBlend;
+	pipelineCI.pDynamicState       = &dynState;
+	pipelineCI.layout              = *PipelineLayout;
+
+	VkPipeline rawPipeline = VK_NULL_HANDLE;
+	if (vkCreateGraphicsPipelines(Device, VK_NULL_HANDLE, 1, &pipelineCI, nullptr, &rawPipeline) != VK_SUCCESS)
+	{
+		LOG_ENG_ERROR("[EditorRenderer] Failed to create gradient pipeline");
+		return false;
+	}
+	GradientPipeline = vk::raii::Pipeline(VkCtx->GetRaiiDevice(), rawPipeline);
+	return true;
+}
+
+void EditorRenderer::DestroyGradientShaders()
+{
+	if (GradientVertShader) { vkDestroyShaderModule(Device, GradientVertShader, nullptr); GradientVertShader = VK_NULL_HANDLE; }
+	if (GradientFragShader) { vkDestroyShaderModule(Device, GradientFragShader, nullptr); GradientFragShader = VK_NULL_HANDLE; }
+}
+
 void EditorRenderer::OnPostStart()
 {
 	if (!InitImGui())
 	{
 		LOG_ENG_ERROR("[EditorRenderer] ImGui initialization failed; editor disabled");
 	}
+
+	if (!LoadGradientShaders() || !CreateGradientPipeline())
+		LOG_ENG_WARN("[EditorRenderer] Gradient pre-pass unavailable; falling back to flat clear");
+
+	DestroyGradientShaders();
 }
 
 void EditorRenderer::OnShutdown()
@@ -879,6 +1018,14 @@ void EditorRenderer::FillGpuFrameDataForViewport(WorldViewport* vp, FrameSync& f
 	vp->GPUActiveFrame = vp->CurrentFieldSlab;
 	vp->GPUPrevFrame   = vp->PrevFieldSlab;
 
+	// Viewport background gradient colors (written once per frame, read by gradient shader via BDA)
+	const ImVec4 ic = LINEAR_FROM_SRGB(TnxStyle::Color::ViewportInner);
+	const ImVec4 oc = LINEAR_FROM_SRGB(TnxStyle::Color::ViewportOuter);
+	data->BgInnerColor[0] = ic.x; data->BgInnerColor[1] = ic.y;
+	data->BgInnerColor[2] = ic.z; data->BgInnerColor[3] = ic.w;
+	data->BgOuterColor[0] = oc.x; data->BgOuterColor[1] = oc.y;
+	data->BgOuterColor[2] = oc.z; data->BgOuterColor[3] = oc.w;
+
 #ifdef TNX_DEBUG_RENDERING
 	data->DebugDrawMode = Editor ? Editor->GetState().DebugDrawMode : 0u;
 #endif
@@ -1016,7 +1163,8 @@ void EditorRenderer::RecordViewportScenePass(VkCommandBuffer cmd, FrameSync& fra
 			vkCmdPipelineBarrier2(cmd, &d);
 		}
 
-		vkCmdPushConstants(cmd, *PipelineLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_COMPUTE_BIT,
+		vkCmdPushConstants(cmd, *PipelineLayout,
+						   VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_COMPUTE_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
 						   0, sizeof(uint64_t), &gpuDataAddr);
 
 		vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, PredicatePipeline);
@@ -1089,12 +1237,66 @@ void EditorRenderer::RecordViewportScenePass(VkCommandBuffer cmd, FrameSync& fra
 		}
 	}
 
+	const bool bDrawGradient = !!*GradientPipeline;
+
+	// Dynamic viewport/scissor — valid outside render passes, persists into both gradient and scene passes.
+	VkViewport viewport{};
+	viewport.width    = static_cast<float>(ext.width);
+	viewport.height   = static_cast<float>(ext.height);
+	viewport.minDepth = 0.0f;
+	viewport.maxDepth = 1.0f;
+	vkCmdSetViewport(cmd, 0, 1, &viewport);
+
+	VkRect2D scissor{};
+	scissor.extent = ext;
+	vkCmdSetScissor(cmd, 0, 1, &scissor);
+
+	// Gradient mini-pass — own 1-color-attachment render pass so it's unaffected by
+	// GPU_PICKING_FAST (which forces bDoPick=true, making the scene pass use 2 attachments).
+	if (bDrawGradient)
+	{
+		VkRenderingAttachmentInfo gradColorAttach{};
+		gradColorAttach.sType       = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+		gradColorAttach.imageView   = static_cast<VkImageView>(vp->ColorTarget.View);
+		gradColorAttach.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+		gradColorAttach.loadOp      = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+		gradColorAttach.storeOp     = VK_ATTACHMENT_STORE_OP_STORE;
+
+		VkRenderingInfo gradRI{};
+		gradRI.sType                = VK_STRUCTURE_TYPE_RENDERING_INFO;
+		gradRI.renderArea           = {{0, 0}, ext};
+		gradRI.layerCount           = 1;
+		gradRI.colorAttachmentCount = 1;
+		gradRI.pColorAttachments    = &gradColorAttach;
+
+		vkCmdBeginRendering(cmd, &gradRI);
+		vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, *GradientPipeline);
+		vkCmdDraw(cmd, 3, 1, 0, 0);
+		vkCmdEndRendering(cmd);
+
+		VkImageMemoryBarrier2 gradBarrier{};
+		gradBarrier.sType            = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+		gradBarrier.srcStageMask     = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+		gradBarrier.srcAccessMask    = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+		gradBarrier.dstStageMask     = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+		gradBarrier.dstAccessMask    = VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+		gradBarrier.oldLayout        = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+		gradBarrier.newLayout        = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+		gradBarrier.image            = static_cast<VkImage>(vp->ColorTarget.Image);
+		gradBarrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+		VkDependencyInfo gradDep{};
+		gradDep.sType                   = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+		gradDep.imageMemoryBarrierCount = 1;
+		gradDep.pImageMemoryBarriers    = &gradBarrier;
+		vkCmdPipelineBarrier2(cmd, &gradDep);
+	}
+
 	// Scene render pass to offscreen targets
 	{
 		VkClearValue colorClear{};
-		colorClear.color.float32[0] = TnxStyle::Color::BgViewport.x;
-		colorClear.color.float32[1] = TnxStyle::Color::BgViewport.y;
-		colorClear.color.float32[2] = TnxStyle::Color::BgViewport.z;
+		colorClear.color.float32[0] = TnxStyle::SrgbChan(TnxStyle::Color::BgViewport.x);
+		colorClear.color.float32[1] = TnxStyle::SrgbChan(TnxStyle::Color::BgViewport.y);
+		colorClear.color.float32[2] = TnxStyle::SrgbChan(TnxStyle::Color::BgViewport.z);
 		colorClear.color.float32[3] = TnxStyle::Color::BgViewport.w;
 
 		VkClearValue depthClear{};
@@ -1104,7 +1306,8 @@ void EditorRenderer::RecordViewportScenePass(VkCommandBuffer cmd, FrameSync& fra
 		colorAttach.sType       = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
 		colorAttach.imageView   = static_cast<VkImageView>(vp->ColorTarget.View);
 		colorAttach.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-		colorAttach.loadOp      = VK_ATTACHMENT_LOAD_OP_CLEAR;
+		colorAttach.loadOp      = bDrawGradient ? VK_ATTACHMENT_LOAD_OP_LOAD
+		                                        : VK_ATTACHMENT_LOAD_OP_CLEAR;
 		colorAttach.storeOp     = VK_ATTACHMENT_STORE_OP_STORE;
 		colorAttach.clearValue  = colorClear;
 
@@ -1156,17 +1359,6 @@ void EditorRenderer::RecordViewportScenePass(VkCommandBuffer cmd, FrameSync& fra
 #endif
 
 		vkCmdBeginRendering(cmd, &ri);
-
-		VkViewport viewport{};
-		viewport.width    = static_cast<float>(ext.width);
-		viewport.height   = static_cast<float>(ext.height);
-		viewport.minDepth = 0.0f;
-		viewport.maxDepth = 1.0f;
-		vkCmdSetViewport(cmd, 0, 1, &viewport);
-
-		VkRect2D scissor{};
-		scissor.extent = ext;
-		vkCmdSetScissor(cmd, 0, 1, &scissor);
 
 #ifdef TNX_GPU_PICKING
 		vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
@@ -1329,9 +1521,9 @@ void EditorRenderer::RecordPIEFrame(FrameSync& frame, uint32_t imageIndex)
 		}
 
 		VkClearColorValue clearVal{};
-		clearVal.float32[0] = TnxStyle::Color::BgViewport.x;
-		clearVal.float32[1] = TnxStyle::Color::BgViewport.y;
-		clearVal.float32[2] = TnxStyle::Color::BgViewport.z;
+		clearVal.float32[0] = TnxStyle::SrgbChan(TnxStyle::Color::BgViewport.x);
+		clearVal.float32[1] = TnxStyle::SrgbChan(TnxStyle::Color::BgViewport.y);
+		clearVal.float32[2] = TnxStyle::SrgbChan(TnxStyle::Color::BgViewport.z);
 		clearVal.float32[3] = TnxStyle::Color::BgViewport.w;
 		VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
 		vkCmdClearColorImage(cmd, static_cast<VkImage>(vp->ColorTarget.Image),
@@ -1380,9 +1572,9 @@ void EditorRenderer::RecordPIEFrame(FrameSync& frame, uint32_t imageIndex)
 	// ImGui composite pass onto swapchain (clears, then draws all panels)
 	{
 		VkClearValue clearColor{};
-		clearColor.color.float32[0] = TnxStyle::Color::BgViewport.x;
-		clearColor.color.float32[1] = TnxStyle::Color::BgViewport.y;
-		clearColor.color.float32[2] = TnxStyle::Color::BgViewport.z;
+		clearColor.color.float32[0] = TnxStyle::SrgbChan(TnxStyle::Color::BgViewport.x);
+		clearColor.color.float32[1] = TnxStyle::SrgbChan(TnxStyle::Color::BgViewport.y);
+		clearColor.color.float32[2] = TnxStyle::SrgbChan(TnxStyle::Color::BgViewport.z);
 		clearColor.color.float32[3] = TnxStyle::Color::BgViewport.w;
 
 		VkRenderingAttachmentInfo colorAttach{};

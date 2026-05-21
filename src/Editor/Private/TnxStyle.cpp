@@ -128,72 +128,72 @@ void Apply()
     s.AntiAliasedFill        = true;
 
     ImVec4* c = s.Colors;
-    c[ImGuiCol_Text]                 = Fg;
-    c[ImGuiCol_TextDisabled]         = FgDim;
-    c[ImGuiCol_WindowBg]             = BgApp;
-    c[ImGuiCol_ChildBg]              = BgPanel;
-    c[ImGuiCol_PopupBg]              = BgPanel;
-    c[ImGuiCol_Border]               = Border;
+    c[ImGuiCol_Text]                 = LINEAR_FROM_SRGB(Fg);
+    c[ImGuiCol_TextDisabled]         = LINEAR_FROM_SRGB(FgDim);
+    c[ImGuiCol_WindowBg]             = LINEAR_FROM_SRGB(BgApp);
+    c[ImGuiCol_ChildBg]              = LINEAR_FROM_SRGB(BgPanel);
+    c[ImGuiCol_PopupBg]              = LINEAR_FROM_SRGB(BgPanel);
+    c[ImGuiCol_Border]               = LINEAR_FROM_SRGB(Border);
     c[ImGuiCol_BorderShadow]         = ImVec4(0, 0, 0, 0);
 
-    c[ImGuiCol_FrameBg]              = BgInput;
-    c[ImGuiCol_FrameBgHovered]       = ImVec4(BgInput.x, BgInput.y, BgInput.z + 0.05f, 1.0f);
-    c[ImGuiCol_FrameBgActive]        = PurpleFaint;
+    c[ImGuiCol_FrameBg]              = LINEAR_FROM_SRGB(BgInput);
+    c[ImGuiCol_FrameBgHovered]       = LINEAR_FROM_SRGB(ImVec4(BgInput.x, BgInput.y, BgInput.z + 0.05f, 1.0f));
+    c[ImGuiCol_FrameBgActive]        = LINEAR_FROM_SRGB(PurpleFaint);
 
-    c[ImGuiCol_TitleBg]              = BgDeep;
-    c[ImGuiCol_TitleBgActive]        = PurpleFaint;
-    c[ImGuiCol_TitleBgCollapsed]     = BgDeep;
-    c[ImGuiCol_MenuBarBg]            = BgDeep;
+    c[ImGuiCol_TitleBg]              = LINEAR_FROM_SRGB(BgDeep);
+    c[ImGuiCol_TitleBgActive]        = LINEAR_FROM_SRGB(PurpleFaint);
+    c[ImGuiCol_TitleBgCollapsed]     = LINEAR_FROM_SRGB(BgDeep);
+    c[ImGuiCol_MenuBarBg]            = LINEAR_FROM_SRGB(BgDeep);
 
     c[ImGuiCol_ScrollbarBg]          = ImVec4(0, 0, 0, 0);
-    c[ImGuiCol_ScrollbarGrab]        = Border;
-    c[ImGuiCol_ScrollbarGrabHovered] = BorderStrong;
-    c[ImGuiCol_ScrollbarGrabActive]  = PurpleSoft;
+    c[ImGuiCol_ScrollbarGrab]        = LINEAR_FROM_SRGB(Border);
+    c[ImGuiCol_ScrollbarGrabHovered] = LINEAR_FROM_SRGB(BorderStrong);
+    c[ImGuiCol_ScrollbarGrabActive]  = LINEAR_FROM_SRGB(PurpleSoft);
 
-    c[ImGuiCol_CheckMark]            = Purple;
-    c[ImGuiCol_SliderGrab]           = Purple;
-    c[ImGuiCol_SliderGrabActive]     = PurpleHot;
+    c[ImGuiCol_CheckMark]            = LINEAR_FROM_SRGB(Purple);
+    c[ImGuiCol_SliderGrab]           = LINEAR_FROM_SRGB(Purple);
+    c[ImGuiCol_SliderGrabActive]     = LINEAR_FROM_SRGB(PurpleHot);
 
-    c[ImGuiCol_Button]               = BgElev;
-    c[ImGuiCol_ButtonHovered]        = PurpleFaint;
-    c[ImGuiCol_ButtonActive]         = PurpleSoft;
+    c[ImGuiCol_Button]               = LINEAR_FROM_SRGB(BgElev);
+    c[ImGuiCol_ButtonHovered]        = LINEAR_FROM_SRGB(PurpleFaint);
+    c[ImGuiCol_ButtonActive]         = LINEAR_FROM_SRGB(PurpleSoft);
 
-    c[ImGuiCol_Header]               = PurpleWash;
-    c[ImGuiCol_HeaderHovered]        = PurpleFaint;
-    c[ImGuiCol_HeaderActive]         = PurpleSoft;
+    c[ImGuiCol_Header]               = LINEAR_FROM_SRGB(PurpleWash);
+    c[ImGuiCol_HeaderHovered]        = LINEAR_FROM_SRGB(PurpleFaint);
+    c[ImGuiCol_HeaderActive]         = LINEAR_FROM_SRGB(PurpleSoft);
 
-    c[ImGuiCol_Separator]            = BorderSoft;
-    c[ImGuiCol_SeparatorHovered]     = Border;
-    c[ImGuiCol_SeparatorActive]      = PurpleSoft;
+    c[ImGuiCol_Separator]            = LINEAR_FROM_SRGB(BorderSoft);
+    c[ImGuiCol_SeparatorHovered]     = LINEAR_FROM_SRGB(Border);
+    c[ImGuiCol_SeparatorActive]      = LINEAR_FROM_SRGB(PurpleSoft);
 
     c[ImGuiCol_ResizeGrip]           = ImVec4(0, 0, 0, 0);
-    c[ImGuiCol_ResizeGripHovered]    = PurpleFaint;
-    c[ImGuiCol_ResizeGripActive]     = PurpleSoft;
+    c[ImGuiCol_ResizeGripHovered]    = LINEAR_FROM_SRGB(PurpleFaint);
+    c[ImGuiCol_ResizeGripActive]     = LINEAR_FROM_SRGB(PurpleSoft);
 
-    c[ImGuiCol_Tab]                  = BgDeep;
-    c[ImGuiCol_TabHovered]           = BgElev;
-    c[ImGuiCol_TabSelected]          = PurpleFaint;
-    c[ImGuiCol_TabSelectedOverline]  = Purple;
-    c[ImGuiCol_TabDimmed]            = BgDeep;
-    c[ImGuiCol_TabDimmedSelected]    = BgElev;
+    c[ImGuiCol_Tab]                  = LINEAR_FROM_SRGB(BgDeep);
+    c[ImGuiCol_TabHovered]           = LINEAR_FROM_SRGB(BgElev);
+    c[ImGuiCol_TabSelected]          = LINEAR_FROM_SRGB(PurpleFaint);
+    c[ImGuiCol_TabSelectedOverline]  = LINEAR_FROM_SRGB(Purple);
+    c[ImGuiCol_TabDimmed]            = LINEAR_FROM_SRGB(BgDeep);
+    c[ImGuiCol_TabDimmedSelected]    = LINEAR_FROM_SRGB(BgElev);
 
-    c[ImGuiCol_DockingPreview]       = ImVec4(Purple.x, Purple.y, Purple.z, 0.4f);
-    c[ImGuiCol_DockingEmptyBg]       = BgDeep;
+    c[ImGuiCol_DockingPreview]       = LINEAR_FROM_SRGB(ImVec4(Purple.x, Purple.y, Purple.z, 0.4f));
+    c[ImGuiCol_DockingEmptyBg]       = LINEAR_FROM_SRGB(BgDeep);
 
-    c[ImGuiCol_PlotLines]            = ThBrain;
-    c[ImGuiCol_PlotLinesHovered]     = Yellow;
-    c[ImGuiCol_PlotHistogram]        = Purple;
-    c[ImGuiCol_PlotHistogramHovered] = PurpleHot;
+    c[ImGuiCol_PlotLines]            = LINEAR_FROM_SRGB(ThBrain);
+    c[ImGuiCol_PlotLinesHovered]     = LINEAR_FROM_SRGB(Yellow);
+    c[ImGuiCol_PlotHistogram]        = LINEAR_FROM_SRGB(Purple);
+    c[ImGuiCol_PlotHistogramHovered] = LINEAR_FROM_SRGB(PurpleHot);
 
-    c[ImGuiCol_TableHeaderBg]        = BgDeep;
-    c[ImGuiCol_TableBorderStrong]    = Border;
-    c[ImGuiCol_TableBorderLight]     = BorderSoft;
+    c[ImGuiCol_TableHeaderBg]        = LINEAR_FROM_SRGB(BgDeep);
+    c[ImGuiCol_TableBorderStrong]    = LINEAR_FROM_SRGB(Border);
+    c[ImGuiCol_TableBorderLight]     = LINEAR_FROM_SRGB(BorderSoft);
     c[ImGuiCol_TableRowBg]           = ImVec4(0, 0, 0, 0);
     c[ImGuiCol_TableRowBgAlt]        = ImVec4(1, 1, 1, 0.015f);
 
-    c[ImGuiCol_TextSelectedBg]       = PurpleSoft;
-    c[ImGuiCol_DragDropTarget]       = Yellow;
-    c[ImGuiCol_NavHighlight]         = Purple;
+    c[ImGuiCol_TextSelectedBg]       = LINEAR_FROM_SRGB(PurpleSoft);
+    c[ImGuiCol_DragDropTarget]       = LINEAR_FROM_SRGB(Yellow);
+    c[ImGuiCol_NavHighlight]         = LINEAR_FROM_SRGB(Purple);
 }
 
 } // namespace TnxStyle

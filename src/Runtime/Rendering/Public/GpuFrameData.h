@@ -111,7 +111,9 @@ struct GpuFrameData
 	uint64_t CurrFieldAddrs[MaxGpuFields];   // offset 1272
 	uint32_t FieldSemantics[MaxGpuFields];   // offset 2296
 	uint32_t FieldElementSize[MaxGpuFields]; // offset 2808
-};                                            // total  3320
+	float    BgInnerColor[4];               // offset 3320 — radial vignette center color (linear)
+	float    BgOuterColor[4];               // offset 3336 — radial vignette edge color (linear)
+};
 
-static_assert(sizeof(GpuFrameData) == 3336,
+static_assert(sizeof(GpuFrameData) == 3368,
 			  "GpuFrameData size mismatch — layout must match GpuFrameData.slang exactly");

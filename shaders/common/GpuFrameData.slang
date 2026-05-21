@@ -115,4 +115,6 @@ struct GpuFrameData
     uint64_t CurrFieldAddrs[MaxGpuFields];
     uint     FieldSemantics[MaxGpuFields];
     uint     FieldElementSize[MaxGpuFields];
+    float    BgInnerColor[4]; // radial vignette center color (linear)
+    float    BgOuterColor[4]; // radial vignette edge color (linear)
 };

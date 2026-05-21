@@ -2,6 +2,7 @@
 
 #include <vector>
 
+#include "EngineAnnotations.h"
 #include "AssetRegistry.h"
 #include "EntityMeta.h"
 #include "EntityRecord.h"

@@ -26,6 +26,13 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 # Harmless on Windows/MSVC; prevents relocation errors on ELF targets.
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
+# Route all executables, DLLs (.dll / .so) to a common bin/ directory so
+# runtime discovery is automatic. Adding a new plugin requires no changes
+# to consuming targets on any platform.
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")  # exe + .dll
+set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")  # .so
+set(CMAKE_BUILD_RPATH "$ORIGIN")                               # Linux: find co-located .so
+
 # -----------------------------------------------------------------------------
 # 2. BUILD OPTIONS
 # -----------------------------------------------------------------------------
@@ -581,8 +588,12 @@ endif () # TNX_ENABLE_NETWORK
 # -----------------------------------------------------------------------------
 # 9. SUBDIRECTORIES (Projects in Solution)
 # -----------------------------------------------------------------------------
+add_subdirectory(TrinyxParser)
+set_property(TARGET TrinyxParser PROPERTY FOLDER "Tools")
+
 add_subdirectory(Trinyx)
 set_property(TARGET Trinyx PROPERTY FOLDER "Engine")
+add_dependencies(Trinyx TrinyxParser)
 # Propagate the TNX_FIXED_IMPLICIT_FLOAT define to the engine library
 if (TARGET Trinyx)
     target_compile_definitions(Trinyx PRIVATE

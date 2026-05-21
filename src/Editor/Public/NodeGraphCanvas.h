@@ -20,20 +20,22 @@ public:
     // Data model
     // -------------------------------------------------------------------------
 
-    enum class PinType : uint8_t { Exec, Float, Int, Bool, Vec3 };
+    enum class PinType : uint8_t { Exec, Float, Int, Bool, Vec3, Any };
     enum class PinDir  : uint8_t { Input, Output };
 
     struct Pin
     {
-        int     ID   = 0;
-        PinType Type = PinType::Exec;
-        PinDir  Dir  = PinDir::Input;
-        char    Name[32] = {};
+        int         ID       = 0;
+        PinType     Type     = PinType::Exec;
+        PinDir      Dir      = PinDir::Input;
+        char        Name[32] = {};
+        std::string TypeName; // non-empty when Type == Any; holds the raw C++ type string
     };
 
     enum class NodeKind : uint8_t
     {
         Event_OnPrePhysics,
+        Event_OnPhysicsStep,
         Event_OnPostPhysics,
         Event_OnUpdate,
         Event_OnSpawn,
@@ -45,6 +47,33 @@ public:
         Math_Add, Math_Subtract, Math_Multiply, Math_Divide, Math_Clamp, Math_Lerp,
         Vec3_Make, Vec3_Break, Vec3_Length, Vec3_Normalize, Vec3_Scale,
         GetPosition, SetPosition, GetVelocity, SetVelocity, ApplyImpulse,
+
+        // Literals / values (data-only, no exec pins)
+        Const_Float, Const_Int, Const_Bool,
+        GetDeltaTime,
+
+        // Logic
+        Compare,         // Payload = operator string: "<" ">" "<=" ">=" "==" "!="
+        LogicalAnd, LogicalOr, LogicalNot,
+
+        // Input
+        CheckAction,     // Payload = action name
+
+        // Additional math
+        Math_Sqrt, Math_Abs, Math_Negate,
+
+        // Flow
+        Return_,
+
+        // Local variable — Payload = init expression, Title = variable name
+        // Has Exec in/out + one data output carrying the value
+        LocalVar,
+
+        // User-defined function entry (TNXFUNC-tagged methods) — Title = display name
+        FuncEntry,
+
+        // Parser-generated fallback — stores raw C++ text in Payload
+        RawCode,
     };
 
     struct ScriptNode
@@ -55,11 +84,13 @@ public:
         float    PosY  = 100.0f;
         float    BodyH = 40.0f;
         char     Title[64] = {};
+        std::string Payload; // property path, literal value, operator, raw code, etc.
         std::vector<Pin> Pins;
 
         bool IsEventNode() const
         {
             return Kind == NodeKind::Event_OnPrePhysics
+                || Kind == NodeKind::Event_OnPhysicsStep
                 || Kind == NodeKind::Event_OnPostPhysics
                 || Kind == NodeKind::Event_OnUpdate
                 || Kind == NodeKind::Event_OnSpawn
@@ -113,7 +144,16 @@ public:
     // -------------------------------------------------------------------------
 
     void AddEventNode(NodeKind kind, float cx, float cy);
+    void AddFuncEntryNode(const char* displayName, float cx, float cy);
     void AddActionNode(NodeKind kind, float cx, float cy);
+
+    /// Add a pre-built node directly (used by the body parser).
+    void AddNode(ScriptNode node) { Nodes.push_back(std::move(node)); }
+
+    /// Wire an exec-out pin to an exec-in pin.
+    void AddExecLink(int srcNodeID, int srcPinID, int dstNodeID, int dstPinID);
+    /// Wire any two data pins.
+    void AddDataLink(int srcNodeID, int srcPinID, int dstNodeID, int dstPinID);
 
     // -------------------------------------------------------------------------
     // Utilities

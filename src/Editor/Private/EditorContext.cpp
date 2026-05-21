@@ -1838,16 +1838,16 @@ uint32_t EditorContext::ImportMeshAsset(const std::string& gltfPath)
 }
 
 
-void EditorContext::OpenConstructEditor(const char* typeName)
+void EditorContext::OpenConstructEditor(const char* typeName, const char* filePath)
 {
 	if (CurrentWorkspace != Workspace::Logic) CurrentWorkspace = Workspace::Logic;
-	if (ConstructEditorPtr) ConstructEditorPtr->OpenConstruct(typeName);
+	if (ConstructEditorPtr) ConstructEditorPtr->OpenConstruct(typeName, filePath);
 }
 
-void EditorContext::OpenEntityEditor(const char* typeName)
+void EditorContext::OpenEntityEditor(const char* typeName, const char* filePath)
 {
 	if (CurrentWorkspace != Workspace::Logic) CurrentWorkspace = Workspace::Logic;
-	if (EntityEditorPtr) EntityEditorPtr->OpenEntity(typeName);
+	if (EntityEditorPtr) EntityEditorPtr->OpenEntity(typeName, filePath);
 }
 
 void EditorContext::HandleDroppedFile(const std::string& path)

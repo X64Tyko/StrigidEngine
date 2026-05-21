@@ -233,6 +233,8 @@ if (TNX_ENABLE_EDITOR)
     _tnx_set_folder("${CMAKE_SOURCE_DIR}/libs/freetype" "ThirdParty/FreeType")
     target_link_libraries(${PROJECT_NAME} PUBLIC freetype)
 endif ()
+
+target_link_libraries(${PROJECT_NAME} PUBLIC TrinyxParser)
 if (NOT TNX_HEADLESS)
     target_link_libraries(${PROJECT_NAME} PUBLIC Vulkan::Vulkan)
 endif ()
@@ -352,6 +354,8 @@ set(SLANG_SHADER_SOURCES
         "${CMAKE_SOURCE_DIR}/shaders/compute/skinning.slang"
         "${CMAKE_SOURCE_DIR}/shaders/graphics/cube.vert.slang"
         "${CMAKE_SOURCE_DIR}/shaders/graphics/cube.frag.slang"
+        "${CMAKE_SOURCE_DIR}/shaders/graphics/viewport_gradient.vert.slang"
+        "${CMAKE_SOURCE_DIR}/shaders/graphics/viewport_gradient.frag.slang"
 )
 
 # Shared header that all shaders include — listed in DEPENDS so any shader

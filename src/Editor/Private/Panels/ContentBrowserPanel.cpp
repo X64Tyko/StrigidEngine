@@ -663,9 +663,9 @@ void ContentBrowserPanel::DrawSourcePane(EditorState& state)
         if (clicked && ImGui::IsMouseDoubleClicked(0) && state.EditorCtx)
         {
             if (kind == SourceFileKind::Construct)
-                state.EditorCtx->OpenConstructEditor(stem.c_str());
+                state.EditorCtx->OpenConstructEditor(stem.c_str(), key.c_str());
             else if (kind == SourceFileKind::Entity)
-                state.EditorCtx->OpenEntityEditor(stem.c_str());
+                state.EditorCtx->OpenEntityEditor(stem.c_str(), key.c_str());
         }
 
         ImGui::NextColumn();
@@ -775,10 +775,11 @@ void ContentBrowserPanel::CommitSourceCreate(EditorState& state)
     // Open the appropriate editor.
     if (state.EditorCtx)
     {
+        const std::string absPath = filePath.generic_string();
         if (bSourceCreateConstruct)
-            state.EditorCtx->OpenConstructEditor(name.c_str());
+            state.EditorCtx->OpenConstructEditor(name.c_str(), absPath.c_str());
         else
-            state.EditorCtx->OpenEntityEditor(name.c_str());
+            state.EditorCtx->OpenEntityEditor(name.c_str(), absPath.c_str());
     }
 }
 

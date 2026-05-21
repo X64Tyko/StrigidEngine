@@ -40,15 +40,3 @@ target_include_directories(${PROJECT_NAME} PRIVATE
 target_compile_definitions(${PROJECT_NAME} PRIVATE
         TNX_PROJECT_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
 )
-
-# -----------------------------------------------------------------------------
-# POST-BUILD STEPS
-# -----------------------------------------------------------------------------
-if (WIN32)
-    # Copy SDL3.dll to the executable folder
-    add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${SDL3_PATH}/lib/x64/SDL3.dll"
-            $<TARGET_FILE_DIR:${PROJECT_NAME}>
-    )
-endif ()

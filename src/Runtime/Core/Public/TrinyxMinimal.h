@@ -70,3 +70,6 @@
 // Fundamental engine types: EngineMode, Vector3/Quat/Matrix4, SimFloat aliases,
 // CacheTier, FieldWidth, ComponentTypeID, MAX_* constants — 32+ TUs.
 #include "Types.h"
+
+// Engine annotation macros (TNXFUNC, etc.) — expands to nothing at runtime.
+#include "EngineAnnotations.h"

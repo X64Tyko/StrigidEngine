@@ -1790,7 +1790,7 @@ bool RendererCore<Derived>::CreatePipeline()
 	VkFormat colorFmt = static_cast<VkFormat>(VkCtx->GetSwapchain().Format);
 
 	VkPushConstantRange pushRange{};
-	pushRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_COMPUTE_BIT;
+	pushRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_COMPUTE_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
 	pushRange.offset     = 0;
 	pushRange.size       = sizeof(uint64_t);
 

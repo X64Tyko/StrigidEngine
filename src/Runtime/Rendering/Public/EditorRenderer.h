@@ -71,12 +71,22 @@ private:
 	void DrainImGuiEvents();
 	void BuildImGuiFrame();
 
+	// Viewport gradient pre-pass
+	bool LoadGradientShaders();
+	bool CreateGradientPipeline();
+	void DestroyGradientShaders();
+
 	// PIE viewport rendering
 	void WriteToViewportSlab(WorldViewport* vp);
 	void FlushViewportSlabUpload(WorldViewport* vp);
 	void FillGpuFrameDataForViewport(WorldViewport* vp, FrameSync& frame);
 	void RecordViewportScenePass(VkCommandBuffer cmd, FrameSync& frame, WorldViewport* vp);
 	void RecordPIEFrame(FrameSync& frame, uint32_t imageIndex);
+
+	// Viewport gradient pre-pass pipeline
+	VkShaderModule GradientVertShader = VK_NULL_HANDLE;
+	VkShaderModule GradientFragShader = VK_NULL_HANDLE;
+	vk::raii::Pipeline GradientPipeline{nullptr};
 
 	// Editor-specific state
 	VkDescriptorPool ImGuiDescriptorPool = VK_NULL_HANDLE;
