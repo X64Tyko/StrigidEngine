@@ -27,11 +27,12 @@ struct PrefabDoc
     bool bTabOpen                = true;
     bool bPreviewRebuildPending  = false;
 
-    // Preview world (Entity-type prefabs only — Construct preview not yet supported)
+    // Preview world (Entity-type prefabs only — Construct preview not supported)
     std::unique_ptr<FlowManagerBase> PreviewFlow;
     std::unique_ptr<WorldViewport>   PreviewViewport;
     EngineConfig PreviewConfig;
     bool bPreviewReady = false;
+    std::string PreviewError; // Set when preview fails; shown in the viewport area.
 
     // Orbit camera state (render-thread owned)
     float OrbitYaw   = 0.0f;
@@ -68,6 +69,10 @@ private:
     void DestroyPreviewWorld(PrefabDoc& doc, EditorState& state);
     void UpdateOrbitCamera(PrefabDoc& doc);
     void SaveDoc(PrefabDoc& doc);
+
+    // After any push_back or erase on Docs, rewire each PreviewFlow's Config pointer
+    // to the vector-resident PrefabDoc::PreviewConfig (addresses shift on reallocation).
+    void RewireAllPreviewConfigs();
 
     /// Draw one editable field row inside the inspector.
     void DrawFieldRow(PrefabDoc& doc, const std::string& compName,

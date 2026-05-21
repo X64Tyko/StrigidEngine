@@ -31,6 +31,7 @@ static constexpr uint32_t kPreviewHeight = 512;
 PrefabEditorWindow::PrefabEditorWindow()
     : EditorPanel("Prefab Editor")
 {
+    Docs.reserve(16);
 }
 
 // ---------------------------------------------------------------------------
@@ -61,17 +62,31 @@ void PrefabEditorWindow::OpenPrefab(const std::string& filePath, EditorState& st
 
     ParseFromJson(doc);
 
-    if (doc.PrefabType != "Construct" && !doc.BaseTypeName.empty())
-        RebuildPreviewWorld(doc, state);
-
+    // Push the doc into Docs BEFORE calling RebuildPreviewWorld so that
+    // PreviewFlow->Config stores a pointer to the vector-resident PreviewConfig,
+    // not a now-dead stack address. RewireAllPreviewConfigs updates any existing
+    // docs whose addresses shifted due to vector reallocation.
     ActiveTab = static_cast<int>(Docs.size());
     Docs.push_back(std::move(doc));
+    RewireAllPreviewConfigs();
+
+    if (Docs.back().PrefabType != "Construct" && !Docs.back().BaseTypeName.empty())
+        RebuildPreviewWorld(Docs.back(), state);
 }
 
 void PrefabEditorWindow::DestroyAllPreviews(EditorState& state)
 {
     for (auto& doc : Docs)
         DestroyPreviewWorld(doc, state);
+}
+
+void PrefabEditorWindow::RewireAllPreviewConfigs()
+{
+    for (auto& doc : Docs)
+    {
+        if (doc.PreviewFlow)
+            doc.PreviewFlow->RewireConfig(&doc.PreviewConfig);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -108,13 +123,26 @@ void PrefabEditorWindow::ParseFromJson(PrefabDoc& doc)
 void PrefabEditorWindow::RebuildPreviewWorld(PrefabDoc& doc, EditorState& state)
 {
     DestroyPreviewWorld(doc, state);
+    doc.PreviewError.clear();
 
-    if (doc.BaseTypeName.empty()) return;
+    if (doc.BaseTypeName.empty())
+    {
+        doc.PreviewError = "No entity type specified.";
+        return;
+    }
     auto& reg = ReflectionRegistry::Get();
-    if (reg.NameToClassID.find(doc.BaseTypeName) == reg.NameToClassID.end()) return;
+    if (reg.NameToClassID.find(doc.BaseTypeName) == reg.NameToClassID.end())
+    {
+        doc.PreviewError = "Entity type '" + doc.BaseTypeName + "' not found in registry.";
+        return;
+    }
 
     auto* renderer = state.EnginePtr->GetRenderer();
-    if (!renderer) return;
+    if (!renderer)
+    {
+        doc.PreviewError = "Renderer not available.";
+        return;
+    }
 
     doc.PreviewConfig = *state.EnginePtr->GetGameConfig();
     doc.PreviewFlow   = std::make_unique<PIELocalFlow>();
@@ -123,6 +151,7 @@ void PrefabEditorWindow::RebuildPreviewWorld(PrefabDoc& doc, EditorState& state)
     if (!doc.PreviewFlow->CreateWorld())
     {
         doc.PreviewFlow.reset();
+        doc.PreviewError = "Preview world creation failed.";
         return;
     }
 
@@ -238,6 +267,7 @@ void PrefabEditorWindow::Draw(EditorState& state)
         {
             DestroyPreviewWorld(Docs[i], state);
             Docs.erase(Docs.begin() + i);
+            RewireAllPreviewConfigs();
             if (ActiveTab >= static_cast<int>(Docs.size()))
                 ActiveTab = static_cast<int>(Docs.size()) - 1;
         }
@@ -292,12 +322,23 @@ void PrefabEditorWindow::Draw(EditorState& state)
     else
     {
         ImGui::BeginChild("##nopv", ImVec2(vpW, totalH));
-        ImGui::PushStyleColor(ImGuiCol_Text, TnxStyle::Color::FgDim);
         ImGui::SetCursorPosY(totalH * 0.45f);
-        float tw = ImGui::CalcTextSize("No preview available").x;
-        ImGui::SetCursorPosX((vpW - tw) * 0.5f);
-        ImGui::TextUnformatted("No preview available");
-        ImGui::PopStyleColor();
+        if (!doc.PreviewError.empty())
+        {
+            ImGui::PushStyleColor(ImGuiCol_Text, TnxStyle::Color::Warn);
+            float tw = ImGui::CalcTextSize(doc.PreviewError.c_str()).x;
+            ImGui::SetCursorPosX((vpW - std::min(tw, vpW - 24.0f)) * 0.5f);
+            ImGui::TextWrapped("%s", doc.PreviewError.c_str());
+            ImGui::PopStyleColor();
+        }
+        else
+        {
+            ImGui::PushStyleColor(ImGuiCol_Text, TnxStyle::Color::FgDim);
+            float tw = ImGui::CalcTextSize("No preview available").x;
+            ImGui::SetCursorPosX((vpW - tw) * 0.5f);
+            ImGui::TextUnformatted("No preview available");
+            ImGui::PopStyleColor();
+        }
         ImGui::EndChild();
     }
 
@@ -391,10 +432,120 @@ void PrefabEditorWindow::DrawInspector(PrefabDoc& doc, float width, EditorState&
 
     if (doc.PrefabType == "Construct")
     {
-        ImGui::PushStyleColor(ImGuiCol_Text, TnxStyle::Color::FgDim);
-        ImGui::TextWrapped("Construct prefabs are not yet editable here. "
-                           "Use the Construct Editor to modify defaults.");
+        // Validate the construct type is registered.
+        auto& reflReg = ReflectionRegistry::Get();
+        bool  typeKnown = false;
+        for (const auto& entry : reflReg.RegisteredConstructs)
+        {
+            if (entry.Name && doc.BaseTypeName == entry.Name)
+            {
+                typeKnown = true;
+                break;
+            }
+        }
+        if (!doc.BaseTypeName.empty() && !typeKnown)
+        {
+            ImGui::PushStyleColor(ImGuiCol_Text, TnxStyle::Color::Warn);
+            ImGui::TextWrapped("'%s' is not a registered Construct type.", doc.BaseTypeName.c_str());
+            ImGui::PopStyleColor();
+            ImGui::Spacing();
+        }
+
+        // Ensure the "defaults" object exists in the JSON.
+        if (!doc.RootJson.Find("defaults"))
+            doc.RootJson["defaults"] = JsonValue::Object();
+
+        JsonValue* defs = doc.RootJson.Find("defaults");
+
+        ImGui::PushStyleColor(ImGuiCol_Text, TnxStyle::Color::FgMuted);
+        ImGui::TextUnformatted("Defaults");
         ImGui::PopStyleColor();
+        ImGui::Separator();
+        ImGui::Spacing();
+
+        if (defs && defs->IsObject())
+        {
+            auto& pairs = defs->GetObject();
+            int   rmAt  = -1;
+
+            for (int pi = 0; pi < static_cast<int>(pairs.size()); ++pi)
+            {
+                auto& [k, v] = pairs[pi];
+                ImGui::PushID(pi);
+
+                // Key label.
+                ImGui::PushStyleColor(ImGuiCol_Text, TnxStyle::Color::FgMuted);
+                ImGui::TextUnformatted(k.c_str());
+                ImGui::PopStyleColor();
+                ImGui::SameLine();
+
+                // Remove (×) button.
+                ImGui::PushStyleColor(ImGuiCol_Text,         TnxStyle::Color::FgMuted);
+                ImGui::PushStyleColor(ImGuiCol_Button,        ImVec4(0,0,0,0));
+                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, TnxStyle::Color::BgElev);
+                ImGui::PushStyleColor(ImGuiCol_ButtonActive,  TnxStyle::Color::BgElev);
+                if (ImGui::SmallButton("x")) rmAt = pi;
+                ImGui::PopStyleColor(4);
+                ImGui::SameLine();
+
+                // Value editor.
+                ImGui::SetNextItemWidth(-1.0f);
+                if (v.IsString())
+                {
+                    char buf[256] = {};
+                    std::strncpy(buf, v.AsString().c_str(), sizeof(buf) - 1);
+                    if (ImGui::InputText("##dv", buf, sizeof(buf)))
+                    {
+                        v          = JsonValue::String(buf);
+                        doc.bDirty = true;
+                    }
+                }
+                else if (v.IsNumber())
+                {
+                    float fv = v.AsFloat();
+                    if (ImGui::InputFloat("##dv", &fv, 0.0f, 0.0f, "%.4g"))
+                    {
+                        v          = JsonValue::Number(static_cast<double>(fv));
+                        doc.bDirty = true;
+                    }
+                }
+                else
+                {
+                    ImGui::PushStyleColor(ImGuiCol_Text, TnxStyle::Color::FgDim);
+                    ImGui::TextUnformatted("(unsupported value type)");
+                    ImGui::PopStyleColor();
+                }
+
+                ImGui::PopID();
+            }
+
+            if (rmAt >= 0)
+            {
+                pairs.erase(pairs.begin() + rmAt);
+                doc.bDirty = true;
+            }
+        }
+
+        // Add new default key-value pair.
+        ImGui::Spacing();
+        ImGui::Separator();
+        ImGui::Spacing();
+
+        static char s_NewKey[128] = {};
+        static char s_NewVal[256] = {};
+        ImGui::SetNextItemWidth(100.0f);
+        ImGui::InputText("Key##nk", s_NewKey, sizeof(s_NewKey));
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(-60.0f);
+        ImGui::InputText("##nv", s_NewVal, sizeof(s_NewVal));
+        ImGui::SameLine();
+        if (TnxWidgets::ButtonPrimary("Add") && s_NewKey[0] != '\0')
+        {
+            (*defs)[s_NewKey] = JsonValue::String(s_NewVal);
+            doc.bDirty        = true;
+            s_NewKey[0] = s_NewVal[0] = '\0';
+        }
+
         ImGui::PopStyleVar();
         ImGui::EndChild();
         return;

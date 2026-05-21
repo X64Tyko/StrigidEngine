@@ -124,7 +124,7 @@ void ScriptRegistry::Shutdown()
         Components[i].Blobs.reset();
         Components[i].HasComp.reset();
         Components[i].Capacity = 0;
-        Components[i].Schema   = {};
+        Components[i].Schema   = ScriptSchema{};
     }
     NameToIndex.clear();
     IDToIndex.clear();
