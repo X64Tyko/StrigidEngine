@@ -53,6 +53,7 @@
 #include "Panels/ComponentGeneratorPanel.h"
 #include "Panels/ConstructEditorWindow.h"
 #include "Panels/EntityEditorWindow.h"
+#include "Panels/PrefabEditorWindow.h"
 #include "Panels/DebuggerPanel.h"
 
 EditorContext::EditorContext() = default;
@@ -61,6 +62,7 @@ EditorContext::~EditorContext()
 {
 	SaveEditorSettings();
 	if (bPIEActive) StopPIE();
+	if (PrefabEditorPtr) PrefabEditorPtr->DestroyAllPreviews(State);
 }
 
 void EditorContext::Initialize(TrinyxEngine* engine, LogicThreadBase* logic)
@@ -127,6 +129,7 @@ void EditorContext::Initialize(TrinyxEngine* engine, LogicThreadBase* logic)
 	AddPanel<ComponentGeneratorPanel>();
 	ConstructEditorPtr = AddPanel<ConstructEditorWindow>();
 	EntityEditorPtr    = AddPanel<EntityEditorWindow>();
+	PrefabEditorPtr    = AddPanel<PrefabEditorWindow>();
 	AddPanel<DebuggerPanel>();
 
 	LOG_ENG_INFO_F("[Editor] Initialized with %zu panels", Panels.size());
@@ -134,12 +137,13 @@ void EditorContext::Initialize(TrinyxEngine* engine, LogicThreadBase* logic)
 	// --- Register command palette commands ---
 	TnxPalette::Clear();
 
-	// Workspace switch × 5
+	// Workspace switch × 6
 	TnxPalette::Register({"Switch to Layout workspace",   nullptr, nullptr, nullptr, [this]{ CurrentWorkspace = Workspace::Layout;   }});
 	TnxPalette::Register({"Switch to Logic workspace",    nullptr, nullptr, nullptr, [this]{ CurrentWorkspace = Workspace::Logic;    }});
 	TnxPalette::Register({"Switch to Simulate workspace", nullptr, nullptr, nullptr, [this]{ CurrentWorkspace = Workspace::Simulate; }});
 	TnxPalette::Register({"Switch to Network workspace",  nullptr, nullptr, nullptr, [this]{ CurrentWorkspace = Workspace::Network;  }});
 	TnxPalette::Register({"Switch to Profile workspace",  nullptr, nullptr, nullptr, [this]{ CurrentWorkspace = Workspace::Profile;  }});
+	TnxPalette::Register({"Switch to Asset workspace",    nullptr, nullptr, nullptr, [this]{ CurrentWorkspace = Workspace::Asset;    }});
 
 	// Scene operations
 	TnxPalette::Register({"Open Scene…",   nullptr, nullptr, "Ctrl+O", [this]{
@@ -294,7 +298,7 @@ void EditorContext::DrawGizmo()
 
 	// Get view and projection matrices from the frame header
 	ComponentCacheBase* tc   = State.RegistryPtr->GetTemporalCache();
-	TemporalFrameHeader* hdr = tc->GetFrameHeader();
+	TemporalFrameHeader* hdr = tc->GetFrameHeader(tc->GetActiveReadFrame());
 	if (!hdr) return;
 
 	// Build field array table for the selected entity's chunk
@@ -911,6 +915,16 @@ void EditorContext::ApplyWorkspaceLayout(unsigned int dockspaceID, Workspace ws)
 			ImGui::DockBuilderDockWindow("Component Generator",  profBottom);
 			break;
 		}
+		case Workspace::Asset:
+		{
+			ImGuiID assetBottom, assetMain;
+			ImGui::DockBuilderSplitNode(dockspaceID, ImGuiDir_Down, 0.22f, &assetBottom, &assetMain);
+
+			ImGui::DockBuilderDockWindow("Prefab Editor",    assetMain);
+			ImGui::DockBuilderDockWindow("Content Browser",  assetBottom);
+			ImGui::DockBuilderDockWindow("Log",              assetBottom);
+			break;
+		}
 	}
 
 	ImGui::DockBuilderFinish(dockspaceID);
@@ -1016,7 +1030,9 @@ void EditorContext::BuildMenuBar()
 		ImGui::Separator();
 		if (ImGui::MenuItem("Reset Layout"))
 		{
-			bFirstFrame = true;
+			bWorkspaceLayoutBuilt[static_cast<int>(CurrentWorkspace)] = false;
+			for (auto& panel : Panels)
+				panel->bForceMainViewport = true;
 		}
 		ImGui::EndMenu();
 	}
@@ -1137,7 +1153,7 @@ void EditorContext::BuildMenuBar()
 	// --- Workspace pills ---
 	{
 		static constexpr const char* kWorkspaceNames[] = {
-			"Layout", "Logic", "Simulate", "Network", "Profile"
+			"Layout", "Logic", "Simulate", "Network", "Profile", "Asset"
 		};
 		ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 10.0f);
 		ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,  ImVec2(14.0f, 5.0f));
@@ -1565,6 +1581,7 @@ void EditorContext::LoadEditorSettings()
 		else if (s == "Simulate") CurrentWorkspace = Workspace::Simulate;
 		else if (s == "Network")  CurrentWorkspace = Workspace::Network;
 		else if (s == "Profile")  CurrentWorkspace = Workspace::Profile;
+		else if (s == "Asset")    CurrentWorkspace = Workspace::Asset;
 		else                      CurrentWorkspace = Workspace::Layout;
 	}
 }
@@ -1588,6 +1605,7 @@ void EditorContext::SaveEditorSettings()
 		case Workspace::Simulate: workspace = "Simulate"; break;
 		case Workspace::Network:  workspace = "Network";  break;
 		case Workspace::Profile:  workspace = "Profile";  break;
+		case Workspace::Asset:    workspace = "Asset";    break;
 		default: break;
 	}
 
@@ -1848,6 +1866,12 @@ void EditorContext::OpenEntityEditor(const char* typeName, const char* filePath)
 {
 	if (CurrentWorkspace != Workspace::Logic) CurrentWorkspace = Workspace::Logic;
 	if (EntityEditorPtr) EntityEditorPtr->OpenEntity(typeName, filePath);
+}
+
+void EditorContext::OpenPrefabEditor(const std::string& filePath)
+{
+	if (CurrentWorkspace != Workspace::Asset) CurrentWorkspace = Workspace::Asset;
+	if (PrefabEditorPtr) PrefabEditorPtr->OpenPrefab(filePath, State);
 }
 
 void EditorContext::HandleDroppedFile(const std::string& path)
@@ -2757,7 +2781,7 @@ void EditorContext::DrawEditorGrid()
 {
 	if (!State.RegistryPtr) return;
 	ComponentCacheBase* tc   = State.RegistryPtr->GetTemporalCache();
-	TemporalFrameHeader* hdr = tc->GetFrameHeader();
+	TemporalFrameHeader* hdr = tc->GetFrameHeader(tc->GetActiveReadFrame());
 	if (!hdr) return;
 	if (ViewportPanelSize.x <= 0.0f || ViewportPanelSize.y <= 0.0f) return;
 

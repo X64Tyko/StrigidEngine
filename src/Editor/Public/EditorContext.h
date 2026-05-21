@@ -18,6 +18,7 @@
 class ConstructEditorWindow;
 class EditorPanel;
 class EntityEditorWindow;
+class PrefabEditorWindow;
 class FlowManagerBase;
 class LogicThreadBase;
 class ReplicationSystem;
@@ -51,6 +52,10 @@ public:
 	/// Open the Entity editor and create/focus a tab for the given type name.
 	/// filePath is the absolute path to the header — when provided the doc is parsed from disk.
 	void OpenEntityEditor(const char* typeName, const char* filePath = nullptr);
+
+	/// Open the Prefab editor and create/focus a tab for the given .tnxprefab file.
+	/// Switches to the Asset workspace automatically.
+	void OpenPrefabEditor(const std::string& filePath);
 
 	/// Show the mesh import dialog (called from ContentBrowserPanel).
 	void ShowImportDialog()
@@ -111,6 +116,7 @@ private:
 	LogicThreadBase* LogicPtr   = nullptr;
 	ConstructEditorWindow* ConstructEditorPtr = nullptr;
 	EntityEditorWindow*    EntityEditorPtr    = nullptr;
+	PrefabEditorWindow*    PrefabEditorPtr    = nullptr;
 	EditorPanel*           OutlinerPanelPtr   = nullptr;
 	EditorPanel*           DetailsPanelPtr    = nullptr;
 
@@ -210,7 +216,7 @@ private:
 	enum class PendingActionType : uint8_t { None, OpenScene };
 
 	// --- Workspace switcher ---
-	enum class Workspace : uint8_t { Layout, Logic, Simulate, Network, Profile, COUNT };
+	enum class Workspace : uint8_t { Layout, Logic, Simulate, Network, Profile, Asset, COUNT };
 	Workspace CurrentWorkspace     = Workspace::Layout;
 	Workspace LastAppliedWorkspace = Workspace::COUNT; // sentinel: COUNT means "nothing applied yet"
 	bool bWorkspaceLayoutBuilt[static_cast<int>(Workspace::COUNT)] = {};

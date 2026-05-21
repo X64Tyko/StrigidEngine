@@ -914,7 +914,8 @@ void ContentBrowserPanel::DrawAssetTile(EditorState& state, const AssetDatabaseE
     if (hovered && ImGui::IsMouseDoubleClicked(0) && state.EditorCtx)
     {
         std::string absPath = ContentRoot + "/" + entry.Path;
-        if (entry.Type == AssetType::Level) state.EditorCtx->LoadScene(absPath);
+        if      (entry.Type == AssetType::Level)  state.EditorCtx->LoadScene(absPath);
+        else if (entry.Type == AssetType::Prefab)  state.EditorCtx->OpenPrefabEditor(absPath);
     }
 
     ImGui::PopID();
@@ -986,7 +987,8 @@ void ContentBrowserPanel::DrawAssetRow(EditorState& state, const AssetDatabaseEn
     if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(0) && state.EditorCtx)
     {
         std::string absPath = ContentRoot + "/" + entry.Path;
-        if (entry.Type == AssetType::Level) state.EditorCtx->LoadScene(absPath);
+        if      (entry.Type == AssetType::Level)  state.EditorCtx->LoadScene(absPath);
+        else if (entry.Type == AssetType::Prefab)  state.EditorCtx->OpenPrefabEditor(absPath);
     }
 
     ImGui::PopStyleColor(3);
@@ -1016,11 +1018,11 @@ void ContentBrowserPanel::DrawAssetContextMenu(EditorState& state,
             state.EditorCtx->LoadScene(ContentRoot + "/" + entry.Path);
         ImGui::Separator();
     }
-    if (entry.Type == AssetType::Prefab)
+    if (entry.Type == AssetType::Prefab && state.EditorCtx)
     {
-        ImGui::BeginDisabled();
-        ImGui::MenuItem("Edit Prefab  (TODO)");
-        ImGui::EndDisabled();
+        std::string absPath = ContentRoot + "/" + entry.Path;
+        if (ImGui::MenuItem("Edit Prefab"))
+            state.EditorCtx->OpenPrefabEditor(absPath);
         ImGui::Separator();
     }
 

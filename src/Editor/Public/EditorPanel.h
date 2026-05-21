@@ -18,6 +18,11 @@ public:
 
 	void Tick(EditorState& state)
 	{
+		if (bForceMainViewport)
+		{
+			ImGui::SetNextWindowViewport(ImGui::GetMainViewport()->ID);
+			bForceMainViewport = false;
+		}
 		if (bVisible) Draw(state);
 	}
 
@@ -35,5 +40,6 @@ public:
 	}
 
 	const char* Title;
-	bool bVisible = true;
+	bool bVisible            = true;
+	bool bForceMainViewport  = false;
 };
