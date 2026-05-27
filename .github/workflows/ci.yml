@@ -309,7 +309,7 @@ jobs:
       - name: Run loopback test
         run: |
           # Start server in background — blocks in PostInitialize waiting for client
-          TNX_LOOPBACK_SERVER=1 ./cmake-build-ci-server/Testbed/Testbed \
+          TNX_LOOPBACK_SERVER=1 ./cmake-build-ci-server/bin/Testbed \
             --headless --max-frames 2 --test Net_Loopback_Server &
           SERVER_PID=$!
 
@@ -317,7 +317,7 @@ jobs:
           sleep 1
 
           # Run client — blocks in PostInitialize until Ping/Pong exchange completes
-          TNX_LOOPBACK_CLIENT=1 ./cmake-build-ci-client/Testbed/Testbed \
+          TNX_LOOPBACK_CLIENT=1 ./cmake-build-ci-client/bin/Testbed \
             --headless --max-frames 2 --test Net_Loopback_Client
           CLIENT_EXIT=$?
 
