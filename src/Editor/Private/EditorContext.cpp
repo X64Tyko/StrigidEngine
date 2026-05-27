@@ -185,6 +185,7 @@ void EditorContext::Initialize(TrinyxEngine* engine, LogicThreadBase* logic)
 	// Layout reset
 	TnxPalette::Register({"Reset Layout", "Restore default panel arrangement", nullptr, nullptr, [this]{
 		for (auto& b : bWorkspaceLayoutBuilt) b = false;
+		for (auto& panel : Panels) panel->bForceMainViewport = true;
 	}});
 
 	// Import mesh
@@ -760,7 +761,7 @@ void EditorContext::BuildDockspace()
 	const ImGuiViewport* viewport = ImGui::GetMainViewport();
 	ImGui::SetNextWindowPos(viewport->WorkPos);
 	ImGui::SetNextWindowSize(viewport->WorkSize);
-	// SetNextWindowViewport removed in ImGui 1.90+ - windows auto-attach to correct viewport
+	ImGui::SetNextWindowViewport(viewport->ID);
 
 	ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
 	ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
@@ -1030,7 +1031,7 @@ void EditorContext::BuildMenuBar()
 		ImGui::Separator();
 		if (ImGui::MenuItem("Reset Layout"))
 		{
-			bWorkspaceLayoutBuilt[static_cast<int>(CurrentWorkspace)] = false;
+			for (auto& b : bWorkspaceLayoutBuilt) b = false;
 			for (auto& panel : Panels)
 				panel->bForceMainViewport = true;
 		}

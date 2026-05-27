@@ -44,7 +44,7 @@
 // -----------------------------------------------------------------------
 struct ImGuiEventQueue
 {
-	static constexpr uint32_t Capacity = 64;
+	static constexpr uint32_t Capacity = 1024;
 	SDL_Event Events[Capacity]{};
 	uint32_t Head = 0;
 	uint32_t Tail = 0;
@@ -276,7 +276,6 @@ bool EditorRenderer::InitImGui()
 	ImGuiIO& io    = ImGui::GetIO();
 	io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
 	io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
-	io.ConfigFlags |= ImGuiConfigFlags_ViewportsEnable;
 
 	int logicalW = 0, physicalW = 0;
 	SDL_GetWindowSize(WindowPtr, &logicalW, nullptr);
@@ -1048,10 +1047,9 @@ void EditorRenderer::RecordViewportScenePass(VkCommandBuffer cmd, FrameSync& fra
 
 #if defined(TNX_GPU_PICKING_FAST)
 	// FAST: pick every frame at the mouse position, but only for the editor viewport.
-	// ImGuiConfigFlags_ViewportsEnable is active, so all ImGui coords (including
-	// GetCursorScreenPos / ViewportPanelPos) are in global desktop space.
-	// SDL_GetGlobalMouseState also returns global coords — the subtraction is consistent.
-	// The pick target is at logical pixel dimensions, so no DPI scaling is applied.
+	// SDL_GetGlobalMouseState returns global coords; ViewportPanelPos is in global coords
+	// (ImGui main-window-relative + SDL window origin). Subtraction gives viewport-local coords.
+	// Pick target is at logical pixel dimensions; no DPI scaling applied.
 	if (bIsEditorVP && Editor)
 	{
 		float mx, my;
