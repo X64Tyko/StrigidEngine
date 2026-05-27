@@ -1,4 +1,5 @@
 #include "AnimationAsset.h"
+#include "FixedMath.h"
 #include "Logger.h"
 
 #include <algorithm>
@@ -6,48 +7,31 @@
 #include <cstring>
 #include <fstream>
 
-static SimFloat QDot(SimFloat ax, SimFloat ay, SimFloat az, SimFloat aw,
-                     SimFloat bx, SimFloat by, SimFloat bz, SimFloat bw)
-{
-	return ax * bx + ay * by + az * bz + aw * bw;
-}
-
-static void QNLerp(SimFloat ax, SimFloat ay, SimFloat az, SimFloat aw,
-                   SimFloat bx, SimFloat by, SimFloat bz, SimFloat bw,
-                   SimFloat t,
-                   SimFloat& ox, SimFloat& oy, SimFloat& oz, SimFloat& ow)
-{
-	if (QDot(ax, ay, az, aw, bx, by, bz, bw) < SimFloat(0))
-	{
-		bx = -bx; by = -by; bz = -bz; bw = -bw;
-	}
-	SimFloat it = SimFloat(1) - t;
-	ox = it * ax + t * bx;
-	oy = it * ay + t * by;
-	oz = it * az + t * bz;
-	ow = it * aw + t * bw;
-	SimFloat len = Sqrt(ox * ox + oy * oy + oz * oz + ow * ow);
-	if (len > SimFloat(1e-6f)) { ox /= len; oy /= len; oz /= len; ow /= len; }
-}
-
 BoneTransform BoneTransform::Compose(const BoneTransform& parent, const BoneTransform& child)
 {
-	SimFloat qx = parent.rx, qy = parent.ry, qz = parent.rz, qw = parent.rw;
-	SimFloat vx  = child.tx * parent.sx;
-	SimFloat vy  = child.ty * parent.sy;
-	SimFloat vz  = child.tz * parent.sz;
-
-	SimFloat tx_ = 2 * (qy * vz - qz * vy);
-	SimFloat ty_ = 2 * (qz * vx - qx * vz);
-	SimFloat tz_ = 2 * (qx * vy - qy * vx);
+	SimUnit  qx = parent.rx, qy = parent.ry, qz = parent.rz, qw = parent.rw;
+	SimFloat vx = child.tx * parent.sx;
+	SimFloat vy = child.ty * parent.sy;
+	SimFloat vz = child.tz * parent.sz;
 
 	BoneTransform r;
+#ifdef TNX_DETERMINISM
+	int32_t rx, ry, rz;
+	RotateVectorFixed(qx.value.value, qy.value.value, qz.value.value, qw.value.value,
+	                  vx.value.value, vy.value.value, vz.value.value, rx, ry, rz);
+	r.tx = SimFloat(Fixed32::FromRaw(parent.tx.value.value + rx));
+	r.ty = SimFloat(Fixed32::FromRaw(parent.ty.value.value + ry));
+	r.tz = SimFloat(Fixed32::FromRaw(parent.tz.value.value + rz));
+#else
+	const SimFloat tx_ = 2 * (qy * vz - qz * vy);
+	const SimFloat ty_ = 2 * (qz * vx - qx * vz);
+	const SimFloat tz_ = 2 * (qx * vy - qy * vx);
 	r.tx = parent.tx + vx + qw * tx_ + qy * tz_ - qz * ty_;
 	r.ty = parent.ty + vy + qw * ty_ + qz * tx_ - qx * tz_;
 	r.tz = parent.tz + vz + qw * tz_ + qx * ty_ - qy * tx_;
+#endif
 
-	// Multiply quaternions: parent.r * child.r
-	// quatMul(parent.r, child.r)
+	// Quaternion product: parent.r * child.r — all SimUnit * SimUnit → SimUnit
 	r.rx = qw * child.rx + qx * child.rw + qy * child.rz - qz * child.ry;
 	r.ry = qw * child.ry - qx * child.rz + qy * child.rw + qz * child.rx;
 	r.rz = qw * child.rz + qx * child.ry - qy * child.rx + qz * child.rw;
@@ -81,12 +65,13 @@ BoneTransform BoneTransform::WeightedAdd(const BoneTransform& acc, const BoneTra
 	r.ty = acc.ty + sample.ty * w;
 	r.tz = acc.tz + sample.tz * w;
 	// Flip sign for shortest-arc before accumulating; Normalize() re-normalizes after all slots.
-	SimFloat flip = QDot(acc.rx, acc.ry, acc.rz, acc.rw,
-	                     sample.rx, sample.ry, sample.rz, sample.rw) < SimFloat(0) ? -w : w;
-	r.rx = acc.rx + sample.rx * flip;
-	r.ry = acc.ry + sample.ry * flip;
-	r.rz = acc.rz + sample.rz * flip;
-	r.rw = acc.rw + sample.rw * flip;
+	// SimFloat * SimUnit → SimUnit (weight scales quat component, argument order matters)
+	SimFloat flip = (QDot(acc.rx, acc.ry, acc.rz, acc.rw,
+	                      sample.rx, sample.ry, sample.rz, sample.rw) < SimUnit(0)) ? -w : w;
+	r.rx = acc.rx + flip * sample.rx;
+	r.ry = acc.ry + flip * sample.ry;
+	r.rz = acc.rz + flip * sample.rz;
+	r.rw = acc.rw + flip * sample.rw;
 	r.sx = acc.sx + sample.sx * w;
 	r.sy = acc.sy + sample.sy * w;
 	r.sz = acc.sz + sample.sz * w;
@@ -104,10 +89,10 @@ BoneTransform BoneTransform::Normalize(const BoneTransform& acc, SimFloat totalW
 	r.sx = acc.sx * inv;
 	r.sy = acc.sy * inv;
 	r.sz = acc.sz * inv;
-	// Normalize quaternion
-	SimFloat len = Sqrt(acc.rx * acc.rx + acc.ry * acc.ry + acc.rz * acc.rz + acc.rw * acc.rw);
-	if (len > SimFloat(1e-6f)) { r.rx = acc.rx / len; r.ry = acc.ry / len; r.rz = acc.rz / len; r.rw = acc.rw / len; }
-	else { r.rx = SimFloat{}; r.ry = SimFloat{}; r.rz = SimFloat{}; r.rw = SimFloat(1); }
+	// Normalize quaternion (all SimUnit arithmetic)
+	SimUnit len = Sqrt(acc.rx * acc.rx + acc.ry * acc.ry + acc.rz * acc.rz + acc.rw * acc.rw);
+	if (len > SimUnit(0)) { r.rx = acc.rx / len; r.ry = acc.ry / len; r.rz = acc.rz / len; r.rw = acc.rw / len; }
+	else { r.rx = SimUnit{}; r.ry = SimUnit{}; r.rz = SimUnit{}; r.rw = SimUnit(1); }
 	return r;
 }
 
@@ -121,23 +106,24 @@ BoneTransform BoneTransform::ApplyAdditive(const BoneTransform& base, const Bone
 	r.tz = base.tz + delta.tz * alpha;
 
 	// Rotation: compose base * nlerp(identity, delta, alpha)
-	SimFloat dx = delta.rx * alpha;
-	SimFloat dy = delta.ry * alpha;
-	SimFloat dz = delta.rz * alpha;
-	SimFloat dw = SimFloat(1) + (delta.rw - SimFloat(1)) * alpha;
+	// SimFloat * SimUnit → SimUnit (weight scales quat component)
+	SimUnit dx = alpha * delta.rx;
+	SimUnit dy = alpha * delta.ry;
+	SimUnit dz = alpha * delta.rz;
+	SimUnit dw = SimUnit(1) + alpha * (delta.rw - SimUnit(1));
 	// Ensure shortest-arc from identity
-	if (dw < SimFloat(0)) { dx = -dx; dy = -dy; dz = -dz; dw = -dw; }
-	SimFloat len = Sqrt(dx*dx + dy*dy + dz*dz + dw*dw);
-	if (len > SimFloat(1e-6f)) { dx /= len; dy /= len; dz /= len; dw /= len; }
-	else { dx = SimFloat{}; dy = SimFloat{}; dz = SimFloat{}; dw = SimFloat(1); }
-	// quatMul(base.r, weighted_delta)
-	SimFloat bx = base.rx, by = base.ry, bz = base.rz, bw = base.rw;
+	if (dw < SimUnit(0)) { dx = -dx; dy = -dy; dz = -dz; dw = -dw; }
+	SimUnit len = Sqrt(dx*dx + dy*dy + dz*dz + dw*dw);
+	if (len > SimUnit(0)) { dx /= len; dy /= len; dz /= len; dw /= len; }
+	else { dx = SimUnit{}; dy = SimUnit{}; dz = SimUnit{}; dw = SimUnit(1); }
+	// quatMul(base.r, weighted_delta) — all SimUnit
+	SimUnit bx = base.rx, by = base.ry, bz = base.rz, bw = base.rw;
 	r.rx = bw*dx + bx*dw + by*dz - bz*dy;
 	r.ry = bw*dy - bx*dz + by*dw + bz*dx;
 	r.rz = bw*dz + bx*dy - by*dx + bz*dw;
 	r.rw = bw*dw - bx*dx - by*dy - bz*dz;
-	SimFloat rlen = Sqrt(r.rx*r.rx + r.ry*r.ry + r.rz*r.rz + r.rw*r.rw);
-	if (rlen > SimFloat(1e-6f)) { r.rx /= rlen; r.ry /= rlen; r.rz /= rlen; r.rw /= rlen; }
+	SimUnit rlen = Sqrt(r.rx*r.rx + r.ry*r.ry + r.rz*r.rz + r.rw*r.rw);
+	if (rlen > SimUnit(0)) { r.rx /= rlen; r.ry /= rlen; r.rz /= rlen; r.rw /= rlen; }
 
 	// Scale: offset from identity (delta.s - 1) added
 	r.sx = base.sx + (delta.sx - SimFloat(1)) * alpha;
@@ -159,8 +145,8 @@ static BoneTransform EvaluateTrack(const std::vector<AnimKeyframe>& keyframes,
 	{
 		const AnimKeyframe& k = keys[0];
 		BoneTransform r;
-		r.tx = k.tx; r.ty = k.ty; r.tz = k.tz;
-		r.rx = k.rx; r.ry = k.ry; r.rz = k.rz; r.rw = k.rw;
+		r.tx = SimFloat(k.tx); r.ty = SimFloat(k.ty); r.tz = SimFloat(k.tz);
+		r.rx = SimUnit(k.rx); r.ry = SimUnit(k.ry); r.rz = SimUnit(k.rz); r.rw = SimUnit(k.rw);
 		return r;
 	}
 
@@ -169,8 +155,8 @@ static BoneTransform EvaluateTrack(const std::vector<AnimKeyframe>& keyframes,
 	{
 		const AnimKeyframe& k = keys[last];
 		BoneTransform r;
-		r.tx = k.tx; r.ty = k.ty; r.tz = k.tz;
-		r.rx = k.rx; r.ry = k.ry; r.rz = k.rz; r.rw = k.rw;
+		r.tx = SimFloat(k.tx); r.ty = SimFloat(k.ty); r.tz = SimFloat(k.tz);
+		r.rx = SimUnit(k.rx); r.ry = SimUnit(k.ry); r.rz = SimUnit(k.rz); r.rw = SimUnit(k.rw);
 		return r;
 	}
 
@@ -189,13 +175,13 @@ static BoneTransform EvaluateTrack(const std::vector<AnimKeyframe>& keyframes,
 	float t    = (span > 1e-6f) ? (timestamp - a.time) / span : 0.f;
 
 	BoneTransform r;
-	r.tx = a.tx + (b.tx - a.tx) * t;
-	r.ty = a.ty + (b.ty - a.ty) * t;
-	r.tz = a.tz + (b.tz - a.tz) * t;
-	QNLerp(SimFloat(a.rx), SimFloat(a.ry), SimFloat(a.rz), SimFloat(a.rw),
-	       SimFloat(b.rx), SimFloat(b.ry), SimFloat(b.rz), SimFloat(b.rw),
+	r.tx = SimFloat(a.tx + (b.tx - a.tx) * t);
+	r.ty = SimFloat(a.ty + (b.ty - a.ty) * t);
+	r.tz = SimFloat(a.tz + (b.tz - a.tz) * t);
+	QNLerp(SimUnit(a.rx), SimUnit(a.ry), SimUnit(a.rz), SimUnit(a.rw),
+	       SimUnit(b.rx), SimUnit(b.ry), SimUnit(b.rz), SimUnit(b.rw),
 	       SimFloat(t), r.rx, r.ry, r.rz, r.rw);
-	r.sx = 1.f; r.sy = 1.f; r.sz = 1.f; // scale identity in M1
+	r.sx = SimFloat(1.f); r.sy = SimFloat(1.f); r.sz = SimFloat(1.f);
 	return r;
 }
 

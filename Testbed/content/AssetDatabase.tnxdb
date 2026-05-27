@@ -1,3 +1,14 @@
 {
-	"assets": []
+	"assets": [
+		{
+			"uuid": 256.0,
+			"name": "test_audio",
+			"path": "Audio\\test_audio.wav",
+			"type": 6.0,
+			"contentHash": 1.5625005118455796e+19
+		}
+	],
+	"counters": {
+		"6": 1.0
+	}
 }

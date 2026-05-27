@@ -12,8 +12,23 @@
 // -----------------------------------------------------------------------
 
 static constexpr float kEps = 1e-4f;
-static bool NearEq(float a, float b) { return std::abs(a - b) < kEps; }
-static bool NearEq(SimFloat a, float b) { return NearEq(a.ToFloat(), b); }
+
+// Under TNX_DETERMINISM each RotateVectorFixed truncates to the nearest Fixed32 unit
+// (0.1mm = 1e-4m). The truncation error also leaks between axes: a Z-vector rotated 90°
+// around Y produces ox=9999 and oz=1 instead of (10000, 0). Each rotated Compose adds
+// one LSB of error per affected axis; this 5-bone chain has 2 such calls.
+#ifdef TNX_DETERMINISM
+static constexpr float kEpsPos = 3e-4f;
+#else
+static constexpr float kEpsPos = kEps;
+#endif
+
+static bool NearEq(float a, float b)           { return std::abs(a - b) < kEps; }
+static bool NearEq(float a, float b, float eps) { return std::abs(a - b) < eps; }
+template <typename T>
+static bool NearEq(SimFloatImpl<T> a, float b)            { return NearEq(a.ToFloat(), b); }
+template <typename T>
+static bool NearEq(SimFloatImpl<T> a, float b, float eps) { return NearEq(a.ToFloat(), b, eps); }
 
 // 5-bone straight chain: bone i has parent i-1 (bone 0 is root with 0xFFFFFFFF).
 // inverseBindPose is identity (only needed by GPU skinning, not CPU socket eval).
@@ -117,9 +132,9 @@ TEST(Anim_Correctness_KnownAnimation)
 
     // At t=1, bone 2's 90° rotation bends bones 3+4 along world X
     BoneTransform world4_t1 = EvalChainWorld(anim, 4, 1.0f);
-    ASSERT(NearEq(world4_t1.tx, 2.f)); // 2 units along world X after the bend
+    ASSERT(NearEq(world4_t1.tx, 2.f, kEpsPos)); // 2 units along world X after the bend
     ASSERT(NearEq(world4_t1.ty, 0.f));
-    ASSERT(NearEq(world4_t1.tz, 2.f)); // bones 0+1+2 each contribute 1 unit along Z
+    ASSERT(NearEq(world4_t1.tz, 2.f, kEpsPos)); // bones 0+1+2 each contribute 1 unit along Z
 
     // Rotation at bone 4 should still be 90° around Y (no additional rotation from bones 3/4)
     ASSERT(NearEq(world4_t1.ry, s45));

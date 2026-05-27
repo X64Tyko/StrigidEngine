@@ -26,8 +26,8 @@ RUNTIME_TEST(Physics_BodyCountAfterSpawn)
 
 	static std::vector<CubeSetup> setups;
 	setups.clear();
-	setups.push_back({ 0.0f, 10.0f, -50.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 0.5f, 0.5f, JoltMotion::Dynamic });
-	setups.push_back({ 0.0f, -1.0f, -50.0f, 20.0f, 1.0f, 20.0f, 0.0f, 0.5f, 0.5f, 0.5f, JoltMotion::Static});
+	setups.push_back({ SimFloat(0.0f), SimFloat(10.0f), SimFloat(-50.0f), SimFloat(1.0f), SimFloat(1.0f), SimFloat(1.0f), SimFloat(1.0f), SimFloat(1.0f), SimFloat(0.5f), SimFloat(0.5f), JoltMotion::Dynamic });
+	setups.push_back({ SimFloat(0.0f), SimFloat(-1.0f), SimFloat(-50.0f), SimFloat(20.0f), SimFloat(1.0f), SimFloat(20.0f), SimFloat(0.0f), SimFloat(0.5f), SimFloat(0.5f), SimFloat(0.5f), JoltMotion::Static});
 
 	// Record the frame before we spawn so we know when to stop waiting.
 	uint32_t startFrame = logic->GetLastCompletedFrame();

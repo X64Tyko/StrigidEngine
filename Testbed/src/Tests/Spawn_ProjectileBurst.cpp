@@ -31,11 +31,11 @@ RUNTIME_TEST(Spawn_ProjectileBurst)
 
 	for (int i = 0; i < Count; ++i)
 	{
-		SimFloat speed = speedDist(gen);
+		SimFloat speed = SimFloat(speedDist(gen));
 		setups.push_back({
-			0.0f, OriginY, OriginZ,
-			spreadDist(gen), spreadDist(gen) + SimFloat(10.0f), -speed,
-			colorDist(gen), colorDist(gen) * SimFloat(0.5f), SimFloat(0.1f), SimFloat(1.0f)
+			SimFloat(0.0f), OriginY, OriginZ,
+			SimFloat(spreadDist(gen)), SimFloat(spreadDist(gen)) + SimFloat(10.0f), -speed,
+			SimFloat(colorDist(gen)), SimFloat(colorDist(gen)) * SimFloat(0.5f), SimFloat(0.1f), SimFloat(1.0f)
 		});
 	}
 

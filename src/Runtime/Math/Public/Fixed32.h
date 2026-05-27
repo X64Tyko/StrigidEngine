@@ -173,13 +173,14 @@ struct Fixed32
 
 // FixedUnit — unit-range fixed-point for trig output and direction components.
 //
-// Encoding: Scale = 1<<20 (1,048,576). 1.0 = Scale. Range ≈ [-2, +2].
+// Encoding: Scale = 1<<28 (268,435,456). 1.0 = Scale. Range ≈ [-8, +8].
 // Used as the return type of FixedSin / FixedCos so dot products with Fixed32
-// positions stay exact: (int64_t(pos.value) * unit.value) >> 20.
+// positions stay exact: (int64_t(pos.value) * unit.value) >> ScaleLog2.
 struct FixedUnit : Fixed32
 {
-	static constexpr int32_t Scale   = FixedUnitsPerRadian; // 1,048,576 = 1<<20
-	static constexpr int64_t Scale64 = static_cast<int64_t>(Scale);
+	static constexpr int32_t Scale    = FixedUnitsPerRadian; // 268,435,456 = 1<<28
+	static constexpr int64_t Scale64  = static_cast<int64_t>(Scale);
+	static constexpr int      ScaleLog2 = 28;
 
 	// --- Construction --------------------------------------------------------
 
@@ -197,14 +198,23 @@ struct FixedUnit : Fixed32
 		return r;
 	}
 
+	static constexpr FixedUnit FromInt(int32_t i) { return FromRaw(i * Scale); }
+
+	static constexpr FixedUnit FromFixed32(Fixed32 fx)
+	{
+		return FromRaw(static_cast<int32_t>((static_cast<int64_t>(fx.value) * Scale64) / Fixed32::Scale64));
+	}
+
 	static constexpr FixedUnit FromFloat(float f)
 	{
-		return FromRaw(static_cast<int32_t>(f * static_cast<float>(Scale)));
+		double temp = static_cast<double>(f) * static_cast<double>(Scale);
+		return FromRaw(static_cast<int32_t>(temp >= 0.0 ? temp + 0.5 : temp - 0.5));
 	}
 
 	static constexpr FixedUnit FromDouble(double f)
 	{
-		return FromRaw(static_cast<int32_t>(f * static_cast<double>(Scale)));
+		double temp = f * static_cast<double>(Scale);
+		return FromRaw(static_cast<int32_t>(temp >= 0.0 ? temp + 0.5 : temp - 0.5));
 	}
 
 	// --- Accessors (override to use FixedUnit::Scale) -----------------------
@@ -369,17 +379,17 @@ constexpr FixedUnit operator*(int32_t a, FixedUnit b) { return FixedUnit::FromRa
 constexpr FixedUnit operator/(FixedUnit a, int32_t b) { return FixedUnit::FromRaw(a.value / b); }
 
 // --- Cross-type: Fixed32 scaled by FixedUnit ------------------------------------
-// FixedUnit::Scale is a power of 2 (1<<20), so division is a pure right shift.
+// FixedUnit::Scale is a power of 2 (1<<ScaleLog2), so division is a pure right shift.
 // Used for: pos * sin(angle), velocity * cos(heading), etc.
 
 constexpr Fixed32 operator*(Fixed32 a, FixedUnit b)
 {
-	return Fixed32::FromRaw(static_cast<int32_t>((static_cast<int64_t>(a.value) * b.value) >> 20));
+	return Fixed32::FromRaw(static_cast<int32_t>((static_cast<int64_t>(a.value) * b.value) >> FixedUnit::ScaleLog2));
 }
 
 constexpr Fixed32 operator*(FixedUnit a, Fixed32 b)
 {
-	return Fixed32::FromRaw(static_cast<int32_t>((static_cast<int64_t>(a.value) * b.value) >> 20));
+	return Fixed32::FromRaw(static_cast<int32_t>((static_cast<int64_t>(a.value) * b.value) >> FixedUnit::ScaleLog2));
 }
 
 // --- Fast square root for Fixed32 (integer Newton) -------------------------

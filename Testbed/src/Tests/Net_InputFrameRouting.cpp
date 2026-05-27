@@ -120,7 +120,7 @@ TEST(Net_InputFrameRouting)
 				// Verify the W key state was stored correctly
 				const bool wDown = (entry.State.KeyState[kWScancode >> 3] & (1u << (kWScancode & 7))) != 0;
 				ASSERT(wDown);
-				ASSERT_EQ(entry.State.MouseDX, 1.5f);
+				ASSERT_EQ(entry.State.MouseDX, SimFloat(1.5f));
 				stored = true;
 			}
 		}

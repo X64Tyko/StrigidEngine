@@ -39,45 +39,45 @@ TEST (FieldProxy_ScalarStoreLoad)
 
 	// --- Advance cursor ---
 	{
-		data[0] = 10.0f;
-		data[1] = 20.0f;
-		data[2] = 30.0f;
+		data[0] = SimFloat(10.0f);
+		data[1] = SimFloat(20.0f);
+		data[2] = SimFloat(30.0f);
 
 		FieldProxy<SimFloat, FieldWidth::Scalar> proxy;
 		proxy.Bind(data, flags, 0);
-		ASSERT_EQ(proxy.Value(), 10.0f);
+		ASSERT_EQ(proxy.Value(), SimFloat(10.0f));
 
 		proxy.Advance(1);
-		ASSERT_EQ(proxy.Value(), 20.0f);
+		ASSERT_EQ(proxy.Value(), SimFloat(20.0f));
 
 		proxy.Advance(1);
-		ASSERT_EQ(proxy.Value(), 30.0f);
+		ASSERT_EQ(proxy.Value(), SimFloat(30.0f));
 	}
 
 	// --- Compound assignment operators ---
 	{
 		FieldProxy<SimFloat, FieldWidth::Scalar> proxy;
 		proxy.Bind(data, flags, 0);
-		data[0] = 10.0f;
+		data[0] = SimFloat(10.0f);
 
 		proxy += SimFloat(5.0f);
-		ASSERT_EQ(proxy.Value(), 15.0f);
+		ASSERT_EQ(proxy.Value(), SimFloat(15.0f));
 
 		proxy -= SimFloat(3.0f);
-		ASSERT_EQ(proxy.Value(), 12.0f);
+		ASSERT_EQ(proxy.Value(), SimFloat(12.0f));
 
 		proxy *= SimFloat(2.0f);
-		ASSERT_EQ(proxy.Value(), 24.0f);
+		ASSERT_EQ(proxy.Value(), SimFloat(24.0f));
 
 		proxy /= SimFloat(4.0f);
-		ASSERT_EQ(proxy.Value(), 6.0f);
+		ASSERT_EQ(proxy.Value(), SimFloat(6.0f));
 	}
 
 	// --- Comparison operators (no dirty marking) ---
 	{
 		FieldProxy<SimFloat, FieldWidth::Scalar> proxy;
 		proxy.Bind(data, flags, 0);
-		data[0]  = 5.0f;
+		data[0]  = SimFloat(5.0f);
 		flags[0] = 0;
 
 		// Comparisons should not mark dirty

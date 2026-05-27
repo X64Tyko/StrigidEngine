@@ -18,12 +18,13 @@ constexpr NotifyID InvalidNotifyID = 0;
 #define TNX_NOTIFY(str) (TnxName::Fnv1a(str))
 
 /// Value-type local or world-space bone transform evaluated by the animation system.
-/// All fields are SimFloat to keep socket and collision queries bit-identical under TNX_DETERMINISM.
+/// Translation/scale use SimFloat (Fixed32 metric precision).
+/// Rotation uses SimUnit (FixedUnit precision) for bit-identical results under TNX_DETERMINISM.
 struct BoneTransform
 {
 	SimFloat tx{}, ty{}, tz{};
-	SimFloat rx{}, ry{}, rz{};
-	SimFloat rw = SimFloat(1);
+	SimUnit  rx{}, ry{}, rz{};
+	SimUnit  rw = SimUnit(1);
 	SimFloat sx = SimFloat(1), sy = SimFloat(1), sz = SimFloat(1);
 
 	static BoneTransform Identity() { return {}; }

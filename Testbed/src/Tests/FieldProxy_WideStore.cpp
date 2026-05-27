@@ -23,7 +23,7 @@ TEST (FieldProxy_WideStore)
 
 		proxy = SimFloat(7.0f);
 
-		for (int i = 0; i < kSIMDWide32Lanes; ++i) ASSERT_EQ(data[i], 7.0f);
+		for (int i = 0; i < kSIMDWide32Lanes; ++i) ASSERT_EQ(data[i], SimFloat(7.0f));
 	}
 
 	// --- Wide store: partial entity count in mask doesn't restrict Wide (unconditional) ---
@@ -36,7 +36,7 @@ TEST (FieldProxy_WideStore)
 		proxy = SimFloat(3.0f);
 
 		// Wide writes ALL lanes — this is intentional (WideMask handles masking)
-		for (int i = 0; i < kSIMDWide32Lanes; ++i) ASSERT_EQ(partial[i], 3.0f);
+		for (int i = 0; i < kSIMDWide32Lanes; ++i) ASSERT_EQ(partial[i], SimFloat(3.0f));
 	}
 
 	// --- Wide +=, with dirty bits set on all lanes ---
@@ -49,7 +49,7 @@ TEST (FieldProxy_WideStore)
 		proxy += SimFloat(10.0f);
 
 		for (int i = 0; i < kSIMDWide32Lanes; ++i)
-			ASSERT_EQ(data[i], static_cast<SimFloat>(i) + 10.0f);
+			ASSERT_EQ(data[i], static_cast<SimFloat>(i) + SimFloat(10.0f));
 
 		constexpr int32_t DirtyBit = static_cast<int32_t>(1u << 30);
 		for (int i = 0; i < kSIMDWide32Lanes; ++i) ASSERT((flags[i] & DirtyBit) != 0);

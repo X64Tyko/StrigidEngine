@@ -10,8 +10,9 @@
 /// @note Used by Fixed32, the Jolt bridge, render upload, and scene I/O.
 inline constexpr int32_t FixedUnitsPerMeter  = 10000;
 
-/// @brief Simulation units per radian (2^20), matching Fixed32 angle representation.
-inline constexpr int32_t FixedUnitsPerRadian = 1048576;
+/// @brief Simulation units per unit-range value (2^28). Used by FixedUnit for quaternion
+/// components and trig output. Range ±8 gives headroom above [-1,1] for unnormalized intermediates.
+inline constexpr int32_t FixedUnitsPerRadian = 268435456;
 
 // ---------------------------------------------------------------------------
 // Compile-time world type aliases resolved from three orthogonal CMake axes:

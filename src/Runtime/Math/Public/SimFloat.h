@@ -334,8 +334,197 @@ struct SimFloatImpl<Fixed32>
 	friend bool operator==(const SimFloatImpl&, const SimFloatImpl&) = default;
 };
 
+// Specialization for FixedUnit — unit-range storage (scale = 1<<28, ~8 decimal places).
+// Used for quaternion components where Fixed32 (scale = 10,000) loses too much precision.
+template <>
+struct SimFloatImpl<FixedUnit>
+{
+	FixedUnit value;
+
+	// Construction
+	SimFloatImpl()
+		: value(FixedUnit::FromRaw(0))
+	{
+	}
+
+	constexpr SimFloatImpl(const FixedUnit& fu)
+		: value(fu)
+	{
+	}
+
+	SimFloatImpl(int32_t i)
+		: value(FixedUnit::FromInt(i))
+	{
+	}
+
+#ifdef TNX_FIXED_IMPLICIT_FLOAT
+	constexpr SimFloatImpl(float f)
+		: value(FixedUnit::FromFloat(f))
+	{
+	}
+
+	constexpr SimFloatImpl(double d)
+		: value(FixedUnit::FromDouble(d))
+	{
+	}
+#else
+	explicit constexpr SimFloatImpl(float f)
+		: value(FixedUnit::FromFloat(f))
+	{
+	}
+
+	explicit constexpr SimFloatImpl(double d)
+		: value(FixedUnit::FromDouble(d))
+	{
+	}
+#endif
+
+	explicit SimFloatImpl(const SimFloatImpl<float>& other)
+		: value(FixedUnit::FromFloat(other.value))
+	{
+	}
+
+	explicit SimFloatImpl(const SimFloatImpl<Fixed32>& other)
+		: value(FixedUnit::FromFixed32(other.value))
+	{
+	}
+
+	// Accessors
+	float    ToFloat() const { return value.ToFloat(); }
+	FixedUnit ToFixed() const { return value; }
+	double   ToDouble() const { return value.ToDouble(); }
+
+	// Unary operators
+	SimFloatImpl operator+() const { return *this; }
+	SimFloatImpl operator-() const { return SimFloatImpl(-value); }
+
+	SimFloatImpl& operator++()
+	{
+		++value;
+		return *this;
+	}
+
+	SimFloatImpl& operator--()
+	{
+		--value;
+		return *this;
+	}
+
+	SimFloatImpl operator++(int)
+	{
+		SimFloatImpl t = *this;
+		++value;
+		return t;
+	}
+
+	SimFloatImpl operator--(int)
+	{
+		SimFloatImpl t = *this;
+		--value;
+		return t;
+	}
+
+	// Compound assignment
+	SimFloatImpl& operator+=(const SimFloatImpl& rhs)
+	{
+		value += rhs.value;
+		return *this;
+	}
+
+	SimFloatImpl& operator-=(const SimFloatImpl& rhs)
+	{
+		value -= rhs.value;
+		return *this;
+	}
+
+	SimFloatImpl& operator*=(const SimFloatImpl& rhs)
+	{
+		value *= rhs.value;
+		return *this;
+	}
+
+	SimFloatImpl& operator/=(const SimFloatImpl& rhs)
+	{
+		value /= rhs.value;
+		return *this;
+	}
+
+	SimFloatImpl& operator+=(int32_t rhs)
+	{
+		value += rhs;
+		return *this;
+	}
+
+	SimFloatImpl& operator-=(int32_t rhs)
+	{
+		value -= rhs;
+		return *this;
+	}
+
+	SimFloatImpl& operator*=(int32_t rhs)
+	{
+		value *= rhs;
+		return *this;
+	}
+
+	SimFloatImpl& operator/=(int32_t rhs)
+	{
+		value /= rhs;
+		return *this;
+	}
+
+	// Cross-type compound assignment: SimUnit *= SimFloat (weight scales unit-range value)
+	// Uses the same formula as the binary SimFloat * SimUnit operator.
+	SimFloatImpl& operator*=(const SimFloatImpl<Fixed32>& rhs)
+	{
+		value = FixedUnit::FromRaw(
+			static_cast<int32_t>((static_cast<int64_t>(rhs.value.value) * value.value) / Fixed32::Scale64));
+		return *this;
+	}
+
+	// Assignment operators
+	SimFloatImpl& operator=(const FixedUnit& fu)
+	{
+		value = fu;
+		return *this;
+	}
+
+	SimFloatImpl& operator=(float f)
+	{
+		value = FixedUnit::FromFloat(f);
+		return *this;
+	}
+
+	SimFloatImpl& operator=(double d)
+	{
+		value = FixedUnit::FromDouble(d);
+		return *this;
+	}
+
+	SimFloatImpl& operator=(int32_t i)
+	{
+		value = FixedUnit::FromInt(i);
+		return *this;
+	}
+
+	// Comparison
+	friend auto operator<=>(const SimFloatImpl&, const SimFloatImpl&) = default;
+
+	friend auto operator<=>(const SimFloatImpl& A, const float& B)
+	{
+		return A <=> SimFloatImpl(B);
+	};
+
+	friend auto operator<=>(const float& B, const SimFloatImpl& A)
+	{
+		return SimFloatImpl(B) <=> A;
+	};
+	friend bool operator==(const SimFloatImpl&, const SimFloatImpl&) = default;
+};
+
 static_assert(sizeof(SimFloatImpl<float>) == 4, "SimFloat<float> must be 4 bytes");
 static_assert(sizeof(SimFloatImpl<Fixed32>) == 4, "SimFloat<Fixed32> must be 4 bytes");
+static_assert(sizeof(SimFloatImpl<FixedUnit>) == 4, "SimUnit<FixedUnit> must be 4 bytes");
 
 // Binary operators for SimFloatImpl<T>
 template <typename T>
@@ -408,20 +597,66 @@ FORCE_INLINE SimFloatImpl<T> operator*(int32_t a, SimFloatImpl<T> b) { return Si
 template <typename T>
 FORCE_INLINE SimFloatImpl<T> operator/(int32_t a, SimFloatImpl<T> b) { return SimFloatImpl<T>(a) / b; }
 
+// Cross-type operators — SimFloatImpl<FixedUnit> (SimUnit) × SimFloatImpl<Fixed32> (SimFloat)
+//
+// Two semantically distinct mixed-type products exist and are encoded by argument order:
+//
+//   SimUnit * SimFloat  →  SimFloat   "apply unit-range factor to a metric value"
+//     e.g. quat_component × position_coord — result stays in metric (Fixed32) space
+//     raw: (unit.value * metric.value) >> ScaleLog2
+//
+//   SimFloat * SimUnit  →  SimUnit    "scale a unit-range value by a weight"
+//     e.g. blend_weight × quat_component — result stays in unit (FixedUnit) space
+//     raw: (weight.value * unit.value) / Fixed32::Scale
+
+// SimUnit * SimFloat → SimFloat: apply unit-range factor to a metric value
+//   e.g. quat_component × position_coord → result in Fixed32 (metric) space
+//   raw: (unit.value * metric.value) >> ScaleLog2  (uses Fixed32.h: FixedUnit * Fixed32 → Fixed32)
+FORCE_INLINE SimFloatImpl<Fixed32> operator*(SimFloatImpl<FixedUnit> a, SimFloatImpl<Fixed32> b)
+{
+	return SimFloatImpl<Fixed32>(a.value * b.value);
+}
+
+// SimFloat * SimUnit → SimUnit: scale a unit-range value by a blend weight
+//   e.g. blend_weight × quat_component → result stays in FixedUnit space
+//   raw: (weight.value * unit.value) / Fixed32::Scale
+FORCE_INLINE SimFloatImpl<FixedUnit> operator*(SimFloatImpl<Fixed32> a, SimFloatImpl<FixedUnit> b)
+{
+	return SimFloatImpl<FixedUnit>(FixedUnit::FromRaw(
+		static_cast<int32_t>((static_cast<int64_t>(a.value.value) * b.value.value) / Fixed32::Scale64)));
+}
+
 // Simulation scalar type — float by default, swappable to Fixed32 for
 // bit-identical determinism via TNX_DETERMINISTIC build flag.
 #ifdef TNX_DETERMINISM
 using SimFloat = SimFloatImpl<Fixed32>;
+using SimUnit = SimFloatImpl<FixedUnit>;
 #else
 using SimFloat = SimFloatImpl<float>;
+using SimUnit = SimFloatImpl<float>;
 #endif
 
 // Fast math functions for SimFloat
 template <typename T>
 FORCE_INLINE SimFloatImpl<T> Sqrt(SimFloatImpl<T> x)
 {
-	if constexpr (std::is_same_v<T, Fixed32>) return SimFloatImpl<T>(FixedSqrt(x.ToFixed()));
-	else return SimFloatImpl<T>(std::sqrt(x.ToFloat()));
+	if constexpr (std::is_same_v<T, Fixed32>)
+	{
+		return SimFloatImpl<T>(FixedSqrt(x.ToFixed()));
+	}
+	else if constexpr (std::is_same_v<T, FixedUnit>)
+	{
+		// Integer Newton's method: sqrt(raw / Scale) = isqrt(raw * Scale) / Scale
+		if (x.value.value <= 0) return SimFloatImpl<T>(FixedUnit::FromRaw(0));
+		int64_t n = static_cast<int64_t>(x.value.value) * FixedUnit::Scale64;
+		int64_t r = n;
+		while (r > (n / r)) r = (r + n / r) >> 1;
+		return SimFloatImpl<T>(FixedUnit::FromRaw(static_cast<int32_t>(r)));
+	}
+	else
+	{
+		return SimFloatImpl<T>(std::sqrt(x.ToFloat()));
+	}
 }
 
 template <typename T>
@@ -461,7 +696,7 @@ FORCE_INLINE SimFloatImpl<T> FastSin(SimFloatImpl<T> x)
 	{
 		const FixedUnit r = FixedSin(x.ToFixed());
 		return SimFloatImpl<T>(Fixed32::FromRaw(
-			static_cast<int32_t>((static_cast<int64_t>(r.value) * Fixed32::Scale64) >> 20)));
+			static_cast<int32_t>((static_cast<int64_t>(r.value) * Fixed32::Scale64) >> FixedUnit::ScaleLog2)));
 	}
 	else return SimFloatImpl<T>(std::sin(x.value));
 }
@@ -473,7 +708,7 @@ FORCE_INLINE SimFloatImpl<T> FastCos(SimFloatImpl<T> x)
 	{
 		const FixedUnit r = FixedCos(x.ToFixed());
 		return SimFloatImpl<T>(Fixed32::FromRaw(
-			static_cast<int32_t>((static_cast<int64_t>(r.value) * Fixed32::Scale64) >> 20)));
+			static_cast<int32_t>((static_cast<int64_t>(r.value) * Fixed32::Scale64) >> FixedUnit::ScaleLog2)));
 	}
 	else return SimFloatImpl<T>(std::cos(x.value));
 }

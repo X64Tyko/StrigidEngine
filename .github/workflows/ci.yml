@@ -208,12 +208,12 @@ jobs:
       # -----------------------------------------------------------------------
       - name: Test (Linux)
         if: matrix.os == 'ubuntu-24.04'
-        run: ./cmake-build-ci/Testbed/Testbed --headless --max-frames 120
+        run: ./cmake-build-ci/bin/Testbed --headless --max-frames 120
 
       - name: Test (Windows)
         if: matrix.os == 'windows-latest'
         shell: pwsh
-        run: .\cmake-build-ci\Testbed\Release\Testbed.exe --headless --max-frames 120
+        run: .\cmake-build-ci\bin\Testbed.exe --headless --max-frames 120
 
       # -----------------------------------------------------------------------
       # Upload logs on failure — makes remote debugging possible.

@@ -42,12 +42,12 @@ RUNTIME_TEST(Spawn_JoltPyramid)
 			for (int k = layer / 2; k < cPyramidHeight - (layer + 1) / 2; ++k)
 			{
 				setups.push_back({
-					xOffset + static_cast<SimFloat>(-cPyramidHeight) + cBoxSize * static_cast<SimFloat>(j) + ((layer & 1) ? cHalfBoxSize : 0.0f),
-					yOffset + 1.0f + (cBoxSize + cBoxSeparation) * static_cast<SimFloat>(layer),
-					zOffset + static_cast<SimFloat>(-cPyramidHeight) + cBoxSize * static_cast<SimFloat>(k) + ((layer & 1) ? cHalfBoxSize : 0.0f),
+					xOffset + static_cast<SimFloat>(-cPyramidHeight) + cBoxSize * static_cast<SimFloat>(j) + ((layer & 1) ? cHalfBoxSize : SimFloat(0.0f)),
+					yOffset + SimFloat(1.0f) + (cBoxSize + cBoxSeparation) * static_cast<SimFloat>(layer),
+					zOffset + static_cast<SimFloat>(-cPyramidHeight) + cBoxSize * static_cast<SimFloat>(k) + ((layer & 1) ? cHalfBoxSize : SimFloat(0.0f)),
 					cHalfBoxSize, cHalfBoxSize, cHalfBoxSize,
-					1.0f,
-					colorDist(gen), colorDist(gen), colorDist(gen),
+					SimFloat(1.0f),
+					SimFloat(colorDist(gen)), SimFloat(colorDist(gen)), SimFloat(colorDist(gen)),
 					JoltMotion::Dynamic
 				});
 			}
@@ -55,7 +55,7 @@ RUNTIME_TEST(Spawn_JoltPyramid)
 	}
 
 	// Static floor
-	setups.push_back({ xOffset, yOffset - 1.0f, zOffset, 50.0f, 1.0f, 50.0f, 0.0f, 0.3f, 0.3f, 0.3f, JoltMotion::Static });
+	setups.push_back({ xOffset, yOffset - SimFloat(1.0f), zOffset, SimFloat(50.0f), SimFloat(1.0f), SimFloat(50.0f), SimFloat(0.0f), SimFloat(0.3f), SimFloat(0.3f), SimFloat(0.3f), JoltMotion::Static });
 
 	const uint32_t spawnCount = static_cast<uint32_t>(setups.size());
 

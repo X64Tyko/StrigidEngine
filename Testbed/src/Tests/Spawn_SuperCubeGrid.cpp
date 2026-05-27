@@ -37,8 +37,8 @@ RUNTIME_TEST(Spawn_SuperCubeGrid)
 			YBase + static_cast<SimFloat>(row) * Spacing,
 			ZOffset,
 			CubeHalf, CubeHalf, CubeHalf,
-			0.0f,
-			colorDist(gen), colorDist(gen), colorDist(gen),
+			SimFloat(0.0f),
+			SimFloat(colorDist(gen)), SimFloat(colorDist(gen)), SimFloat(colorDist(gen)),
 			JoltMotion::Static
 		});
 	}
