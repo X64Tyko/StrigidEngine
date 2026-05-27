@@ -31,6 +31,12 @@ set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 # to consuming targets on any platform.
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")  # exe + .dll
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")  # .so
+# Multi-config generators (Visual Studio) append <Config>/ unless the
+# per-config variables are set explicitly — keep the path flat.
+foreach(_cfg Debug Release RelWithDebInfo MinSizeRel)
+    set("CMAKE_RUNTIME_OUTPUT_DIRECTORY_${_cfg}" "${CMAKE_BINARY_DIR}/bin")
+    set("CMAKE_LIBRARY_OUTPUT_DIRECTORY_${_cfg}" "${CMAKE_BINARY_DIR}/bin")
+endforeach()
 set(CMAKE_BUILD_RPATH "$ORIGIN")                               # Linux: find co-located .so
 
 # -----------------------------------------------------------------------------
