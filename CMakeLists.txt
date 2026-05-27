@@ -44,6 +44,15 @@ set(CMAKE_LIBRARY_OUTPUT_DIRECTORY_RELWITHDEBINFO "${CMAKE_BINARY_DIR}/bin")
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY_MINSIZEREL     "${CMAKE_BINARY_DIR}/bin")
 set(CMAKE_BUILD_RPATH "$ORIGIN")                               # Linux: find co-located .so
 
+# Pre-populate bin/ with third-party DLLs that the loader must find at
+# runtime. Done at configure time so any exe in the build tree can run
+# without PATH manipulation on developer machines and CI runners.
+if(WIN32)
+    file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+    file(COPY "${CMAKE_SOURCE_DIR}/libs/SDL3/lib/x64/SDL3.dll"
+         DESTINATION "${CMAKE_BINARY_DIR}/bin")
+endif()
+
 # -----------------------------------------------------------------------------
 # 2. BUILD OPTIONS
 # -----------------------------------------------------------------------------
