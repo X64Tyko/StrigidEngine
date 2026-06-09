@@ -62,9 +62,25 @@ struct RollbackSim
     std::queue<EntityTransformCorrection>  PendingPredictedCorrections; ///< Logic-thread staging; drained from IncomingPredictedCorrections each tick.
 
 #ifdef TNX_TESTING
-    std::vector<uint8_t> TemporalSlabBackup;  ///< Pre-rollback slab snapshot for determinism validation.
-    std::vector<uint8_t> VolatileSlabBackup;  ///< Pre-rollback slab snapshot for determinism validation.
-    std::vector<uint8_t> GroundTruthBackup;   ///< Authority state captured for post-resim diff.
+    std::vector<uint8_t> TemporalSlabBackup; ///< Pre-rollback slab snapshot for determinism validation.
+    std::vector<uint8_t> VolatileSlabBackup; ///< Pre-rollback slab snapshot for determinism validation.
+
+    /// @brief Snapshot of the ground-truth ECS frame captured before rollback resimulation.
+    ///
+    /// Stores field bytes plus the entity counts from @c TemporalFrameHeader and the
+    /// per-field @c CurrentUsed values so the comparator can detect entity-count drift
+    /// independently of the raw data check (e.g. correct resim values but fewer entities).
+    struct GroundTruthSnapshot
+    {
+        std::vector<uint8_t> Data; ///< Raw field bytes (one frame, header excluded).
+        uint32_t ActiveEntityCount; ///< TemporalFrameHeader::ActiveEntityCount at capture.
+        uint32_t TotalAllocated; ///< TemporalFrameHeader::TotalAllocatedEntities at capture.
+        std::vector<size_t> FieldUsed;
+        ///< FieldCompareInfo::CurrentUsed per field at capture,
+                                                       ///< parallel to GetValidFieldInfos() order.
+    };
+
+    GroundTruthSnapshot GroundTruth; ///< Populated by ExecuteRollbackTest before calling ExecuteRollback.
 #endif
 
     void InitializeRings();
@@ -79,8 +95,10 @@ struct RollbackSim
      * @brief Restores Jolt + SoA state to `targetFrame` and resimulates forward.
      * @tparam TLogic Concrete LogicThread specialization.
      * @param targetFrame Earliest frame that received a correction; resim starts here.
+     * @return total number of frames resimulated.
      */
-    template <typename TLogic> void ExecuteRollback(TLogic& logic, uint32_t targetFrame);
+    template <typename TLogic>
+    uint32_t ExecuteRollback(TLogic& logic, uint32_t targetFrame);
 
     /**
      * @brief Determinism self-test: resimulates the last N frames and diffs against saved ground truth.

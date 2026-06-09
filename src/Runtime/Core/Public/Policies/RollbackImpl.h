@@ -96,7 +96,7 @@ void RollbackSim::ProcessRollback(TLogic& logic)
 ///
 /// @param targetFrame The simulation frame to rewind to.
 template <typename TLogic>
-void RollbackSim::ExecuteRollback(TLogic& logic, uint32_t targetFrame)
+uint32_t RollbackSim::ExecuteRollback(TLogic& logic, uint32_t targetFrame)
 {
     TNX_ZONE_N("Rollback");
 
@@ -118,7 +118,7 @@ void RollbackSim::ExecuteRollback(TLogic& logic, uint32_t targetFrame)
                        alignedTarget, targetFrame, T);
         logic.bRollbackActive = false;
         PendingCorrections.clear();
-        return;
+        return 0;
     }
 
     const uint32_t totalResimFrames = (T - alignedTarget) + 1;
@@ -192,6 +192,8 @@ void RollbackSim::ExecuteRollback(TLogic& logic, uint32_t targetFrame)
                        [&logic](const EntityTransformCorrection& c) { return c.ClientFrame < logic.FrameNumber; }),
         PendingCorrections.end());
     logic.bRollbackActive = false;
+
+    return totalResimFrames;
 }
 
 /// @brief Determinism test: roll back @c RollbackFrameCount frames and compare against ground truth.
@@ -223,8 +225,16 @@ void RollbackSim::ExecuteRollbackTest(TLogic& logic)
     {
         TNX_ZONE_N("Rollback_Backup");
 
-        GroundTruthBackup.resize(fieldDataSize);
-        std::memcpy(GroundTruthBackup.data(), groundTruthFieldData, fieldDataSize);
+        GroundTruth.Data.resize(fieldDataSize);
+        std::memcpy(GroundTruth.Data.data(), groundTruthFieldData, fieldDataSize);
+
+        GroundTruth.ActiveEntityCount = groundTruthHeader->ActiveEntityCount;
+        GroundTruth.TotalAllocated = groundTruthHeader->TotalAllocatedEntities;
+
+        auto captureInfos = logic.TemporalCache->GetValidFieldInfos();
+        GroundTruth.FieldUsed.resize(captureInfos.size());
+        for (size_t i = 0; i < captureInfos.size(); ++i)
+            GroundTruth.FieldUsed[i] = captureInfos[i].CurrentUsed;
 
         TemporalSlabBackup.resize(temporalSlabSize);
         VolatileSlabBackup.resize(volatileSlabSize);
@@ -247,7 +257,7 @@ void RollbackSim::ExecuteRollbackTest(TLogic& logic)
     const double   savedSimTime     = logic.SimulationTime;
 #endif
 
-    ExecuteRollback(logic, rollbackTarget);
+    uint32_t totalResim = ExecuteRollback(logic, rollbackTarget);
 
 #ifdef TNX_TESTING
     {
@@ -257,49 +267,75 @@ void RollbackSim::ExecuteRollbackTest(TLogic& logic)
         TemporalFrameHeader* resimHeader = logic.TemporalCache->GetFrameHeader(resimSlot);
         uint8_t* resimFieldData          = reinterpret_cast<uint8_t*>(resimHeader) + sizeof(TemporalFrameHeader);
 
-        int cmp = std::memcmp(GroundTruthBackup.data(), resimFieldData, fieldDataSize);
-        if (cmp == 0)
-        {
-            LOG_ENG_INFO_F("[Rollback] PASSED — byte-perfect determinism (%zu bytes, %u frames resimulated)",
-                           fieldDataSize, RollbackFrameCount);
-        }
-        else
-        {
-            LOG_ENG_WARN_F("[Rollback] FAILED — divergence detected (%u frames resimulated)", RollbackFrameCount);
+        // ActiveEntityCount/TotalAllocatedEntities in TemporalFrameHeader are written by
+        // PublishCompletedFrame, which is not called during resimulation. Comparing header
+        // entity counts here would always be a false positive — entity count drift is caught
+        // by the Flags field comparison below (Active bit clear = tombstone = data divergence).
+        bool anyFieldDiverged = false;
 
-            auto fieldInfos = logic.TemporalCache->GetValidFieldInfos();
-            for (const auto& info : fieldInfos)
+        // Field-by-field comparison — a raw memcmp would trigger on uninitialised
+        // inter-field padding bytes which carry no simulation meaning.
+        auto fieldInfos = logic.TemporalCache->GetValidFieldInfos();
+
+        for (size_t fi = 0; fi < fieldInfos.size(); ++fi)
+        {
+            const auto& info = fieldInfos[fi];
+
+            // CurrentUsed encodes allocated bytes (entityCount * fieldSize).
+            // A mismatch here means entities were spawned or despawned during resim.
+            const size_t truthUsed = fi < GroundTruth.FieldUsed.size() ? GroundTruth.FieldUsed[fi] : 0;
+            if (truthUsed != info.CurrentUsed)
             {
-                if (info.CurrentUsed == 0) continue;
-                const uint8_t* truthField = GroundTruthBackup.data() + info.OffsetInFrame;
-                const uint8_t* resimField = resimFieldData + info.OffsetInFrame;
+                anyFieldDiverged = true;
+                LOG_ENG_WARN_F("  DIVERGE (alloc): %s (comp=%u field=%zu) truth=%zu bytes resim=%zu bytes",
+                               info.FieldName, info.CompType, info.FieldIndex, truthUsed, info.CurrentUsed);
+                continue;
+            }
 
-                int fieldCmp = std::memcmp(truthField, resimField, info.CurrentUsed);
-                if (fieldCmp != 0)
-                {
-                    size_t firstDiff = 0;
-                    for (size_t b = 0; b < info.CurrentUsed; ++b)
-                        if (truthField[b] != resimField[b]) { firstDiff = b; break; }
+            if (info.CurrentUsed == 0) continue;
 
-                    size_t entityIdx   = firstDiff / info.FieldSize;
-                    size_t byteInField = firstDiff % info.FieldSize;
-                    size_t divergentBytes = 0;
-                    for (size_t b = 0; b < info.CurrentUsed; ++b) divergentBytes += (truthField[b] != resimField[b]);
+            const uint8_t* truthField = GroundTruth.Data.data() + info.OffsetInFrame;
+            const uint8_t* resimField = resimFieldData + info.OffsetInFrame;
 
-                    LOG_ENG_WARN_F("  DIVERGE: %s (comp=%u field=%zu) entity=%zu+%zu divergent=%zu/%zu (%.2f%%)",
-                                   info.FieldName, info.CompType, info.FieldIndex,
-                                   entityIdx, byteInField, divergentBytes, info.CurrentUsed,
-                                   100.0 * static_cast<double>(divergentBytes) / static_cast<double>(info.CurrentUsed));
-                }
+            int fieldCmp = std::memcmp(truthField, resimField, info.CurrentUsed);
+            if (fieldCmp != 0)
+            {
+                anyFieldDiverged = true;
+
+                size_t firstDiff = 0;
+                for (size_t b = 0; b < info.CurrentUsed; ++b)
+                    if (truthField[b] != resimField[b])
+                    {
+                        firstDiff = b;
+                        break;
+                    }
+
+                size_t entityIdx = firstDiff / info.FieldSize;
+                size_t byteInField = firstDiff % info.FieldSize;
+                size_t divergentBytes = 0;
+                for (size_t b = 0; b < info.CurrentUsed; ++b) divergentBytes += (truthField[b] != resimField[b]);
+
+                LOG_ENG_WARN_F("  DIVERGE: %s (comp=%u field=%zu) entity=%zu+%zu divergent=%zu/%zu (%.2f%%)",
+                               info.FieldName, info.CompType, info.FieldIndex,
+                               entityIdx, byteInField, divergentBytes, info.CurrentUsed,
+                               100.0 * static_cast<double>(divergentBytes) / static_cast<double>(info.CurrentUsed));
             }
         }
+
+        if (!anyFieldDiverged)
+            LOG_ENG_INFO_F("[Rollback] ECS fields: PASSED (%u (%u requested) frames resimulated)", totalResim,
+                       RollbackFrameCount);
+        else
+        LOG_ENG_WARN_F(
+            "[Rollback] ECS fields: FAILED — field divergence detected (%u (%u requested) frames resimulated)", totalResim, RollbackFrameCount);
 
         JPH::StateRecorderImpl resimJolt;
         logic.PhysicsPtr->GetPhysicsSystem()->SaveState(resimJolt, JPH::EStateRecorderState::All);
         std::string resimJoltData = resimJolt.GetData();
         std::string savedJoltData = savedJolt.GetData();
 
-        if (resimJoltData == savedJoltData)
+        const bool joltMatch = (resimJoltData == savedJoltData);
+        if (joltMatch)
             LOG_ENG_INFO_F("[Rollback] Jolt physics: MATCH (%zu bytes)", resimJoltData.size());
         else
         {
@@ -316,6 +352,8 @@ void RollbackSim::ExecuteRollbackTest(TLogic& logic)
                 }
             }
         }
+
+        logic.bRollbackTestPassed.store(!anyFieldDiverged && joltMatch, std::memory_order_relaxed);
     }
 
     {
@@ -332,9 +370,11 @@ void RollbackSim::ExecuteRollbackTest(TLogic& logic)
         savedJolt.Rewind();
         logic.PhysicsPtr->GetPhysicsSystem()->RestoreState(savedJolt);
 
-        logic.FrameNumber    = savedFrameNumber;
+        logic.FrameNumber = savedFrameNumber;
         logic.SimulationTime = savedSimTime;
     }
+
+    logic.bRollbackTestComplete.store(true, std::memory_order_release);
 #endif // TNX_TESTING
 
     LOG_ENG_INFO("[Rollback] State restored, simulation continuing.");

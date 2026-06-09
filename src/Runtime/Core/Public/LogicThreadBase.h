@@ -81,8 +81,18 @@ public:
 	/// @brief Request a rollback determinism self-test (F5 in editor). Thread-safe.
 	void RequestRollbackTest()
 	{
+#ifdef TNX_TESTING
+		bRollbackTestComplete.store(false, std::memory_order_relaxed);
+#endif
 		bRollbackTestRequested.store(true, std::memory_order_release);
 	}
+
+#ifdef TNX_TESTING
+	/// @brief True after ExecuteRollbackTest has run; reset by RequestRollbackTest(). Thread-safe.
+	bool IsRollbackTestComplete() const { return bRollbackTestComplete.load(std::memory_order_acquire); }
+	/// @brief True if the most recent rollback test was byte-perfect. Valid after IsRollbackTestComplete(). Thread-safe.
+	bool GetRollbackTestPassed() const { return bRollbackTestPassed.load(std::memory_order_acquire); }
+#endif
 
 	/// @brief Last fully-published sim frame number. Render thread uses this for interpolation.
 	uint32_t GetLastCompletedFrame() const
@@ -214,10 +224,16 @@ protected:
 
 	// --- Rollback state ---
 	// bRollbackActive is Logic-thread-only (no sync needed).
-	// PendingRollbackFrame and bRollbackTestRequested are written from any thread.
+	// All other rollback atomics are written from any thread.
 	bool                  bRollbackActive{false};
 	std::atomic<uint32_t> PendingRollbackFrame{UINT32_MAX};
 	std::atomic<bool>     bRollbackTestRequested{false};
+#ifdef TNX_TESTING
+	std::atomic<bool> bRollbackTestComplete{false};
+	///< Set by ExecuteRollbackTest when done; cleared by RequestRollbackTest.
+	std::atomic<bool> bRollbackTestPassed{false};
+	///< True if the last test was byte-perfect; valid after bRollbackTestComplete.
+#endif
 
 	/// Hard floor for spawn rollback targets — set once per level load so rollbacks never
 	/// target a frame whose Jolt snapshot predates the level geometry. Written on the Logic
