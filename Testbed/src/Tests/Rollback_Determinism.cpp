@@ -58,7 +58,6 @@ RUNTIME_TEST(Rollback_Determinism)
     // ExecuteRollbackTest needs FrameNumber > RollbackSim::RollbackFrameCount + PhysicsDivizor.
     // 32 frames is comfortably above the threshold for any supported physics divisor.
     const uint32_t kMinFrames = logic->GetLastCompletedFrame() + 32;
-    const uint64_t warmupDeadline = SDL_GetTicks() + 5000;
     while (logic->GetLastCompletedFrame() < kMinFrames)
         SDL_Delay(5);
     ASSERT(logic->GetLastCompletedFrame() >= kMinFrames);
