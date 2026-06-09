@@ -59,7 +59,7 @@ RUNTIME_TEST(Rollback_Determinism)
     // 32 frames is comfortably above the threshold for any supported physics divisor.
 #ifdef NDEBUG
     constexpr uint64_t kWarmupMs = 5000;
-    constexpr uint64_t kTestMs = 10000;
+    constexpr uint64_t kTestMs = 30000;
 #else
     constexpr uint64_t kWarmupMs = 15000;
     constexpr uint64_t kTestMs = 60000;
