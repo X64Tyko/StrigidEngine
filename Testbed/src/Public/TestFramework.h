@@ -1,13 +1,18 @@
 #pragma once
 
+#include <chrono>
+#include <exception>
 #include <functional>
+#include <future>
+#include <iostream>
+#include <memory>
+#include <stdexcept>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <vector>
-#include <iostream>
-#include <stdexcept>
 
-class TrinyxEngine; // forward decl — full type only needed at call sites
+class TrinyxEngine;
 
 namespace tnx::Testing
 {
@@ -147,6 +152,12 @@ namespace tnx::Testing
         {
             if (tests.empty()) return 0;
 
+#ifdef NDEBUG
+            constexpr auto kTimeout = std::chrono::seconds(30);
+#else
+            constexpr auto kTimeout = std::chrono::seconds(120);
+#endif
+
             int passed  = 0;
             int failed  = 0;
             int skipped = 0;
@@ -159,26 +170,55 @@ namespace tnx::Testing
 
                 std::cout << "  " << name << " ... ";
                 std::cout.flush();
-                try
+
+                struct State
                 {
-                    fn(engine);
+                    std::promise<void> done;
+                    std::exception_ptr ept;
+                };
+                auto state = std::make_shared<State>();
+                auto future = state->done.get_future();
+
+                std::thread worker([&fn, &engine, state]()
+                {
+                    try { fn(engine); }
+                    catch (...) { state->ept = std::current_exception(); }
+                    state->done.set_value();
+                });
+
+                if (future.wait_for(kTimeout) == std::future_status::timeout)
+                {
+                    worker.detach();
+                    std::cout << "TIMEOUT\n";
+                    ++failed;
+                    continue;
+                }
+
+                worker.join();
+
+                if (state->ept)
+                {
+                    try { std::rethrow_exception(state->ept); }
+                    catch (const TestSkipped& s)
+                    {
+                        std::cout << "SKIPPED (" << s.Reason << ")\n";
+                        ++skipped;
+                    }
+                    catch (const std::exception& e)
+                    {
+                        std::cout << "FAILED\n    " << e.what() << "\n";
+                        ++failed;
+                    }
+                    catch (...)
+                    {
+                        std::cout << "FAILED (unknown exception)\n";
+                        ++failed;
+                    }
+                }
+                else
+                {
                     std::cout << "PASSED\n";
                     ++passed;
-                }
-                catch (const TestSkipped& s)
-                {
-                    std::cout << "SKIPPED (" << s.Reason << ")\n";
-                    ++skipped;
-                }
-                catch (const std::exception& e)
-                {
-                    std::cout << "FAILED\n    " << e.what() << "\n";
-                    ++failed;
-                }
-                catch (...)
-                {
-                    std::cout << "FAILED (unknown exception)\n";
-                    ++failed;
                 }
             }
             PrintSummary(passed, failed, skipped, "Runtime");

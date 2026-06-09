@@ -57,8 +57,17 @@ RUNTIME_TEST(Rollback_Determinism)
     // Wait for the ring buffer to accumulate enough history.
     // ExecuteRollbackTest needs FrameNumber > RollbackSim::RollbackFrameCount + PhysicsDivizor.
     // 32 frames is comfortably above the threshold for any supported physics divisor.
+#ifdef NDEBUG
+    constexpr uint64_t kWarmupMs = 5000;
+    constexpr uint64_t kTestMs = 10000;
+#else
+    constexpr uint64_t kWarmupMs = 15000;
+    constexpr uint64_t kTestMs = 60000;
+#endif
+
     const uint32_t kMinFrames = logic->GetLastCompletedFrame() + 32;
-    while (logic->GetLastCompletedFrame() < kMinFrames)
+    const uint64_t warmupDeadline = SDL_GetTicks() + kWarmupMs;
+    while (logic->GetLastCompletedFrame() < kMinFrames && SDL_GetTicks() < warmupDeadline)
         SDL_Delay(5);
     ASSERT(logic->GetLastCompletedFrame() >= kMinFrames);
 
@@ -66,7 +75,7 @@ RUNTIME_TEST(Rollback_Determinism)
     logic->RequestRollbackTest();
 
     // Block until ExecuteRollbackTest sets bRollbackTestComplete.
-    const uint64_t testDeadline = SDL_GetTicks() + 25000;
+    const uint64_t testDeadline = SDL_GetTicks() + kTestMs;
     while (!logic->IsRollbackTestComplete() && SDL_GetTicks() < testDeadline)
         SDL_Delay(5);
     ASSERT(logic->IsRollbackTestComplete());
