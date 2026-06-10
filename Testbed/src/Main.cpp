@@ -132,7 +132,7 @@ public:
         // The threshold only needs to cover the longest single-tick operation (e.g. a full
         // rollback resim in a debug build).
 #ifdef NDEBUG
-        constexpr auto kStuckThreshold = std::chrono::seconds(10);
+        constexpr auto kStuckThreshold = std::chrono::seconds(30);
 #else
         constexpr auto kStuckThreshold = std::chrono::seconds(60);
 #endif
