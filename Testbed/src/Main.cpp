@@ -5,6 +5,11 @@
 #include "Input.h"
 #include "PlayerConstruct.h"
 
+#include <atomic>
+#include <chrono>
+#include <cstdlib>
+#include <thread>
+
 #ifdef TNX_ENABLE_NETWORK
 #include "GameMode.h"
 #include "ReplicationSystem.h"
@@ -122,8 +127,50 @@ public:
 
 	void PostStart(TrinyxEngine& engine)
 	{
-		RuntimeFailures = RuntimeTestRegistry::Instance().RunFiltered(engine, SelectedTests);
-	}
+        // Watchdog: abort if the Logic thread stops advancing frames.
+        // GetLastCompletedFrame() ticks at 512 Hz — any genuine progress resets the clock.
+        // The threshold only needs to cover the longest single-tick operation (e.g. a full
+        // rollback resim in a debug build).
+#ifdef NDEBUG
+        constexpr auto kStuckThreshold = std::chrono::seconds(10);
+#else
+        constexpr auto kStuckThreshold = std::chrono::seconds(60);
+#endif
+        static std::atomic<bool> suiteDone{false};
+        std::thread watchdog([&]()
+        {
+            uint32_t lastFrame = 0;
+            auto lastTick = std::chrono::steady_clock::now();
+
+            while (!suiteDone.load(std::memory_order_acquire))
+            {
+                std::this_thread::sleep_for(std::chrono::seconds(1));
+                if (suiteDone.load(std::memory_order_acquire)) break;
+
+                WorldBase* world = engine.GetDefaultWorld();
+                LogicThreadBase* logic = world ? world->GetLogicThread() : nullptr;
+                if (!logic) continue;
+
+                const uint32_t frame = logic->GetLastCompletedFrame();
+                if (frame != lastFrame)
+                {
+                    lastFrame = frame;
+                    lastTick = std::chrono::steady_clock::now();
+                }
+                else if (std::chrono::steady_clock::now() - lastTick >= kStuckThreshold)
+                {
+                    std::cout << "\n[Testbed] Logic thread stuck at frame " << lastFrame << " — aborting.\n";
+                    std::cout.flush();
+                    std::exit(1);
+                }
+            }
+        });
+
+        RuntimeFailures = RuntimeTestRegistry::Instance().RunFiltered(engine, SelectedTests);
+
+        suiteDone.store(true, std::memory_order_release);
+        watchdog.join();
+    }
 
 	int GetExitCode() const { return RuntimeFailures > 0 ? 1 : 0; }
 
